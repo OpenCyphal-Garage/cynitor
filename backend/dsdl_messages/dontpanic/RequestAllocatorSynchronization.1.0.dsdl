@@ -1,0 +1,9 @@
+# File: dontpanic/RequestAllocatorSynchronization.dsdl      
+
+@sealed
+
+--- 
+
+dontpanic.SubjectIDAllocation.1.0[<=1000] subject_ids
+
+@sealed

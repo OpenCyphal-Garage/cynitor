@@ -1,0 +1,3 @@
+[submodule "backend/dsdl_messages"]
+	path = backend/dsdl_messages
+	url = git@gitlab.rhrk.uni-kl.de:dont-panic-robotics/cyphal/dsdl_messages.git

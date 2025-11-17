@@ -1,0 +1,11 @@
+# File: dontpanic/SubjectIDAllocation.1.0.dsdl
+
+# hardware-unique ID
+uavcan.node.ID.1.0 unique_id     
+
+dontpanic.MessageType.1.0 message_type       
+
+# the subject ID which was allocated 
+uavcan.node.port.ID.1.0 subject_id
+
+@sealed
