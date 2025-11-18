@@ -208,5 +208,5 @@ __marimo__/
 
 # Project-specific ignores
 monitor_app.db
-public_regulated_data_types/
+python_compiled_messages/
 !MonitorApp.spec
