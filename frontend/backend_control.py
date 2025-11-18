@@ -49,13 +49,12 @@ class MonitorController:
         sys.path.append(os.environ["PYCYPHAL_PATH"])
 
     def _compile_dsdl_messages(self, backend_dir: str) -> None:
-        """Compile DSDL messages into backend/python_compiled_messages/."""
+        """Compile DSDL messages into backend/."""
         python_output_dir = os.path.join(backend_dir, "python_compiled_messages")
-        uavcan_dir = os.path.join(backend_dir, "dsdl_messages", "public_regulated_data_types", "uavcan")
-        reg_dir = os.path.join(backend_dir, "dsdl_messages", "public_regulated_data_types", "reg")
-        custom_dir = os.path.join(backend_dir, "dsdl_messages", "dontpanic")
+        uavcan_dir = os.path.join(backend_dir, "public_regulated_data_types", "uavcan")
+        reg_dir = os.path.join(backend_dir, "public_regulated_data_types", "reg")
 
-        for dir_path in [uavcan_dir, reg_dir, custom_dir]:
+        for dir_path in [uavcan_dir, reg_dir]:
             if not os.path.isdir(dir_path):
                 print(f"Error: Directory not found: {dir_path}")
                 raise FileNotFoundError(f"Required DSDL directory missing: {dir_path}")
@@ -65,8 +64,6 @@ class MonitorController:
         commands = [
             ["nnvg", "--target-language", "py", reg_dir, "--lookup-dir", uavcan_dir, "--outdir", python_output_dir],
             ["nnvg", "--target-language", "py", uavcan_dir, "--lookup-dir", reg_dir, "--outdir", python_output_dir],
-            ["nnvg", "--target-language", "py", "--enable-serialization-asserts", custom_dir,
-             "--lookup-dir", reg_dir, "--lookup-dir", uavcan_dir, "--outdir", python_output_dir]
         ]
 
         for cmd in commands:
@@ -82,8 +79,7 @@ class MonitorController:
     def _setup_environment(self, can_interface: str) -> None:
         """Set up the environment for monitoring."""
         backend_dir = os.path.join(self.project_directory, "backend")
-        os.environ["CYPHAL_PATH"] = f"{os.path.join(backend_dir, 'dsdl_messages', 'public_regulated_data_types')}:{os.environ.get('CYPHAL_PATH', '')}"
-        os.environ["CYPHAL_PATH"] = f"{os.path.join(backend_dir, 'dsdl_messages', 'dontpanic')}:{os.environ['CYPHAL_PATH']}"
+        os.environ["CYPHAL_PATH"] = f"{os.path.join(backend_dir, 'public_regulated_data_types')}:{os.environ.get('CYPHAL_PATH', '')}"
         os.environ["UAVCAN__CAN__IFACE"] = f"socketcan:{can_interface}"
         os.environ["UAVCAN__CAN__MTU"] = "8"
 
