@@ -1,7 +1,0 @@
-# Returns sum of received values.
-float16 a
-float16 b
-@sealed
----
-float16 sum
-@sealed

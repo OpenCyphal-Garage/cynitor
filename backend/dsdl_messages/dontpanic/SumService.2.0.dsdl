@@ -1,7 +1,0 @@
-# Returns sum of received values.
-uavcan.si.unit.electric_current.Scalar.1.0 a
-uavcan.si.unit.electric_current.Scalar.1.0 b
-@sealed
----
-float16 sum
-@sealed

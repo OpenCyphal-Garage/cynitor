@@ -1,3 +1,6 @@
 [submodule "backend/dsdl_messages"]
 	path = backend/dsdl_messages
 	url = git@gitlab.rhrk.uni-kl.de:dont-panic-robotics/cyphal/dsdl_messages.git
+[submodule "backend/public_regulated_data_types"]
+	path = backend/public_regulated_data_types
+	url = https://github.com/OpenCyphal/public_regulated_data_types

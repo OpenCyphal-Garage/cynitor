@@ -1,9 +1,0 @@
-# File: dontpanic/MessageType.1.0.dsdl
-
-# To not send human-readable - yet long - strings
-# like "some_namespace.foo.bar.1.0"
-# we send a unique ID. Any allocation node has a lookup table
-# to what message type it responds to
-uint16 message_type    
-
-@sealed
