@@ -1,0 +1,19 @@
+# File: dontpanic/CalibratePID.1.0.dsdl
+
+uint8   motor_id
+
+@sealed
+---
+
+uint8 STATUS_SUCCESS                = 0  # Calibration completed successfully
+uint8 STATUS_FAILURE                = 1  # General failure during calibration
+uint8 STATUS_BAD_MOTOR              = 2  # Invalid motor_id
+uint8 STATUS_INCORRECT_PWM_RANGE    = 3  # Incorrect pwm range
+uint8 STATUS_BUSY                   = 4  # Calibration already in progress
+uint8 STATUS_TIMEOUT                = 5  # Operation timed out
+uint8 STATUS_INTERNAL_ERROR         = 6  # Unexpected error
+
+uint8 status
+int8[<=3] pid
+
+@sealed

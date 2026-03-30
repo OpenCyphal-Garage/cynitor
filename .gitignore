@@ -1,0 +1,15 @@
+# Runtime databases
+*.db
+*.db-shm
+*.db-wal
+
+# Compiled DSDL types
+python_compiled_messages/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# IDE
+.vscode/browse.vc.db*

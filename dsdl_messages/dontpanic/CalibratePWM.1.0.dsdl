@@ -1,0 +1,26 @@
+# File: dontpanic/CalibratePWM.1.0.dsdl
+
+uint8   motor_id
+uint8   step
+uint8   time_per_step_sec
+uint8   samples_per_step
+uint16  min_pwm
+uint16  max_pwm
+
+@sealed
+---
+
+uint8 STATUS_SUCCESS                = 0  # Calibration completed successfully
+uint8 STATUS_FAILURE                = 1  # General failure during calibration
+uint8 STATUS_BAD_MOTOR              = 2  # Invalid motor_id
+uint8 STATUS_INCORRECT_PWM_RANGE    = 3  # Incorrect pwm range
+uint8 STATUS_BUSY                   = 4  # Calibration already in progress
+uint8 STATUS_TIMEOUT                = 5  # Operation timed out
+uint8 STATUS_INTERNAL_ERROR         = 6  # Unexpected error
+
+uint8 status
+uint16[<=201] pwm
+float16[<=201] max_velocity
+float16[<=201] min_velocity
+
+@sealed

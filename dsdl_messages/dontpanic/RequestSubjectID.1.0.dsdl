@@ -1,0 +1,16 @@
+# File: dontpanic/RequestSubjectID.1.0.dsdl
+
+# 128bit hardware-unique ID
+uavcan.node.ID.1.0 unique_id
+
+# ID of the message the node wants to publish
+dontpanic.MessageType.1.0 message_type          
+
+@sealed
+
+--- 
+
+# the subject_id assigned to the message of message_type from hardware-unique-ID
+uavcan.node.port.ID.1.0 subject_id
+
+@sealed
