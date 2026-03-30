@@ -1,5 +1,0 @@
-# Just returns true or false.
-@sealed
----
-@sealed
-bool value
