@@ -1,3 +1,0 @@
-[submodule "backend/public_regulated_data_types"]
-	path = backend/public_regulated_data_types
-	url = https://github.com/OpenCyphal/public_regulated_data_types

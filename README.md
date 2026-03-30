@@ -1,4 +1,4 @@
-# CyRVER - Cyphal Network Monitor
+# Cynitor - Cyphal Network Monitor
 
 Standalone GUI for monitoring and interacting with Cyphal (UAVCAN) nodes over CAN bus.
 
@@ -266,7 +266,7 @@ Compiled at startup to `python_compiled_messages/` via `nnvg`. Use `--recompile`
 ## Project Structure
 
 ```
-cyrver/
+cynitor/
   server/
     main.py                 Entry point, lifecycle orchestration
     scanner_node.py         CAN network discovery and subscriptions
