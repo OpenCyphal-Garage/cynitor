@@ -28,7 +28,7 @@ const state = {
   selectedDetailTab: 'publishers',
   selectedPlotSubject: null,
   subjectHistory: new Map(),
-  hiddenPlotSeries: new Set(),
+  hiddenPlotSeries: new Map(),
   plotTimer: null,
   wsBytesAccum: 0,
   wsThroughput: 0,

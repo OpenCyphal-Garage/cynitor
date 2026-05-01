@@ -98,7 +98,14 @@ const renderPlot = (container) => {
     return;
   }
 
-  const visible = allSeries.filter((s) => !state.hiddenPlotSeries.has(s.name));
+  // Hidden-series state is keyed by subject so unchecking "uptime" on
+  // one subject doesn't carry over when the user clicks a different one.
+  if (!state.hiddenPlotSeries.has(sid)) {
+    state.hiddenPlotSeries.set(sid, new Set());
+  }
+  const hidden = state.hiddenPlotSeries.get(sid);
+
+  const visible = allSeries.filter((s) => !hidden.has(s.name));
 
   const margin = { top: 8, right: 12, bottom: 24, left: 48 };
   const TITLE_H = 20;   // reserved for the .plot-title row
@@ -191,19 +198,27 @@ const renderPlot = (container) => {
   if (!legend) {
     legend = document.createElement('div');
     legend.className = 'plot-legend';
+    // Look up the active subject's hidden set fresh each event so the
+    // listener stays correct after the user switches subjects.
     legend.addEventListener('change', (e) => {
       const cb = e.target.closest('input[type="checkbox"]');
       if (!cb) return;
+      const activeSid = state.selectedPlotSubject;
+      if (activeSid == null) return;
+      if (!state.hiddenPlotSeries.has(activeSid)) {
+        state.hiddenPlotSeries.set(activeSid, new Set());
+      }
+      const activeHidden = state.hiddenPlotSeries.get(activeSid);
       if (cb.checked) {
-        state.hiddenPlotSeries.delete(cb.dataset.series);
+        activeHidden.delete(cb.dataset.series);
       } else {
-        state.hiddenPlotSeries.add(cb.dataset.series);
+        activeHidden.add(cb.dataset.series);
       }
     });
     plotArea.appendChild(legend);
   }
   legend.innerHTML = allSeries.map((s, i) => {
-    const checked = !state.hiddenPlotSeries.has(s.name) ? ' checked' : '';
+    const checked = !hidden.has(s.name) ? ' checked' : '';
     const color = PLOT_COLORS[i % PLOT_COLORS.length];
     return `<label class="plot-legend-item"><input type="checkbox" data-series="${escapeHtml(s.name)}"${checked}><span class="plot-legend-swatch" style="background:${color}"></span>${escapeHtml(s.name)}</label>`;
   }).join('');
