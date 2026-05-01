@@ -415,22 +415,6 @@ button:disabled {
   color: var(--muted);
 }
 
-/* ── Status badges ── */
-.status {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.1875rem 0.5rem;
-  border-radius: var(--radius);
-  font-size: 0.75rem;
-  font-weight: 600;
-  font-family: var(--mono);
-}
-
-.status-ok { background: var(--ok-muted); color: var(--ok); }
-.status-warn { background: var(--warn-muted); color: var(--warn); }
-.status-error { background: var(--error-muted); color: var(--error); }
-.status-unknown { background: var(--unknown-muted); color: var(--muted); }
-
 /* ── Main area ── */
 .main-area {
   flex: 1;
@@ -1271,4 +1255,13 @@ button:disabled {
 .server-down-dots::after {
   content: '';
   animation: server-down-dots 1.5s steps(1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .semaphore.connecting,
+  .semaphore.disconnecting,
+  .live-dot,
+  .server-down-dots::after {
+    animation: none;
+  }
 }
