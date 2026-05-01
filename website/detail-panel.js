@@ -156,6 +156,12 @@ const renderPlot = (container) => {
     g.append('g').attr('class', 'plot-x-axis').attr('transform', `translate(0,${h})`);
     g.append('g').attr('class', 'plot-y-axis');
     g.append('g').attr('class', 'plot-lines').attr('clip-path', `url(#${clipId})`);
+    g.append('line').attr('class', 'plot-crosshair').attr('opacity', 0);
+    g.append('rect').attr('class', 'plot-overlay').attr('fill', 'none').style('pointer-events', 'all');
+    const tooltip = document.createElement('div');
+    tooltip.className = 'plot-tooltip';
+    tooltip.style.display = 'none';
+    plotArea.appendChild(tooltip);
     gNode = g.node();
   }
 
@@ -193,6 +199,59 @@ const renderPlot = (container) => {
     .attr('stroke', (_, i) => PLOT_COLORS[i % PLOT_COLORS.length])
     .attr('d', (d) => line(d.data));
   paths.exit().remove();
+
+  // Hover crosshair + tooltip. Re-bind every render so closures capture
+  // the current visible/xScale/dimensions; d3.on() replaces the handler.
+  g.select('.plot-overlay').attr('width', w).attr('height', h);
+  g.select('.plot-crosshair').attr('y1', 0).attr('y2', h);
+  const tooltipEl = plotArea.querySelector('.plot-tooltip');
+  const overlay = g.select('.plot-overlay');
+  const crosshair = g.select('.plot-crosshair');
+  const bisect = d3.bisector((d) => d.t).left;
+
+  overlay
+    .on('mousemove', (event) => {
+      const [mx] = d3.pointer(event);
+      if (mx < 0 || mx > w || !visible.length) {
+        crosshair.attr('opacity', 0);
+        tooltipEl.style.display = 'none';
+        return;
+      }
+      const t0 = xScale.invert(mx);
+      const samples = visible.map((s) => {
+        const i = bisect(s.data, t0);
+        const a = s.data[i - 1];
+        const b = s.data[i];
+        const sample = !b ? a : !a ? b : (Math.abs(a.t - t0) < Math.abs(b.t - t0) ? a : b);
+        return { name: s.name, sample };
+      }).filter((x) => x.sample);
+      if (!samples.length) {
+        crosshair.attr('opacity', 0);
+        tooltipEl.style.display = 'none';
+        return;
+      }
+      crosshair.attr('opacity', 1).attr('x1', mx).attr('x2', mx);
+      const formattedT = formatPlotTime(samples[0].sample.t);
+      const rows = samples.map((s) => {
+        const idx = visible.findIndex((v) => v.name === s.name);
+        const color = PLOT_COLORS[idx % PLOT_COLORS.length];
+        const v = typeof s.sample.v === 'number' && !Number.isInteger(s.sample.v)
+          ? s.sample.v.toFixed(2)
+          : String(s.sample.v);
+        return `<div class="plot-tooltip-row"><span class="plot-tooltip-swatch" style="background:${color}"></span><span class="plot-tooltip-name">${escapeHtml(s.name)}</span><span class="plot-tooltip-val">${escapeHtml(v)}</span></div>`;
+      }).join('');
+      tooltipEl.innerHTML = `<div class="plot-tooltip-time">${formattedT}</div>${rows}`;
+      tooltipEl.style.display = 'block';
+      let tx = mx + margin.left + 12;
+      const tw = tooltipEl.offsetWidth;
+      if (tx + tw > rect.width - 4) tx = mx + margin.left - 12 - tw;
+      tooltipEl.style.left = `${Math.max(4, tx)}px`;
+      tooltipEl.style.top = `${TITLE_H + 4}px`;
+    })
+    .on('mouseleave', () => {
+      crosshair.attr('opacity', 0);
+      tooltipEl.style.display = 'none';
+    });
 
   let legend = plotArea.querySelector('.plot-legend');
   if (!legend) {
