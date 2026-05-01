@@ -3,31 +3,7 @@
 // shared disconnectAll teardown used by pollStatus, connectDashboard, and
 // the heartbeat in app.js.
 
-const updateKpis = () => {
-  const busLoad = el('kpiBusLoad');
-  const throughput = el('kpiThroughput');
-  const nodes = el('kpiNodes');
-
-  if (state.canConnected) {
-    busLoad.textContent = state.busUtilization != null ? state.busUtilization.toFixed(0) : '—';
-    throughput.textContent = getTotalMessageRate().toFixed(0);
-  } else {
-    busLoad.textContent = '—';
-    throughput.textContent = '—';
-  }
-
-  const payloadNodes = state.latestNodesPayload?.nodes;
-  if (payloadNodes && typeof payloadNodes === 'object') {
-    const all = Object.values(payloadNodes);
-    const online = all.filter((n) => !n.has_disappeared).length;
-    nodes.textContent = `${online}/${all.length}`;
-  } else {
-    nodes.textContent = '0/0';
-  }
-};
-
 const updateSemaphores = () => {
-  updateKpis();
   const serverDot = el('serverSemaphore');
   const canDot = el('canSemaphore');
   const serverInfo = el('serverThroughput');
