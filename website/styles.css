@@ -31,6 +31,11 @@
   --plot-4: #f85149;
   --plot-5: #bc8cff;
   --plot-6: #39d2c0;
+  /* Table row backgrounds — themed via overrides below */
+  --row-bg: var(--bg);
+  --row-hover-bg: rgba(255, 255, 255, 0.04);
+  --row-select-bg: rgba(255, 255, 255, 0.04);
+  --row-select-border: rgba(255, 255, 255, 0.06);
 }
 
 [data-theme="light"] {
@@ -54,6 +59,10 @@
   --error-muted: rgba(207, 34, 46, 0.12);
   --unknown: #8c959f;
   --unknown-muted: rgba(140, 149, 159, 0.15);
+  --row-bg: var(--surface);
+  --row-hover-bg: #e8ecf0;
+  --row-select-bg: #e8ecf0;
+  --row-select-border: rgba(0, 0, 0, 0.06);
 }
 
 * { box-sizing: border-box; }
@@ -864,19 +873,12 @@ button:focus-visible,
   margin-left: 0.5rem;
 }
 
-.status-ok   { color: #3fb950; opacity: 1; }
-.status-warn { color: #d29922; opacity: 1; }
-.status-err  { color: #f85149; opacity: 1; }
-.status-init { color: #8b949e; opacity: 1; }
+.status-ok   { color: var(--ok); }
+.status-warn { color: var(--warn); }
+.status-err  { color: var(--error); }
+.status-init { color: #8b949e; }
 
-[data-theme="light"] .status-ok   { color: #1a7f37; }
-[data-theme="light"] .status-warn { color: #9a6700; }
-[data-theme="light"] .status-err  { color: #cf222e; }
 [data-theme="light"] .status-init { color: #57606a; }
-
-[data-theme="light"] .detail-panel {
-  background: var(--surface);
-}
 
 .tabulator {
   background: var(--bg);
@@ -935,18 +937,18 @@ button:focus-visible,
 }
 
 .tabulator .tabulator-tableholder {
-  background: var(--bg);
+  background: var(--row-bg);
 }
 
 .tabulator .tabulator-row {
-  background: var(--bg);
+  background: var(--row-bg);
   border-bottom: 1px solid var(--border-subtle);
   cursor: pointer;
   transition: background 0.08s;
 }
 
 .tabulator .tabulator-row:hover {
-  background: rgba(255, 255, 255, 0.04) !important;
+  background: var(--row-hover-bg) !important;
 }
 
 .tabulator .tabulator-row .tabulator-cell {
@@ -959,8 +961,8 @@ button:focus-visible,
 
 .tabulator .tabulator-row.selected-row,
 .tabulator .tabulator-row.selected-row:hover {
-  background: rgba(255, 255, 255, 0.04) !important;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  background: var(--row-select-bg) !important;
+  box-shadow: inset 0 0 0 1px var(--row-select-border);
 }
 
 .tabulator .tabulator-placeholder {
@@ -976,34 +978,6 @@ button:focus-visible,
 .tabulator .tabulator-col-resize-handle:hover {
   background: var(--accent);
   opacity: 0.5;
-}
-
-/* Light theme overrides for Tabulator */
-[data-theme="light"] .tabulator {
-  background: var(--bg);
-}
-
-[data-theme="light"] .tabulator .tabulator-header,
-[data-theme="light"] .tabulator .tabulator-header .tabulator-col {
-  background: var(--surface);
-}
-
-[data-theme="light"] .tabulator .tabulator-row {
-  background: var(--surface);
-}
-
-[data-theme="light"] .tabulator .tabulator-row:hover {
-  background: #e8ecf0 !important;
-}
-
-[data-theme="light"] .tabulator .tabulator-row.selected-row,
-[data-theme="light"] .tabulator .tabulator-row.selected-row:hover {
-  background: #e8ecf0 !important;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
-}
-
-[data-theme="light"] .tabulator .tabulator-tableholder {
-  background: var(--surface);
 }
 
 /* ── Cell horizontal scroll for overflow ── */
