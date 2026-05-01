@@ -66,6 +66,15 @@ const toggleFavourite = (nodeId) => {
   }
   saveSettings();
   renderNodesTable();
+  // _fav is consulted by the wrapped favPinSorter but isn't itself a
+  // sorted column, so Tabulator's auto-resort wouldn't fire. Force a
+  // re-sort so the row moves to/from the top of its sort group.
+  if (nodesTabulator) {
+    const sorters = nodesTabulator.getSorters();
+    if (sorters.length) {
+      nodesTabulator.setSort(sorters.map((s) => ({ column: s.field, dir: s.dir })));
+    }
+  }
 };
 
 const deleteOfflineNode = (nodeId) => {
@@ -213,12 +222,6 @@ const renderNodesTable = () => {
   }
 
   nodesTabulator.updateOrAddData(data);
-
-  // Re-apply current sort so favourite pin-order updates immediately
-  const sorters = nodesTabulator.getSorters();
-  if (sorters.length) {
-    nodesTabulator.setSort(sorters.map((s) => ({ column: s.field, dir: s.dir })));
-  }
 
   // Remove rows that no longer exist
   const validIds = new Set(data.map((d) => d.id));
