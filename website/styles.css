@@ -511,7 +511,7 @@ button:focus-visible,
 }
 
 .detail-panel.collapsed {
-  height: 0 !important;
+  height: 0;
 }
 
 .detail-panel.no-transition {
@@ -1261,8 +1261,8 @@ button:focus-visible,
   color: var(--text);
 }
 
-.server-down-hint {
-  margin-top: 0.75rem !important;
+.server-down-card .server-down-hint {
+  margin-top: 0.75rem;
 }
 
 .server-down-status {
