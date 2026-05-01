@@ -175,7 +175,7 @@ const renderPlot = (container) => {
   const line = d3.line()
     .x((d) => xScale(d.t))
     .y((d) => yScale(d.v))
-    .curve(d3.curveMonotoneX);
+    .curve(d3.curveLinear);
 
   const linesG = g.select('.plot-lines');
   const paths = linesG.selectAll('path').data(visible, (d) => d.name);
