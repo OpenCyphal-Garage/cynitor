@@ -27,11 +27,18 @@ const healthFormatter = (cell) => {
 };
 
 const portsFormatter = (cell) => {
-  const v = cell.getValue();
-  const text = Array.isArray(v) && v.length ? v.join(', ') : '-';
+  const text = cell.getValue() || '-';
   const cls = text !== '-' ? 'has-ports' : '';
   return `<span class="port-ids ${cls}">${escapeHtml(text)}</span>`;
 };
+
+// Pass these to Tabulator as pre-joined strings, not fresh arrays. Each
+// /api/nodes response gives node.publishers a new array reference even
+// when the contents didn't change, so Tabulator's strict-equality cell
+// diff would treat the value as changed every time and re-render the
+// cell. That re-render briefly destroys the cell's overflow state and
+// makes the horizontal scrollbar blink. Strings compare by value.
+const portsToString = (arr) => (Array.isArray(arr) && arr.length ? arr.join(', ') : '-');
 
 const rateFormatter = (cell) => {
   const v = cell.getValue();
@@ -90,10 +97,10 @@ const buildTableData = () => {
         health: getNodeHealthValue(node.node_id) || '-',
         rate: getNodeRate(node.node_id),
         uptime: node.has_disappeared ? formatLastSeen(node.last_seen) : formatUptime(node.uptime),
-        publishers: node.publishers || [],
-        subscribers: node.subscribers || [],
-        servers: node.servers || [],
-        clients: node.clients || [],
+        publishers: portsToString(node.publishers),
+        subscribers: portsToString(node.subscribers),
+        servers: portsToString(node.servers),
+        clients: portsToString(node.clients),
         _actions: nodeState,
       };
     });
