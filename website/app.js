@@ -971,6 +971,24 @@ const selectInterface = async () => {
   }
 };
 
+const disconnectAll = ({ persist = true } = {}) => {
+  state.dashboardConnected = false;
+  state.canConnected = false;
+  state.busUtilization = null;
+  stopStatusPolling();
+  stopCanStartupDelay();
+  stopNodesPolling();
+  stopInterfacePolling();
+  stopThroughputTimer();
+  stopPlotAnim();
+  disconnectWs();
+  updateDashboardConnectButton();
+  updateCanConnectButton();
+  renderNodesTable();
+  updateSemaphores();
+  if (persist) saveSettings();
+};
+
 const pollStatus = async () => {
   if (state.canConnecting || state.canDisconnecting) {
     return;
@@ -980,22 +998,8 @@ const pollStatus = async () => {
   try {
     data = await requestJson('/api/status');
   } catch {
-    // Server unreachable — mark everything disconnected
     if (state.dashboardConnected) {
-      state.dashboardConnected = false;
-      state.canConnected = false;
-      state.busUtilization = null;
-      updateDashboardConnectButton();
-      updateCanConnectButton();
-      stopStatusPolling();
-      stopCanStartupDelay();
-      stopNodesPolling();
-      stopInterfacePolling();
-      stopThroughputTimer();
-      disconnectWs();
-      renderNodesTable();
-      updateSemaphores();
-      saveSettings();
+      disconnectAll();
     }
     return;
   }
@@ -1361,19 +1365,7 @@ const schedulePostCanStartup = (delayMs = 10000) => {
 
 const connectDashboard = async () => {
   if (state.dashboardConnected) {
-    state.dashboardConnected = false;
-    state.canConnected = false;
-    updateDashboardConnectButton();
-    updateCanConnectButton();
-    stopStatusPolling();
-    stopCanStartupDelay();
-    stopNodesPolling();
-    stopInterfacePolling();
-    stopThroughputTimer();
-    disconnectWs();
-    renderNodesTable();
-    updateSemaphores();
-    saveSettings();
+    disconnectAll();
     return;
   }
 
@@ -1635,18 +1627,9 @@ updateSemaphores();
   const overlay = el('serverDownOverlay');
   let serverDown = false;
 
-  const tearDown = () => {
-    disconnectWs();
-    if (state.nodesTimer) { clearInterval(state.nodesTimer); state.nodesTimer = null; }
-    if (state.statusTimer) { clearInterval(state.statusTimer); state.statusTimer = null; }
-    if (state.interfacesTimer) { clearInterval(state.interfacesTimer); state.interfacesTimer = null; }
-    stopPlotAnim();
-    state.dashboardConnected = false;
-    state.canConnected = false;
-    updateDashboardConnectButton();
-    updateCanConnectButton();
-    updateSemaphores();
-  };
+  // persist=false so on heartbeat recovery (page reload) auto-reconnect
+  // sees the prior connected state and resumes without manual action.
+  const tearDown = () => disconnectAll({ persist: false });
 
   const check = async () => {
     try {
