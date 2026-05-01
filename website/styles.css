@@ -1050,16 +1050,26 @@ button:disabled {
 
 
 /* ── Favourite star & actions column ── */
+.fav-star,
+.action-delete {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 1.125rem;
+  line-height: 1;
+  user-select: none;
+  color: inherit;
+}
+
 .fav-star {
   cursor: pointer;
   color: var(--muted);
-  font-size: 1.125rem;
-  line-height: 1;
   transition: color 0.12s;
-  user-select: none;
 }
 
 .fav-star:hover {
+  background: none;
   color: var(--warn);
 }
 
@@ -1068,10 +1078,7 @@ button:disabled {
 }
 
 .action-delete {
-  font-size: 1.125rem;
-  line-height: 1;
   transition: color 0.12s, opacity 0.12s;
-  user-select: none;
 }
 
 .action-delete.enabled {
@@ -1080,6 +1087,7 @@ button:disabled {
 }
 
 .action-delete.enabled:hover {
+  background: none;
   opacity: 0.8;
 }
 

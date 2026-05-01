@@ -1107,13 +1107,15 @@ const rateFormatter = (cell) => {
 
 const favFormatter = (cell) => {
   const isFav = cell.getValue();
-  return `<span class="fav-star ${isFav ? 'active' : ''}" aria-label="Toggle favourite">${isFav ? '★' : '☆'}</span>`;
+  return `<button type="button" class="fav-star ${isFav ? 'active' : ''}" aria-label="Toggle favourite">${isFav ? '★' : '☆'}</button>`;
 };
 
 const actionsFormatter = (cell) => {
   const row = cell.getRow().getData();
-  const cls = row.state === 'offline' ? 'enabled' : 'disabled';
-  return `<span class="action-delete ${cls}" aria-label="Remove offline node">✕</span>`;
+  const offline = row.state === 'offline';
+  const cls = offline ? 'enabled' : 'disabled';
+  const disabledAttr = offline ? '' : ' disabled';
+  return `<button type="button" class="action-delete ${cls}" aria-label="Remove offline node"${disabledAttr}>✕</button>`;
 };
 
 const toggleFavourite = (nodeId) => {
@@ -1128,6 +1130,7 @@ const toggleFavourite = (nodeId) => {
 
 const deleteOfflineNode = (nodeId) => {
   state.deletedNodeIds.add(nodeId);
+  state.latestByNode.delete(nodeId);
   saveSettings();
   renderNodesTable();
 };
@@ -1304,10 +1307,26 @@ const renderNodesTable = () => {
   }
 };
 
+const pruneNodeCache = () => {
+  const payloadNodes = state.latestNodesPayload?.nodes;
+  if (!payloadNodes || typeof payloadNodes !== 'object') return;
+  const knownNodeIds = new Set(
+    Object.values(payloadNodes)
+      .map((n) => n.node_id)
+      .filter(Number.isInteger)
+  );
+  for (const nodeId of [...state.latestByNode.keys()]) {
+    if (!knownNodeIds.has(nodeId)) {
+      state.latestByNode.delete(nodeId);
+    }
+  }
+};
+
 const getAllNodes = async () => {
   try {
     const data = await requestJson('/api/nodes');
     state.latestNodesPayload = data;
+    pruneNodeCache();
     const selectedStillExists = state.selectedNodeId !== null && data.nodes && data.nodes[String(state.selectedNodeId)];
     if (!selectedStillExists) {
       state.selectedNodeId = null;
