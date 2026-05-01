@@ -43,9 +43,10 @@ const state = {
 // Tabulator instance. Initialized in nodes-table.js#initNodesTable.
 let nodesTabulator = null;
 
-// Pending debounce id for scheduleTableRefresh. Lives here because
-// settings.js#saveSettings reads nodesTabulator above.
+// Pending debounce ids for scheduleTableRefresh / scheduleDetailRefresh.
+// Live here because settings.js#saveSettings reads nodesTabulator above.
 let _tableRefreshPending = null;
+let _detailRefreshPending = null;
 
 const metricMaxLen = new Map();
 

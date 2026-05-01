@@ -150,7 +150,7 @@ const connectWs = () => {
       cacheEvent(event);
       state.eventCount += 1;
       el('eventCount').textContent = String(state.eventCount);
-      renderSelectedNodeContent();
+      scheduleDetailRefresh();
       scheduleTableRefresh();
     } catch {
     }

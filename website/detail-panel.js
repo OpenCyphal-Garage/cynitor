@@ -343,6 +343,14 @@ const renderSelectedNodeContent = () => {
   renderSubjectTab('Publishers', buildSubjectDetailData(node.publishers || [], node.node_id));
 };
 
+const scheduleDetailRefresh = () => {
+  if (_detailRefreshPending) return;
+  _detailRefreshPending = window.setTimeout(() => {
+    _detailRefreshPending = null;
+    renderSelectedNodeContent();
+  }, 100);
+};
+
 const setSelectedNode = (nodeId) => {
   const numericNodeId = Number.parseInt(String(nodeId), 10);
   if (!Number.isInteger(numericNodeId)) {
