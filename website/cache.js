@@ -115,14 +115,39 @@ const buildSubjectDetailData = (subjectIds, nodeId) => {
 const pruneNodeCache = () => {
   const payloadNodes = state.latestNodesPayload?.nodes;
   if (!payloadNodes || typeof payloadNodes !== 'object') return;
-  const knownNodeIds = new Set(
-    Object.values(payloadNodes)
-      .map((n) => n.node_id)
-      .filter(Number.isInteger)
-  );
+
+  const knownNodeIds = new Set();
+  const knownSubjectIds = new Set();
+  for (const node of Object.values(payloadNodes)) {
+    if (Number.isInteger(node.node_id)) knownNodeIds.add(node.node_id);
+    for (const sid of node.publishers || []) {
+      if (Number.isInteger(sid)) knownSubjectIds.add(sid);
+    }
+  }
+
   for (const nodeId of [...state.latestByNode.keys()]) {
     if (!knownNodeIds.has(nodeId)) {
       state.latestByNode.delete(nodeId);
+    }
+  }
+
+  for (const sid of [...state.latestBySubject.keys()]) {
+    if (!knownSubjectIds.has(sid)) {
+      state.latestBySubject.delete(sid);
+    }
+  }
+
+  for (const key of [...state.subjectHistory.keys()]) {
+    const sid = Number(key.split(':')[0]);
+    if (!knownSubjectIds.has(sid)) {
+      state.subjectHistory.delete(key);
+    }
+  }
+
+  for (const key of [...metricMaxLen.keys()]) {
+    const sid = Number(key.split(':')[0]);
+    if (!knownSubjectIds.has(sid)) {
+      metricMaxLen.delete(key);
     }
   }
 };
