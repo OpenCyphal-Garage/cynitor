@@ -111,56 +111,6 @@
     </div>
   </div>
 
-  <!-- Hidden elements referenced by JS (preserved for future use) -->
-  <div class="hidden">
-    <div id="wsStatus" class="status status-unknown">Disconnected</div>
-    <div id="wsReconnectStatus">idle</div>
-    <div id="healthStatus" class="status status-unknown">Unknown</div>
-    <button id="connectWsBtn"></button>
-    <input id="filterSubjects" type="text" />
-    <input id="filterNodes" type="text" />
-    <input id="filterTypes" type="text" />
-    <button id="applyFilterBtn"></button>
-    <input id="nodesRefreshSeconds" type="number" value="3" />
-    <button id="applyNodesRefreshBtn"></button>
-    <button id="detailTabInfo" class="tab-btn active" data-tab="info"></button>
-    <button id="selectInterfaceBtn"></button>
-    <button id="checkHealthBtn"></button>
-    <button id="getNodesBtn"></button>
-    <input id="subjectIdInput" type="number" />
-    <button id="getSubjectBtn"></button>
-    <input id="nodeIdInput" type="number" />
-    <button id="getNodeBtn"></button>
-    <pre id="startupResult" class="output"></pre>
-    <pre id="restOutput" class="output"></pre>
-    <input id="logsLimit" type="number" value="100" />
-    <select id="logsLevel"><option value="">Any</option></select>
-    <select id="logsMinLevel"><option value="">Any</option></select>
-    <button id="getLogsBtn"></button>
-    <tbody id="logsBody"></tbody>
-    <tbody id="eventsBody"></tbody>
-    <span id="advancedCapabilityStatus"></span>
-    <button id="refreshCapabilitiesBtn"></button>
-    <fieldset id="registerActionFieldset">
-      <input id="registerNodeUniqueIdInput" type="text" />
-      <input id="registerNameInput" type="text" />
-      <input id="registerTypeInput" type="text" />
-      <input id="registerValueInput" type="text" />
-      <button id="setRegisterBtn"></button>
-    </fieldset>
-    <fieldset id="serviceActionFieldset">
-      <input id="serviceNodeIdInput" type="number" />
-      <input id="serviceUniqueIdInput" type="text" />
-      <input id="serviceIdInput" type="number" />
-      <input id="serviceTypeInput" type="text" />
-      <input id="serviceAttributesInput" type="text" />
-      <button id="sendServiceRequestBtn"></button>
-    </fieldset>
-    <pre id="advancedActionsOutput"></pre>
-    <svg id="networkGraph"></svg>
-    <div id="graphEmptyState"></div>
-  </div>
-
   <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
   <script src="https://unpkg.com/tabulator-tables@6.4.0/dist/js/tabulator.min.js"></script>
   <script src="./app.js"></script>

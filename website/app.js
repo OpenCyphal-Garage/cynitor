@@ -6,7 +6,6 @@ const state = {
   wsReconnectAttempts: 0,
   userClosedWs: false,
   interfacesTimer: null,
-  healthTimer: null,
   statusTimer: null,
   canStartupTimer: null,
   nodesTimer: null,
@@ -18,9 +17,7 @@ const state = {
   preferredCanInterface: '',
   favouriteNodeIds: new Set(),
   deletedNodeIds: new Set(),
-  graphSimulation: null,
   eventCount: 0,
-  maxRows: 200,
   latestNodesPayload: { node_count: 0, nodes: {} },
   latestBySubject: new Map(),
   latestByNode: new Map(),
@@ -38,25 +35,9 @@ const state = {
   detailPanelHeight: null,
   detailPanelCollapsed: false,
   splitRatio: 0.6,
-  debugEvents: [],
-  capabilities: {
-    registerWrite: false,
-    serviceRequest: false,
-  },
 };
 
 const el = (id) => document.getElementById(id);
-
-const toArrayOfValues = (text) =>
-  text
-    .split(',')
-    .map((part) => part.trim())
-    .filter(Boolean);
-
-const toIntArray = (text) =>
-  toArrayOfValues(text)
-    .map((value) => Number.parseInt(value, 10))
-    .filter((value) => Number.isInteger(value));
 
 const escapeHtml = (value) =>
   String(value)
@@ -105,7 +86,7 @@ const saveSettings = () => {
     apiBase: el('apiBase').value.trim(),
     canInterface: interfacesSelect ? interfacesSelect.value : '',
     dashboardConnected: state.dashboardConnected,
-    nodesRefreshSeconds: el('nodesRefreshSeconds').value,
+    nodesRefreshSeconds: el('nodesRefreshSlider').value,
     selectedDetailTab: state.selectedDetailTab,
     tableSort: state.tableSort,
     sidebarCollapsed: state.sidebarCollapsed,
@@ -156,7 +137,6 @@ const loadSettings = () => {
   }
   if (typeof settings.nodesRefreshSeconds === 'string' && settings.nodesRefreshSeconds) {
     const val = Math.max(1, Math.min(60, Number(settings.nodesRefreshSeconds) || 3));
-    el('nodesRefreshSeconds').value = String(val);
     el('nodesRefreshSlider').value = String(val);
     el('refreshValue').textContent = val >= 60 ? '1m' : `${val}s`;
   }
@@ -200,57 +180,6 @@ const loadSettings = () => {
   if (typeof settings.splitRatio === 'number' && settings.splitRatio > 0.2 && settings.splitRatio < 0.9) {
     state.splitRatio = settings.splitRatio;
   }
-};
-
-const restoreCanDropdown = () => {
-  const select = el('interfacesSelect');
-  if (select.options.length > 0 || !state.preferredCanInterface) return;
-  const option = document.createElement('option');
-  option.value = state.preferredCanInterface;
-  option.textContent = state.preferredCanInterface;
-  select.appendChild(option);
-  select.value = state.preferredCanInterface;
-};
-
-const renderJson = (targetId, data) => {
-  el(targetId).textContent = JSON.stringify(data, null, 2);
-};
-
-const logDebug = (event, details = {}) => {
-  const entry = {
-    timestamp: new Date().toISOString(),
-    event,
-    details,
-  };
-  state.debugEvents.push(entry);
-  if (state.debugEvents.length > 30) {
-    state.debugEvents.shift();
-  }
-
-  console.warn('[frontend-debug]', entry);
-
-  const startupOutput = el('startupResult');
-  if (startupOutput) {
-    startupOutput.textContent = JSON.stringify(
-      {
-        latest: entry,
-        recent: state.debugEvents.slice(-8),
-      },
-      null,
-      2,
-    );
-  }
-};
-
-const setStatus = (targetId, text, type) => {
-  const node = el(targetId);
-  node.textContent = text;
-  node.className = `status status-${type}`;
-  updateSemaphores();
-};
-
-const setReconnectStatus = (text) => {
-  el('wsReconnectStatus').textContent = text;
 };
 
 const formatThroughput = (bytesPerSec) => {
@@ -363,63 +292,14 @@ const requestJson = async (path, options = {}) => {
   try {
     response = await fetch(`${apiBase()}${path}`, withSmartJsonHeaders(options));
   } catch (error) {
-    logDebug('http_network_error', {
-      path,
-      api_base: apiBase(),
-      message: String(error?.message || error),
-    });
     throw new Error(`Network error for ${path}: ${error?.message || error}`);
   }
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    logDebug('http_error', {
-      path,
-      api_base: apiBase(),
-      status: response.status,
-      error: data?.error || null,
-    });
     throw new Error(data.error || `HTTP ${response.status} for ${path}`);
   }
   return data;
-};
-
-const requestStatus = async (path, options = {}) => {
-  try {
-    const response = await fetch(`${apiBase()}${path}`, withSmartJsonHeaders(options));
-    return response.status;
-  } catch {
-    return 0;
-  }
-};
-
-const formatUniqueIdForInput = (uniqueId) => {
-  if (typeof uniqueId === 'string') {
-    return uniqueId;
-  }
-  if (Array.isArray(uniqueId)) {
-    return uniqueId.join(',');
-  }
-  return '';
-};
-
-const formatUniqueIdForDisplay = (uniqueId) => {
-  if (Array.isArray(uniqueId)) {
-    return uniqueId.join('-');
-  }
-  if (typeof uniqueId === 'string') {
-    return uniqueId;
-  }
-  return '-';
-};
-
-const formatAttributesInline = (attributes) => {
-  if (!Array.isArray(attributes) || !attributes.length) {
-    return '-';
-  }
-  return attributes
-    .map((attr) => `${attr.attribute}=${attr.value}${attr.unit || ''}`)
-    .join(', ');
 };
 
 const getStatusClass = (attr, value) => {
@@ -522,17 +402,6 @@ const getNodeVisualState = (node) => {
   return getNodeRate(node.node_id) > 0 ? 'active' : 'idle';
 };
 
-const prefillAdvancedFormsFromNode = (node) => {
-  if (!node) {
-    return;
-  }
-  const nodeIdValue = Number.isInteger(node.node_id) ? String(node.node_id) : '';
-  const uniqueIdValue = formatUniqueIdForInput(node.unique_id);
-  el('serviceNodeIdInput').value = nodeIdValue;
-  el('serviceUniqueIdInput').value = uniqueIdValue;
-  el('registerNodeUniqueIdInput').value = uniqueIdValue;
-};
-
 const setSelectedNode = (nodeId) => {
   const numericNodeId = Number.parseInt(String(nodeId), 10);
   if (!Number.isInteger(numericNodeId)) {
@@ -550,12 +419,7 @@ const setSelectedNode = (nodeId) => {
       }
     }
   }
-  const node = getSelectedNode();
-  if (node) {
-    prefillAdvancedFormsFromNode(node);
-  }
   renderSelectedNodeContent();
-  renderGraph();
 };
 
 const clearSelectedNode = () => {
@@ -566,7 +430,6 @@ const clearSelectedNode = () => {
     }
   }
   renderSelectedNodeContent();
-  renderGraph();
 };
 
 const buildSubjectDetailData = (subjectIds, nodeId) => {
@@ -855,53 +718,6 @@ const buildServicesDetailItems = (services) => {
   return services.map((serviceId) => `Service ${serviceId}`);
 };
 
-const renderInfoTab = (node) => {
-  const software = node.software_version
-    ? `${node.software_version.major ?? '?'} . ${node.software_version.minor ?? '?'}`
-    : '-';
-  const rate = getNodeRate(node.node_id).toFixed(1);
-  const stateText = getNodeVisualState(node);
-
-  return `
-    <div class="details-grid">
-      <section class="details-panel">
-        <h3>Identity</h3>
-        <dl class="details-kv">
-          <dt>Node ID</dt><dd>${escapeHtml(node.node_id ?? '-')}</dd>
-          <dt>Name</dt><dd>${escapeHtml(node.name || '-')}</dd>
-          <dt>Unique ID</dt><dd>${escapeHtml(formatUniqueIdForDisplay(node.unique_id))}</dd>
-          <dt>Software</dt><dd>${escapeHtml(software)}</dd>
-        </dl>
-      </section>
-      <section class="details-panel">
-        <h3>Status</h3>
-        <dl class="details-kv">
-          <dt>Visual State</dt><dd>${escapeHtml(stateText)}</dd>
-          <dt>Uptime</dt><dd>${escapeHtml(formatUptime(node.uptime))}</dd>
-          <dt>Message Rate</dt><dd>${escapeHtml(rate)} Hz</dd>
-          <dt>GetInfo</dt><dd>${escapeHtml(String(Boolean(node.has_responded_to_getinfo)))}</dd>
-          <dt>Disappeared</dt><dd>${escapeHtml(String(Boolean(node.has_disappeared)))}</dd>
-        </dl>
-      </section>
-      <section class="details-panel">
-        <h3>Ports</h3>
-        <div class="details-chip-list">
-          ${(node.publishers || []).map((subjectId) => `<span class="chip">pub ${escapeHtml(subjectId)}</span>`).join('') || '<span class="chip">no publishers</span>'}
-          ${(node.subscribers || []).map((subjectId) => `<span class="chip">sub ${escapeHtml(subjectId)}</span>`).join('') || '<span class="chip">no subscribers</span>'}
-          ${(node.servers || []).map((serviceId) => `<span class="chip">srv ${escapeHtml(serviceId)}</span>`).join('') || '<span class="chip">no services</span>'}
-        </div>
-      </section>
-      <section class="details-panel">
-        <h3>Health Hints</h3>
-        <ul class="details-list">
-          <li>${escapeHtml(getNodeHealthValue(node.node_id) || 'No heartbeat health attribute cached')}</li>
-          <li>${escapeHtml(node.has_disappeared ? 'Node is currently marked as disappeared' : 'Node is currently visible on the network')}</li>
-        </ul>
-      </section>
-    </div>
-  `;
-};
-
 const renderListTab = (title, items) => `
   <section class="details-panel">
     <h3>${escapeHtml(title)}</h3>
@@ -917,7 +733,6 @@ const buildClientsDetailItems = (clients) => {
   }
   return clients.map((clientId) => `Client ${clientId}`);
 };
-
 
 const renderSelectedNodeContent = () => {
   const content = el('selectedNodeContent');
@@ -1005,380 +820,6 @@ const renderSelectedNodeContent = () => {
   renderSubjectTab('Publishers', buildSubjectDetailData(node.publishers || [], node.node_id));
 };
 
-const addEventRow = (event) => {
-  const body = el('eventsBody');
-  if (!body) {
-    return;
-  }
-  const tr = document.createElement('tr');
-  tr.className = 'traffic-row';
-  if (Number.isInteger(event.publisher_node_id)) {
-    tr.dataset.nodeId = String(event.publisher_node_id);
-  }
-  tr.innerHTML = `
-    <td>${escapeHtml(event.timestamp || '')}</td>
-    <td>${escapeHtml(event.publisher_node_id ?? '')}</td>
-    <td>${escapeHtml(event.subject_id ?? '')}</td>
-    <td>${escapeHtml(event.message_type || '')}</td>
-    <td>${escapeHtml(event.rate ?? '')}</td>
-  `;
-  tr.addEventListener('click', () => {
-    if (tr.dataset.nodeId) {
-      setSelectedNode(tr.dataset.nodeId);
-    }
-  });
-  body.prepend(tr);
-
-  while (body.children.length > state.maxRows) {
-    body.removeChild(body.lastChild);
-  }
-};
-
-const addLogRows = (logs) => {
-  const body = el('logsBody');
-  if (!body) {
-    return;
-  }
-  body.innerHTML = '';
-
-  for (const log of logs) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${escapeHtml(log.timestamp || '')}</td>
-      <td><span class="badge level-${escapeHtml(log.level || '')}">${escapeHtml(log.level || '')}</span></td>
-      <td>${escapeHtml(log.logger || '')}</td>
-      <td>${escapeHtml(log.message || '')}</td>
-    `;
-    body.appendChild(tr);
-  }
-};
-
-const buildGraphData = () => {
-  const payloadNodes = state.latestNodesPayload?.nodes;
-  const nodeValues = payloadNodes && typeof payloadNodes === 'object' ? Object.values(payloadNodes) : [];
-
-  const nodes = nodeValues.map((node) => {
-    const rate = getNodeRate(node.node_id);
-    return {
-      id: String(node.node_id),
-      label: node.name || `Node ${node.node_id}`,
-      nodeId: node.node_id,
-      state: getNodeVisualState(node),
-      radius: 18 + Math.min(rate * 1.2, 24),
-      rate,
-      raw: node,
-    };
-  });
-
-  const publisherMap = new Map();
-  const subscriberMap = new Map();
-
-  for (const node of nodeValues) {
-    for (const subjectId of node.publishers || []) {
-      if (!publisherMap.has(subjectId)) {
-        publisherMap.set(subjectId, []);
-      }
-      publisherMap.get(subjectId).push(node.node_id);
-    }
-    for (const subjectId of node.subscribers || []) {
-      if (!subscriberMap.has(subjectId)) {
-        subscriberMap.set(subjectId, []);
-      }
-      subscriberMap.get(subjectId).push(node.node_id);
-    }
-  }
-
-  const linksByKey = new Map();
-
-  for (const [subjectId, publishers] of publisherMap.entries()) {
-    const subscribers = subscriberMap.get(subjectId) || [];
-    for (const source of publishers) {
-      for (const target of subscribers) {
-        if (source === target) {
-          continue;
-        }
-        const key = [source, target].sort((a, b) => a - b).join(':');
-        if (!linksByKey.has(key)) {
-          linksByKey.set(key, {
-            source: String(source),
-            target: String(target),
-            weight: 0,
-            subjects: [],
-          });
-        }
-        const link = linksByKey.get(key);
-        link.weight += 1;
-        link.subjects.push(subjectId);
-      }
-    }
-  }
-
-  return {
-    nodes,
-    links: Array.from(linksByKey.values()),
-  };
-};
-
-const renderGraph = () => {
-  const emptyState = el('graphEmptyState');
-  const svgElement = el('networkGraph');
-  const d3 = window.d3;
-
-  if (!d3) {
-    emptyState.textContent = 'Graph library failed to load';
-    emptyState.classList.remove('hidden');
-    return;
-  }
-
-  if (state.graphSimulation) {
-    state.graphSimulation.stop();
-    state.graphSimulation = null;
-  }
-
-  const svg = d3.select(svgElement);
-  svg.selectAll('*').remove();
-
-  const { nodes, links } = buildGraphData();
-  if (!nodes.length) {
-    emptyState.textContent = 'No nodes discovered yet';
-    emptyState.classList.remove('hidden');
-    return;
-  }
-  emptyState.classList.add('hidden');
-
-  const width = svgElement.clientWidth || 1200;
-  const height = svgElement.clientHeight || 460;
-  const colorByState = {
-    active: '#22c55e',
-    idle: '#facc15',
-    error: '#ef4444',
-  };
-
-  const root = svg.append('g');
-
-  svg.call(
-    d3.zoom().scaleExtent([0.5, 2.2]).on('zoom', (event) => {
-      root.attr('transform', event.transform);
-    }),
-  );
-
-  const linkLayer = root.append('g');
-  const nodeLayer = root.append('g');
-
-  const linkSelection = linkLayer
-    .selectAll('line')
-    .data(links)
-    .enter()
-    .append('line')
-    .attr('class', 'graph-link')
-    .attr('stroke-width', (link) => 1 + Math.min(link.weight, 4));
-
-  const nodeSelection = nodeLayer
-    .selectAll('g')
-    .data(nodes)
-    .enter()
-    .append('g')
-    .style('cursor', 'pointer')
-    .on('click', (_, datum) => {
-      setSelectedNode(datum.nodeId);
-    });
-
-  nodeSelection
-    .append('circle')
-    .attr('r', (datum) => datum.radius)
-    .attr('fill', (datum) => colorByState[datum.state])
-    .attr('stroke', (datum) => (datum.nodeId === state.selectedNodeId ? '#ffffff' : '#0f172a'))
-    .attr('stroke-width', (datum) => (datum.nodeId === state.selectedNodeId ? 4 : 2));
-
-  nodeSelection
-    .append('text')
-    .attr('class', 'graph-node-label')
-    .attr('text-anchor', 'middle')
-    .attr('dy', 4)
-    .text((datum) => datum.nodeId);
-
-  nodeSelection
-    .append('text')
-    .attr('class', 'graph-node-rate')
-    .attr('text-anchor', 'middle')
-    .attr('dy', (datum) => datum.radius + 14)
-    .text((datum) => `${datum.rate.toFixed(1)} Hz`);
-
-  nodeSelection
-    .append('title')
-    .text((datum) => `${datum.label}\nState: ${datum.state}\nRate: ${datum.rate.toFixed(1)} Hz`);
-
-  const drag = d3.drag()
-    .on('start', (event, datum) => {
-      if (!event.active) {
-        state.graphSimulation.alphaTarget(0.3).restart();
-      }
-      datum.fx = datum.x;
-      datum.fy = datum.y;
-    })
-    .on('drag', (event, datum) => {
-      datum.fx = event.x;
-      datum.fy = event.y;
-    })
-    .on('end', (event, datum) => {
-      if (!event.active) {
-        state.graphSimulation.alphaTarget(0);
-      }
-      datum.fx = null;
-      datum.fy = null;
-    });
-
-  nodeSelection.call(drag);
-
-  state.graphSimulation = d3.forceSimulation(nodes)
-    .force('link', d3.forceLink(links).id((datum) => datum.id).distance((link) => 90 - Math.min(link.weight * 6, 30)))
-    .force('charge', d3.forceManyBody().strength(-260))
-    .force('center', d3.forceCenter(width / 2, height / 2))
-    .force('collision', d3.forceCollide().radius((datum) => datum.radius + 22))
-    .on('tick', () => {
-      linkSelection
-        .attr('x1', (datum) => datum.source.x)
-        .attr('y1', (datum) => datum.source.y)
-        .attr('x2', (datum) => datum.target.x)
-        .attr('y2', (datum) => datum.target.y);
-
-      nodeSelection.attr('transform', (datum) => `translate(${datum.x},${datum.y})`);
-    });
-};
-
-const setAdvancedCapabilityUi = () => {
-  const { registerWrite, serviceRequest } = state.capabilities;
-  const statusText = registerWrite || serviceRequest
-    ? `available (register:${registerWrite ? 'yes' : 'no'}, service:${serviceRequest ? 'yes' : 'no'})`
-    : 'unavailable on this backend';
-  const statusType = registerWrite || serviceRequest ? 'ok' : 'warn';
-
-  setStatus('advancedCapabilityStatus', statusText, statusType);
-  el('registerActionFieldset').disabled = !registerWrite;
-  el('serviceActionFieldset').disabled = !serviceRequest;
-};
-
-const detectAdvancedCapabilities = async () => {
-  let infoData = null;
-  try {
-    infoData = await requestJson('/api');
-  } catch {
-  }
-
-  const restEndpoints = infoData?.endpoints?.REST && typeof infoData.endpoints.REST === 'object'
-    ? Object.keys(infoData.endpoints.REST)
-    : [];
-
-  const advertisedRegister = restEndpoints.some((endpoint) => endpoint.includes('/register'));
-  const advertisedService = restEndpoints.some((endpoint) => endpoint.includes('/service'));
-
-  state.capabilities.registerWrite = advertisedRegister;
-  state.capabilities.serviceRequest = advertisedService;
-
-  setAdvancedCapabilityUi();
-  renderJson('advancedActionsOutput', {
-    detected_at: new Date().toISOString(),
-    enabled_actions: state.capabilities,
-    probe_status: {
-      '/api': infoData ? 200 : 0,
-    },
-  });
-};
-
-const setRegisterValue = async () => {
-  if (!state.capabilities.registerWrite) {
-    renderJson('advancedActionsOutput', { error: 'Register write endpoint unavailable.' });
-    return;
-  }
-
-  const uniqueId = el('registerNodeUniqueIdInput').value.trim();
-  const registerName = el('registerNameInput').value.trim();
-  const registerType = el('registerTypeInput').value.trim();
-  const registerValue = el('registerValueInput').value.trim();
-
-  if (!uniqueId || !registerName || !registerValue) {
-    renderJson('advancedActionsOutput', { error: 'unique_id, register_name, and value are required.' });
-    return;
-  }
-
-  const payload = { value: registerValue };
-  if (registerType) {
-    payload.type = registerType;
-  }
-
-  try {
-    const data = await requestJson(`/nodes/${encodeURIComponent(uniqueId)}/registers/${encodeURIComponent(registerName)}`, {
-      method: 'PUT',
-      body: JSON.stringify(payload),
-    });
-    renderJson('advancedActionsOutput', { action: 'set_register', request: payload, response: data });
-  } catch (error) {
-    renderJson('advancedActionsOutput', { action: 'set_register', error: error.message });
-  }
-};
-
-const sendServiceRequest = async () => {
-  if (!state.capabilities.serviceRequest) {
-    renderJson('advancedActionsOutput', { error: 'Service request endpoint unavailable.' });
-    return;
-  }
-
-  const nodeId = Number.parseInt(el('serviceNodeIdInput').value, 10);
-  const uniqueId = el('serviceUniqueIdInput').value.trim();
-  const serviceId = Number.parseInt(el('serviceIdInput').value, 10);
-  const serviceType = el('serviceTypeInput').value.trim();
-  const rawAttributes = el('serviceAttributesInput').value.trim();
-
-  if (!Number.isInteger(nodeId) || !uniqueId || !Number.isInteger(serviceId) || !serviceType) {
-    renderJson('advancedActionsOutput', { error: 'node_id, unique_id, service_id, and service_type are required.' });
-    return;
-  }
-
-  let attributes = {};
-  if (rawAttributes) {
-    try {
-      attributes = JSON.parse(rawAttributes);
-    } catch {
-      renderJson('advancedActionsOutput', { error: 'attributes must be valid JSON.' });
-      return;
-    }
-  }
-
-  const payload = {
-    node_id: nodeId,
-    unique_id: uniqueId,
-    service_type: serviceType,
-    attributes,
-  };
-
-  try {
-    const data = await requestJson(`/services/${serviceId}/make_request`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-    renderJson('advancedActionsOutput', { action: 'service_request', request: payload, response: data });
-  } catch (error) {
-    renderJson('advancedActionsOutput', { action: 'service_request', error: error.message });
-  }
-};
-
-const applyWsFilter = () => {
-  saveSettings();
-
-  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
-    return;
-  }
-
-  const payload = {
-    type: 'filter',
-    subject_ids: toIntArray(el('filterSubjects').value),
-    node_ids: toIntArray(el('filterNodes').value),
-    message_types: toArrayOfValues(el('filterTypes').value),
-  };
-
-  state.ws.send(JSON.stringify(payload));
-};
-
 const scheduleReconnect = () => {
   if (state.userClosedWs) {
     return;
@@ -1389,7 +830,6 @@ const scheduleReconnect = () => {
 
   state.wsReconnectAttempts += 1;
   const delaySeconds = Math.min(30, 2 ** Math.min(state.wsReconnectAttempts, 5));
-  setReconnectStatus(`retry in ${delaySeconds}s`);
   state.wsReconnectTimer = window.setTimeout(() => connectWs(), delaySeconds * 1000);
 };
 
@@ -1399,35 +839,22 @@ const connectWs = () => {
   }
 
   state.userClosedWs = false;
-  logDebug('ws_connect_attempt', { ws_url: `${wsBase()}/ws` });
   state.ws = new WebSocket(`${wsBase()}/ws`);
-  setStatus('wsStatus', 'Connecting', 'warn');
-  setReconnectStatus('connecting');
 
   state.ws.onopen = () => {
-    logDebug('ws_open', { ws_url: `${wsBase()}/ws` });
     state.wsReconnectAttempts = 0;
-    setStatus('wsStatus', 'Connected', 'ok');
-    setReconnectStatus('connected');
-    applyWsFilter();
     updateSemaphores();
   };
 
   state.ws.onclose = () => {
-    logDebug('ws_close', { ws_url: `${wsBase()}/ws`, user_closed: state.userClosedWs });
-    setStatus('wsStatus', 'Disconnected', 'unknown');
     updateSemaphores();
     if (state.userClosedWs) {
-      setReconnectStatus('idle');
       return;
     }
     scheduleReconnect();
   };
 
   state.ws.onerror = () => {
-    logDebug('ws_error', { ws_url: `${wsBase()}/ws` });
-    setStatus('wsStatus', 'Error', 'error');
-    setReconnectStatus('error');
     updateSemaphores();
   };
 
@@ -1445,7 +872,6 @@ const connectWs = () => {
       cacheEvent(event);
       state.eventCount += 1;
       el('eventCount').textContent = String(state.eventCount);
-      addEventRow(event);
       renderSelectedNodeContent();
       scheduleTableRefresh();
     } catch {
@@ -1463,7 +889,6 @@ const disconnectWs = () => {
     state.ws.close();
     state.ws = null;
   }
-  setReconnectStatus('idle');
 };
 
 const updateDashboardConnectButton = () => {
@@ -1555,31 +980,6 @@ const selectInterface = async () => {
   }
 };
 
-const checkHealth = async () => {
-  try {
-    const data = await requestJson('/api/health');
-    setStatus('healthStatus', data.status || 'unknown', data.status === 'healthy' ? 'ok' : 'warn');
-    return data;
-  } catch (error) {
-    setStatus('healthStatus', error.message, 'error');
-    return null;
-  }
-};
-
-const startHealthPolling = () => {
-  if (state.healthTimer) {
-    clearInterval(state.healthTimer);
-  }
-  state.healthTimer = window.setInterval(checkHealth, 10000);
-};
-
-const stopHealthPolling = () => {
-  if (state.healthTimer) {
-    clearInterval(state.healthTimer);
-    state.healthTimer = null;
-  }
-};
-
 const pollStatus = async () => {
   if (state.canConnecting || state.canDisconnecting) {
     return;
@@ -1664,41 +1064,6 @@ const stopStatusPolling = () => {
   }
 };
 
-const getLatestSubject = async () => {
-  const subjectId = Number.parseInt(el('subjectIdInput').value, 10);
-  if (!Number.isInteger(subjectId)) {
-    return;
-  }
-  try {
-    const data = await requestJson(`/api/latest/subject/${subjectId}`);
-    cacheEvent(data);
-    renderJson('restOutput', data);
-    renderGraph();
-    renderSelectedNodeContent();
-  } catch (error) {
-    renderJson('restOutput', { error: error.message });
-  }
-};
-
-const getLatestNode = async () => {
-  const nodeId = Number.parseInt(el('nodeIdInput').value, 10);
-  if (!Number.isInteger(nodeId)) {
-    return;
-  }
-  try {
-    const data = await requestJson(`/api/latest/node/${nodeId}`);
-    if (data?.events && typeof data.events === 'object') {
-      for (const event of Object.values(data.events)) {
-        cacheEvent(event);
-      }
-    }
-    renderJson('restOutput', data);
-    setSelectedNode(nodeId);
-  } catch (error) {
-    renderJson('restOutput', { error: error.message });
-  }
-};
-
 let _tableRefreshPending = null;
 const scheduleTableRefresh = () => {
   if (_tableRefreshPending) return;
@@ -1747,13 +1112,13 @@ const rateFormatter = (cell) => {
 
 const favFormatter = (cell) => {
   const isFav = cell.getValue();
-  return `<span class="fav-star ${isFav ? 'active' : ''}" aria-label="Toggle favourite">${isFav ? '\u2605' : '\u2606'}</span>`;
+  return `<span class="fav-star ${isFav ? 'active' : ''}" aria-label="Toggle favourite">${isFav ? '★' : '☆'}</span>`;
 };
 
 const actionsFormatter = (cell) => {
   const row = cell.getRow().getData();
   const cls = row.state === 'offline' ? 'enabled' : 'disabled';
-  return `<span class="action-delete ${cls}" aria-label="Remove offline node">\u2715</span>`;
+  return `<span class="action-delete ${cls}" aria-label="Remove offline node">✕</span>`;
 };
 
 const toggleFavourite = (nodeId) => {
@@ -1952,7 +1317,7 @@ const renderNodesTable = () => {
   }
 };
 
-const getAllNodes = async (renderOutput = false) => {
+const getAllNodes = async () => {
   try {
     const data = await requestJson('/api/nodes');
     state.latestNodesPayload = data;
@@ -1961,26 +1326,17 @@ const getAllNodes = async (renderOutput = false) => {
       state.selectedNodeId = null;
     }
     renderNodesTable();
-    renderGraph();
     renderSelectedNodeContent();
-    if (renderOutput) {
-      renderJson('restOutput', data);
-    }
   } catch (error) {
     state.latestNodesPayload = { node_count: 0, nodes: {} };
     state.selectedNodeId = null;
     renderNodesTable();
-    renderGraph();
     renderSelectedNodeContent();
-    if (renderOutput) {
-      renderJson('restOutput', { error: error.message });
-    }
   }
 };
 
 const startNodesPolling = () => {
-  const seconds = Math.max(1, Math.min(60, Number.parseInt(el('nodesRefreshSeconds').value, 10) || 3));
-  el('nodesRefreshSeconds').value = String(seconds);
+  const seconds = Math.max(1, Math.min(60, Number.parseInt(el('nodesRefreshSlider').value, 10) || 3));
   el('nodesRefreshSlider').value = String(seconds);
   el('refreshValue').textContent = seconds >= 60 ? '1m' : `${seconds}s`;
   saveSettings();
@@ -1988,7 +1344,7 @@ const startNodesPolling = () => {
   if (state.nodesTimer) {
     clearInterval(state.nodesTimer);
   }
-  state.nodesTimer = window.setInterval(() => getAllNodes(false), seconds * 1000);
+  state.nodesTimer = window.setInterval(getAllNodes, seconds * 1000);
 };
 
 const stopNodesPolling = () => {
@@ -2007,59 +1363,17 @@ const stopCanStartupDelay = () => {
 
 const schedulePostCanStartup = (delayMs = 10000) => {
   stopCanStartupDelay();
-  logDebug('post_can_startup_scheduled', { delay_ms: delayMs });
   state.canStartupTimer = window.setTimeout(async () => {
     state.canStartupTimer = null;
     if (!state.dashboardConnected || !state.canConnected) {
-      logDebug('post_can_startup_skipped', {
-        dashboard_connected: state.dashboardConnected,
-        can_connected: state.canConnected,
-      });
       return;
     }
 
-    logDebug('post_can_startup_running', {
-      api_base: apiBase(),
-      ws_url: `${wsBase()}/ws`,
-    });
-
-    await getAllNodes(false);
-    await getLogs();
-    try {
-      await detectAdvancedCapabilities();
-    } catch {
-    }
+    await getAllNodes();
     startNodesPolling();
     startThroughputTimer();
     connectWs();
   }, delayMs);
-};
-
-const getLogs = async () => {
-  const limit = Number.parseInt(el('logsLimit').value, 10) || 100;
-  const level = el('logsLevel').value;
-  const minLevel = el('logsMinLevel').value;
-  const query = new URLSearchParams({ limit: String(limit) });
-  if (level) {
-    query.set('level', level);
-  }
-  if (minLevel) {
-    query.set('min_level', minLevel);
-  }
-
-  try {
-    const data = await requestJson(`/api/logs?${query.toString()}`);
-    addLogRows(data.logs || []);
-  } catch (error) {
-    addLogRows([
-      {
-        timestamp: new Date().toISOString(),
-        level: 'ERROR',
-        logger: 'frontend',
-        message: error.message,
-      },
-    ]);
-  }
 };
 
 const connectDashboard = async () => {
@@ -2074,7 +1388,6 @@ const connectDashboard = async () => {
     stopInterfacePolling();
     stopThroughputTimer();
     disconnectWs();
-    setStatus('healthStatus', 'Unknown', 'unknown');
     renderNodesTable();
     updateSemaphores();
     saveSettings();
@@ -2169,18 +1482,6 @@ const connectCan = async () => {
   }
 };
 
-const setView = (name) => {
-  document.querySelectorAll('.view').forEach((v) => {
-    v.classList.toggle('hidden', v.id !== `view${name.charAt(0).toUpperCase()}${name.slice(1)}`);
-  });
-  document.querySelectorAll('.nav-btn').forEach((b) => {
-    b.classList.toggle('active', b.dataset.view === name);
-  });
-  if (name === 'graph') {
-    requestAnimationFrame(() => renderGraph());
-  }
-};
-
 const bindTabs = () => {
   document.querySelectorAll('.detail-tab').forEach((button) => {
     button.addEventListener('click', () => {
@@ -2194,30 +1495,15 @@ const bindTabs = () => {
 const bind = () => {
   el('connectDashboardBtn').addEventListener('click', connectDashboard);
   el('connectCanBtn').addEventListener('click', connectCan);
-  el('connectWsBtn').addEventListener('click', connectWs);
   el('interfacesSelect').addEventListener('change', () => {
     state.preferredCanInterface = el('interfacesSelect').value;
     saveSettings();
   });
-  el('selectInterfaceBtn').addEventListener('click', selectInterface);
-  el('checkHealthBtn').addEventListener('click', checkHealth);
-  el('applyNodesRefreshBtn').addEventListener('click', startNodesPolling);
   el('nodesRefreshSlider').addEventListener('input', () => {
     const val = el('nodesRefreshSlider').value;
-    el('nodesRefreshSeconds').value = val;
     el('refreshValue').textContent = Number(val) >= 60 ? '1m' : `${val}s`;
     startNodesPolling();
   });
-  document.querySelectorAll('.nav-btn').forEach((b) => {
-    b.addEventListener('click', () => setView(b.dataset.view));
-  });
-  el('getSubjectBtn').addEventListener('click', getLatestSubject);
-  el('getNodeBtn').addEventListener('click', getLatestNode);
-  el('getNodesBtn').addEventListener('click', () => getAllNodes(true));
-  el('getLogsBtn').addEventListener('click', getLogs);
-  el('refreshCapabilitiesBtn').addEventListener('click', detectAdvancedCapabilities);
-  el('setRegisterBtn').addEventListener('click', setRegisterValue);
-  el('sendServiceRequestBtn').addEventListener('click', sendServiceRequest);
   el('sidebarCollapseBtn').addEventListener('click', () => {
     const sidebar = document.querySelector('.sidebar');
     sidebar.classList.toggle('collapsed');
@@ -2339,7 +1625,6 @@ const bind = () => {
     startPlotAnim();
   });
 
-  window.addEventListener('resize', renderGraph);
   bindTabs();
   initNodesTable();
 };
@@ -2370,7 +1655,6 @@ updateSemaphores();
   const tearDown = () => {
     disconnectWs();
     if (state.nodesTimer) { clearInterval(state.nodesTimer); state.nodesTimer = null; }
-    if (state.healthTimer) { clearInterval(state.healthTimer); state.healthTimer = null; }
     if (state.statusTimer) { clearInterval(state.statusTimer); state.statusTimer = null; }
     if (state.interfacesTimer) { clearInterval(state.interfacesTimer); state.interfacesTimer = null; }
     stopPlotAnim();
