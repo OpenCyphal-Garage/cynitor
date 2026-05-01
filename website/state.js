@@ -205,7 +205,7 @@ const getHeaderFilters = () => {
   return filters;
 };
 
-const saveSettings = () => {
+const _writeSettingsNow = () => {
   const interfacesSelect = el('interfacesSelect');
   const persisted = {
     apiBase: el('apiBase').value.trim(),
@@ -227,6 +227,28 @@ const saveSettings = () => {
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
 };
+
+let _saveSettingsPending = null;
+
+// Debounced. Most callers fire bursts (filter typing, drag-end + state-flip
+// pairs, etc.) and we only need the final state on disk. The beforeunload
+// listener at the bottom of this file flushes any pending write so a tab
+// close during the debounce window doesn't lose the last change.
+const saveSettings = () => {
+  if (_saveSettingsPending) return;
+  _saveSettingsPending = window.setTimeout(() => {
+    _saveSettingsPending = null;
+    _writeSettingsNow();
+  }, 250);
+};
+
+window.addEventListener('beforeunload', () => {
+  if (_saveSettingsPending) {
+    clearTimeout(_saveSettingsPending);
+    _saveSettingsPending = null;
+    _writeSettingsNow();
+  }
+});
 
 const loadSettings = () => {
   const settings = readSettings();
