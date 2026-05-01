@@ -287,29 +287,30 @@ const renderPlot = (container) => {
   if (!legend) {
     legend = document.createElement('div');
     legend.className = 'plot-legend';
-    // Look up the active subject's hidden set fresh each event so the
-    // listener stays correct after the user switches subjects.
-    legend.addEventListener('change', (e) => {
-      const cb = e.target.closest('input[type="checkbox"]');
-      if (!cb) return;
+    // Look up the active subject's hidden set fresh each click so the
+    // listener stays correct after the user switches subjects. Restart
+    // the plot tick so the change reflects immediately even when the
+    // anim loop has paused for stale data.
+    legend.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-series]');
+      if (!btn) return;
       const activeSid = state.selectedPlotSubject;
       if (activeSid == null) return;
       if (!state.hiddenPlotSeries.has(activeSid)) {
         state.hiddenPlotSeries.set(activeSid, new Set());
       }
       const activeHidden = state.hiddenPlotSeries.get(activeSid);
-      if (cb.checked) {
-        activeHidden.delete(cb.dataset.series);
-      } else {
-        activeHidden.add(cb.dataset.series);
-      }
+      const name = btn.dataset.series;
+      if (activeHidden.has(name)) activeHidden.delete(name);
+      else activeHidden.add(name);
+      startPlotAnim();
     });
     plotArea.appendChild(legend);
   }
   legend.innerHTML = allSeries.map((s, i) => {
-    const checked = !hidden.has(s.name) ? ' checked' : '';
+    const isActive = !hidden.has(s.name);
     const color = PLOT_COLORS[i % PLOT_COLORS.length];
-    return `<label class="plot-legend-item"><input type="checkbox" data-series="${escapeHtml(s.name)}"${checked}><span class="plot-legend-swatch" style="background:${color}"></span>${escapeHtml(s.name)}</label>`;
+    return `<button type="button" class="plot-legend-item${isActive ? ' active' : ''}" data-series="${escapeHtml(s.name)}" aria-pressed="${isActive}"><span class="plot-legend-swatch" style="background:${color}"></span>${escapeHtml(s.name)}</button>`;
   }).join('');
 
   return dataIsLive;
