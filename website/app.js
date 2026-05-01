@@ -26,7 +26,7 @@ const state = {
   selectedPlotSubject: null,
   subjectHistory: new Map(),
   hiddenPlotSeries: new Set(),
-  plotAnimFrame: null,
+  plotTimer: null,
   wsBytesAccum: 0,
   wsThroughput: 0,
   busUtilization: null,
@@ -97,8 +97,6 @@ const saveSettings = () => {
     headerFilters: getHeaderFilters(),
     selectedNodeId: state.selectedNodeId,
     splitRatio: state.splitRatio,
-    nodesPayload: state.latestNodesPayload,
-    tableRows: nodesTabulator ? buildTableData() : null,
     favouriteNodeIds: [...state.favouriteNodeIds],
     deletedNodeIds: [...state.deletedNodeIds],
   };
@@ -141,7 +139,7 @@ const loadSettings = () => {
     el('refreshValue').textContent = val >= 60 ? '1m' : `${val}s`;
   }
   if (typeof settings.selectedDetailTab === 'string') {
-    const validTabs = ['publishers', 'subscribers', 'servers', 'clients', 'registers'];
+    const validTabs = ['publishers', 'subscribers', 'servers', 'clients'];
     const tab = settings.selectedDetailTab === 'services' ? 'servers' : settings.selectedDetailTab;
     state.selectedDetailTab = validTabs.includes(tab) ? tab : 'publishers';
   }
@@ -164,9 +162,6 @@ const loadSettings = () => {
   }
   if (settings.dashboardConnected === true) {
     state.pendingReconnect = true;
-  }
-  if (settings.nodesPayload && typeof settings.nodesPayload === 'object') {
-    state.latestNodesPayload = settings.nodesPayload;
   }
   if (Array.isArray(settings.favouriteNodeIds)) {
     state.favouriteNodeIds = new Set(settings.favouriteNodeIds);
@@ -664,10 +659,12 @@ const renderPlot = (container) => {
   return dataIsLive;
 };
 
+const PLOT_TICK_MS = 100;
+
 const stopPlotAnim = () => {
-  if (state.plotAnimFrame) {
-    cancelAnimationFrame(state.plotAnimFrame);
-    state.plotAnimFrame = null;
+  if (state.plotTimer) {
+    clearTimeout(state.plotTimer);
+    state.plotTimer = null;
   }
 };
 
@@ -677,12 +674,12 @@ const startPlotAnim = () => {
   const tick = () => {
     const isLive = renderPlot(container);
     if (isLive) {
-      state.plotAnimFrame = requestAnimationFrame(tick);
+      state.plotTimer = window.setTimeout(tick, PLOT_TICK_MS);
     } else {
-      state.plotAnimFrame = null;
+      state.plotTimer = null;
     }
   };
-  state.plotAnimFrame = requestAnimationFrame(tick);
+  state.plotTimer = window.setTimeout(tick, PLOT_TICK_MS);
 };
 
 const bindSplitHandle = (splitEl) => {
@@ -771,7 +768,7 @@ const renderSelectedNodeContent = () => {
 
   const renderSubjectTab = (title, subjects) => {
     if (updateSubjectTableInPlace(content, subjects)) {
-      if (!state.plotAnimFrame) startPlotAnim();
+      if (!state.plotTimer) startPlotAnim();
       return;
     }
     const selected = state.selectedPlotSubject;
@@ -808,12 +805,6 @@ const renderSelectedNodeContent = () => {
   if (state.selectedDetailTab === 'clients') {
     stopPlotAnim();
     content.innerHTML = renderListTab('Clients', buildClientsDetailItems(node.clients || []));
-    return;
-  }
-
-  if (state.selectedDetailTab === 'registers') {
-    stopPlotAnim();
-    content.innerHTML = '<div class="detail-empty">Register access not available.</div>';
     return;
   }
 
@@ -1260,15 +1251,7 @@ const initNodesTable = () => {
         nodesTabulator.setHeaderFilterValue(field, value);
       }
     }
-
-    // Restore saved rows if we have them (shows last-known data before reconnect)
-    const savedRows = settings.tableRows;
-    if (Array.isArray(savedRows) && savedRows.length) {
-      nodesTabulator.setData(savedRows);
-      el('nodeCount').textContent = String(savedRows.length);
-    } else {
-      renderNodesTable();
-    }
+    renderNodesTable();
   });
 };
 
