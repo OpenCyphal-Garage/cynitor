@@ -4,6 +4,8 @@ A standalone dashboard for monitoring [Cyphal](https://opencyphal.org/) (UAVCAN)
 
 Cynitor watches the bus in real time, lists every node it discovers, and lets you drill into individual subjects to inspect message attributes and plot numeric values over time. It's intended for embedded developers debugging Cyphal networks who want a quick, no-install GUI alternative to `yakut monitor`.
 
+![Cynitor dashboard](cynitor.png)
+
 ## Quick Start
 
 Cynitor has two parts that run independently: a Python backend that talks to the CAN interface, and a static-file frontend that runs in any modern browser.
