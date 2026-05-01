@@ -108,12 +108,15 @@ const renderPlot = (container) => {
   const visible = allSeries.filter((s) => !hidden.has(s.name));
 
   const margin = { top: 8, right: 12, bottom: 24, left: 48 };
-  const TITLE_H = 20;
-  const LEGEND_H = 28;
   const PANEL_GAP = 8;
   const rect = plotArea.getBoundingClientRect();
   const w = rect.width - margin.left - margin.right;
-  const totalPanelsH = rect.height - margin.top - margin.bottom - TITLE_H - LEGEND_H;
+  // Title + legend share a single header row whose height we measure
+  // each render — pills wrap to a second row on subjects with many
+  // attributes, so a fixed value would lie.
+  const headerEl = plotArea.querySelector('.plot-header');
+  const HEADER_H = headerEl ? Math.max(28, Math.ceil(headerEl.getBoundingClientRect().height)) : 28;
+  const totalPanelsH = rect.height - margin.top - margin.bottom - HEADER_H;
   if (w < 40 || totalPanelsH < 40) return;
 
   // Time domain across all visible series (shared x-axis)
@@ -156,11 +159,38 @@ const renderPlot = (container) => {
   // structure" so a hot reload after the multi-panel refactor wipes
   // cleanly.
   let gNode = plotArea.querySelector('.plot-root');
-  if (!gNode || !gNode.querySelector('.plot-panels')) {
+  if (!gNode || !gNode.querySelector('.plot-panels') || !plotArea.querySelector('.plot-header')) {
     plotArea.innerHTML = '';
-    const titleEl = document.createElement('div');
-    titleEl.className = 'plot-title';
-    plotArea.appendChild(titleEl);
+    const header = document.createElement('div');
+    header.className = 'plot-header';
+    const titleNode = document.createElement('div');
+    titleNode.className = 'plot-title';
+    header.appendChild(titleNode);
+    const legendNode = document.createElement('div');
+    legendNode.className = 'plot-legend';
+    // Look up the active subject's hidden set fresh each click so the
+    // listener stays correct after the user switches subjects.
+    legendNode.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-series]');
+      if (!btn) return;
+      const activeSid = state.selectedPlotSubject;
+      if (activeSid == null) return;
+      if (!state.hiddenPlotSeries.has(activeSid)) {
+        state.hiddenPlotSeries.set(activeSid, new Set());
+      }
+      const activeHidden = state.hiddenPlotSeries.get(activeSid);
+      const name = btn.dataset.series;
+      if (activeHidden.has(name)) activeHidden.delete(name);
+      else activeHidden.add(name);
+      // Update class immediately so the click feels responsive even
+      // when the next plot tick is up to PLOT_TICK_MS away.
+      const isActive = !activeHidden.has(name);
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-pressed', String(isActive));
+      startPlotAnim();
+    });
+    header.appendChild(legendNode);
+    plotArea.appendChild(header);
     const svgEl = d3.select(plotArea).append('svg').attr('width', '100%');
     const g = svgEl.append('g').attr('class', 'plot-root')
       .attr('transform', `translate(${margin.left},${margin.top})`);
@@ -176,7 +206,7 @@ const renderPlot = (container) => {
   }
 
   const svgEl = plotArea.querySelector('svg');
-  if (svgEl) svgEl.setAttribute('height', String(rect.height - TITLE_H - LEGEND_H));
+  if (svgEl) svgEl.setAttribute('height', String(rect.height - HEADER_H));
 
   const titleEl = plotArea.querySelector('.plot-title');
   if (titleEl) {
@@ -276,42 +306,35 @@ const renderPlot = (container) => {
       const tw = tooltipEl.offsetWidth;
       if (tx + tw > rect.width - 4) tx = mx + margin.left - 12 - tw;
       tooltipEl.style.left = `${Math.max(4, tx)}px`;
-      tooltipEl.style.top = `${TITLE_H + 4}px`;
+      tooltipEl.style.top = `${HEADER_H + 4}px`;
     })
     .on('mouseleave', () => {
       crosshair.attr('opacity', 0);
       tooltipEl.style.display = 'none';
     });
 
-  let legend = plotArea.querySelector('.plot-legend');
-  if (!legend) {
-    legend = document.createElement('div');
-    legend.className = 'plot-legend';
-    // Look up the active subject's hidden set fresh each click so the
-    // listener stays correct after the user switches subjects. Restart
-    // the plot tick so the change reflects immediately even when the
-    // anim loop has paused for stale data.
-    legend.addEventListener('click', (e) => {
-      const btn = e.target.closest('button[data-series]');
-      if (!btn) return;
-      const activeSid = state.selectedPlotSubject;
-      if (activeSid == null) return;
-      if (!state.hiddenPlotSeries.has(activeSid)) {
-        state.hiddenPlotSeries.set(activeSid, new Set());
+  // Only rebuild the legend's DOM when the series set actually changes;
+  // otherwise update each pill's active class in place. Rebuilding the
+  // innerHTML on every plot tick was destroying the pill elements
+  // mid-click, eating clicks and creating a 10Hz visual flicker.
+  const legend = plotArea.querySelector('.plot-legend');
+  if (legend) {
+    const seriesKey = allSeries.map((s) => s.name).join('|');
+    if (legend.dataset.seriesKey !== seriesKey) {
+      legend.dataset.seriesKey = seriesKey;
+      legend.innerHTML = allSeries.map((s, i) => {
+        const isActive = !hidden.has(s.name);
+        const color = PLOT_COLORS[i % PLOT_COLORS.length];
+        return `<button type="button" class="plot-legend-item${isActive ? ' active' : ''}" data-series="${escapeHtml(s.name)}" aria-pressed="${isActive}"><span class="plot-legend-swatch" style="background:${color}"></span>${escapeHtml(s.name)}</button>`;
+      }).join('');
+    } else {
+      for (const btn of legend.querySelectorAll('button[data-series]')) {
+        const isActive = !hidden.has(btn.dataset.series);
+        btn.classList.toggle('active', isActive);
+        btn.setAttribute('aria-pressed', String(isActive));
       }
-      const activeHidden = state.hiddenPlotSeries.get(activeSid);
-      const name = btn.dataset.series;
-      if (activeHidden.has(name)) activeHidden.delete(name);
-      else activeHidden.add(name);
-      startPlotAnim();
-    });
-    plotArea.appendChild(legend);
+    }
   }
-  legend.innerHTML = allSeries.map((s, i) => {
-    const isActive = !hidden.has(s.name);
-    const color = PLOT_COLORS[i % PLOT_COLORS.length];
-    return `<button type="button" class="plot-legend-item${isActive ? ' active' : ''}" data-series="${escapeHtml(s.name)}" aria-pressed="${isActive}"><span class="plot-legend-swatch" style="background:${color}"></span>${escapeHtml(s.name)}</button>`;
-  }).join('');
 
   return dataIsLive;
 };
