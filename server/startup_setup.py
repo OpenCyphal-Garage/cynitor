@@ -90,11 +90,10 @@ def prepare_runtime(can_iface: str = "can0", force_compile: bool = False) -> Non
     public_types_dir = dsdl_dir / "public_regulated_data_types"
     uavcan_dir = public_types_dir / "uavcan"
     reg_dir = public_types_dir / "reg"
-    custom_dir = dsdl_dir / "dontpanic"
     python_output_dir = project_root / "python_compiled_messages"
 
     already_compiled = all(
-        (python_output_dir / name).is_dir() for name in ("uavcan", "reg", "dontpanic")
+        (python_output_dir / name).is_dir() for name in ("uavcan", "reg")
     )
 
     should_compile = force_compile or not already_compiled
@@ -120,20 +119,8 @@ def prepare_runtime(can_iface: str = "can0", force_compile: bool = False) -> Non
             ],
             "uavcan messages",
         )
-        _run_nnvg(
-            [
-                "--target-language", "py",
-                "--enable-serialization-asserts",
-                str(custom_dir),
-                "--lookup-dir", str(reg_dir),
-                "--lookup-dir", str(uavcan_dir),
-                "--outdir", str(python_output_dir),
-            ],
-            "dontpanic messages",
-        )
 
     _prepend_env_path("CYPHAL_PATH", public_types_dir)
-    _prepend_env_path("CYPHAL_PATH", custom_dir)
     os.environ["PYCYPHAL_PATH"] = str(python_output_dir.resolve())
     _prepend_env_path("PYTHONPATH", python_output_dir)
     _ensure_sys_path(python_output_dir)
