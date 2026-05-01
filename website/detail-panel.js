@@ -101,9 +101,11 @@ const renderPlot = (container) => {
   const visible = allSeries.filter((s) => !state.hiddenPlotSeries.has(s.name));
 
   const margin = { top: 8, right: 12, bottom: 24, left: 48 };
+  const TITLE_H = 20;   // reserved for the .plot-title row
+  const LEGEND_H = 28;  // reserved for the .plot-legend row
   const rect = plotArea.getBoundingClientRect();
   const w = rect.width - margin.left - margin.right;
-  const h = rect.height - margin.top - margin.bottom - 28;
+  const h = rect.height - margin.top - margin.bottom - TITLE_H - LEGEND_H;
   if (w < 40 || h < 40) return;
 
   let allMin = Infinity, allMax = -Infinity, tDataMin = Infinity, tDataMax = -Infinity;
@@ -134,8 +136,11 @@ const renderPlot = (container) => {
   let gNode = plotArea.querySelector('.plot-root');
   if (!gNode) {
     plotArea.innerHTML = '';
+    const titleEl = document.createElement('div');
+    titleEl.className = 'plot-title';
+    plotArea.appendChild(titleEl);
     const svgEl = d3.select(plotArea).append('svg')
-      .attr('width', '100%').attr('height', rect.height - 28);
+      .attr('width', '100%').attr('height', rect.height - TITLE_H - LEGEND_H);
     const clipId = 'plot-clip-' + Date.now();
     svgEl.append('defs').append('clipPath').attr('id', clipId)
       .append('rect').attr('width', w).attr('height', h);
@@ -145,6 +150,19 @@ const renderPlot = (container) => {
     g.append('g').attr('class', 'plot-y-axis');
     g.append('g').attr('class', 'plot-lines').attr('clip-path', `url(#${clipId})`);
     gNode = g.node();
+  }
+
+  // Make the data semantics explicit: the plot is subject-keyed network
+  // history, not per-node. On the subscribers tab there's no separate
+  // "what this node received" log, so framing it as a network broadcast
+  // avoids the implication that the curve represents the selected node.
+  const titleEl = plotArea.querySelector('.plot-title');
+  if (titleEl) {
+    const ctx = state.selectedDetailTab === 'subscribers'
+      ? 'network broadcast'
+      : `published by node ${state.selectedNodeId ?? '?'}`;
+    const next = `Subject ${sid} · ${ctx}`;
+    if (titleEl.textContent !== next) titleEl.textContent = next;
   }
 
   const g = d3.select(gNode);
