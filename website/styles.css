@@ -443,6 +443,58 @@ button:focus-visible,
   flex-direction: column;
 }
 
+/* ── KPI strip ── */
+.kpi-strip {
+  display: flex;
+  gap: 0.625rem;
+  padding: 0.625rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.kpi-tile {
+  flex: 1;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.875rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.kpi-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.kpi-value-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.kpi-value {
+  font-family: var(--mono);
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text-bright);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.kpi-value-suffix {
+  font-size: 0.875rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+
 /* ── Tabulator theme overrides ── */
 #nodesTable {
   flex: 1;
