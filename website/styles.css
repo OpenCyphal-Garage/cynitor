@@ -637,7 +637,7 @@ button:focus-visible,
 }
 
 .detail-plot-area .plot-x-axis text,
-.detail-plot-area .plot-y-axis text {
+.detail-plot-area .panel-y-axis text {
   fill: var(--muted);
   font-family: var(--mono);
   font-size: 0.625rem;
@@ -645,9 +645,16 @@ button:focus-visible,
 
 .detail-plot-area .plot-x-axis line,
 .detail-plot-area .plot-x-axis path,
-.detail-plot-area .plot-y-axis line,
-.detail-plot-area .plot-y-axis path {
+.detail-plot-area .panel-y-axis line,
+.detail-plot-area .panel-y-axis path {
   stroke: var(--border);
+}
+
+.detail-plot-area .panel-label {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
 }
 
 .plot-empty {

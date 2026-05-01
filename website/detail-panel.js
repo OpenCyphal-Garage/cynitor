@@ -108,27 +108,26 @@ const renderPlot = (container) => {
   const visible = allSeries.filter((s) => !hidden.has(s.name));
 
   const margin = { top: 8, right: 12, bottom: 24, left: 48 };
-  const TITLE_H = 20;   // reserved for the .plot-title row
-  const LEGEND_H = 28;  // reserved for the .plot-legend row
+  const TITLE_H = 20;
+  const LEGEND_H = 28;
+  const PANEL_GAP = 8;
   const rect = plotArea.getBoundingClientRect();
   const w = rect.width - margin.left - margin.right;
-  const h = rect.height - margin.top - margin.bottom - TITLE_H - LEGEND_H;
-  if (w < 40 || h < 40) return;
+  const totalPanelsH = rect.height - margin.top - margin.bottom - TITLE_H - LEGEND_H;
+  if (w < 40 || totalPanelsH < 40) return;
 
-  let allMin = Infinity, allMax = -Infinity, tDataMin = Infinity, tDataMax = -Infinity;
+  // Time domain across all visible series (shared x-axis)
+  let tDataMin = Infinity, tDataMax = -Infinity;
   for (const s of visible) {
     for (const p of s.data) {
-      if (p.v < allMin) allMin = p.v;
-      if (p.v > allMax) allMax = p.v;
       if (p.t < tDataMin) tDataMin = p.t;
       if (p.t > tDataMax) tDataMax = p.t;
     }
   }
-  if (!isFinite(allMin)) { allMin = 0; allMax = 1; tDataMin = Date.now() / 1000 - 60; tDataMax = Date.now() / 1000; }
-  if (allMin === allMax) { allMin -= 1; allMax += 1; }
-  const pad = (allMax - allMin) * 0.05;
-  allMin -= pad;
-  allMax += pad;
+  if (!isFinite(tDataMin)) {
+    tDataMin = Date.now() / 1000 - 60;
+    tDataMax = Date.now() / 1000;
+  }
 
   const WINDOW_SECS = 60;
   const now = Date.now() / 1000;
@@ -136,26 +135,37 @@ const renderPlot = (container) => {
   const tRight = dataIsLive ? now : tDataMax;
   const tWindowStart = tRight - WINDOW_SECS;
   const tWindowEnd = tRight + WINDOW_SECS * 0.5;
-
   const xScale = d3.scaleLinear().domain([tWindowStart, tWindowEnd]).range([0, w]);
-  const yScale = d3.scaleLinear().domain([allMin, allMax]).range([h, 0]);
 
+  // Per-series y-scale: each attribute gets its own panel and its own
+  // domain so a fast-growing uptime doesn't squash a small voltage.
+  const numPanels = Math.max(1, visible.length);
+  const panelH = (totalPanelsH - (numPanels - 1) * PANEL_GAP) / numPanels;
+  const seriesScales = visible.map((s) => {
+    let min = Infinity, max = -Infinity;
+    for (const p of s.data) {
+      if (p.v < min) min = p.v;
+      if (p.v > max) max = p.v;
+    }
+    if (min === max) { min -= 1; max += 1; }
+    const pad = (max - min) * 0.05;
+    return d3.scaleLinear().domain([min - pad, max + pad]).range([panelH, 0]);
+  });
+
+  // One-time SVG setup. Detect both "no plot yet" and "old single-panel
+  // structure" so a hot reload after the multi-panel refactor wipes
+  // cleanly.
   let gNode = plotArea.querySelector('.plot-root');
-  if (!gNode) {
+  if (!gNode || !gNode.querySelector('.plot-panels')) {
     plotArea.innerHTML = '';
     const titleEl = document.createElement('div');
     titleEl.className = 'plot-title';
     plotArea.appendChild(titleEl);
-    const svgEl = d3.select(plotArea).append('svg')
-      .attr('width', '100%').attr('height', rect.height - TITLE_H - LEGEND_H);
-    const clipId = 'plot-clip-' + Date.now();
-    svgEl.append('defs').append('clipPath').attr('id', clipId)
-      .append('rect').attr('width', w).attr('height', h);
+    const svgEl = d3.select(plotArea).append('svg').attr('width', '100%');
     const g = svgEl.append('g').attr('class', 'plot-root')
       .attr('transform', `translate(${margin.left},${margin.top})`);
-    g.append('g').attr('class', 'plot-x-axis').attr('transform', `translate(0,${h})`);
-    g.append('g').attr('class', 'plot-y-axis');
-    g.append('g').attr('class', 'plot-lines').attr('clip-path', `url(#${clipId})`);
+    g.append('g').attr('class', 'plot-panels');
+    g.append('g').attr('class', 'plot-x-axis');
     g.append('line').attr('class', 'plot-crosshair').attr('opacity', 0);
     g.append('rect').attr('class', 'plot-overlay').attr('fill', 'none').style('pointer-events', 'all');
     const tooltip = document.createElement('div');
@@ -165,10 +175,9 @@ const renderPlot = (container) => {
     gNode = g.node();
   }
 
-  // Make the data semantics explicit: the plot is subject-keyed network
-  // history, not per-node. On the subscribers tab there's no separate
-  // "what this node received" log, so framing it as a network broadcast
-  // avoids the implication that the curve represents the selected node.
+  const svgEl = plotArea.querySelector('svg');
+  if (svgEl) svgEl.setAttribute('height', String(rect.height - TITLE_H - LEGEND_H));
+
   const titleEl = plotArea.querySelector('.plot-title');
   if (titleEl) {
     const ctx = state.selectedDetailTab === 'subscribers'
@@ -179,31 +188,52 @@ const renderPlot = (container) => {
   }
 
   const g = d3.select(gNode);
+  const panelsG = g.select('.plot-panels');
+
+  // Stacked per-attribute panels. Data joined by attribute name so a
+  // panel persists across renders and only its line/axis update.
+  const panels = panelsG.selectAll('.plot-panel').data(visible, (d) => d.name);
+  const panelsEnter = panels.enter().append('g').attr('class', 'plot-panel');
+  panelsEnter.append('clipPath').attr('id', (d) => `panel-clip-${sid}-${d.name}`)
+    .append('rect');
+  panelsEnter.append('g').attr('class', 'panel-y-axis');
+  panelsEnter.append('g').attr('class', 'panel-line')
+    .append('path').attr('fill', 'none').attr('stroke-width', 1.5);
+  panelsEnter.append('text').attr('class', 'panel-label').attr('x', 4).attr('y', 11);
+  panels.exit().remove();
+
+  panelsG.selectAll('.plot-panel').each(function (d, i) {
+    const yScale = seriesScales[i];
+    const color = PLOT_COLORS[i % PLOT_COLORS.length];
+    const panel = d3.select(this);
+    const panelY = i * (panelH + PANEL_GAP);
+    panel.attr('transform', `translate(0, ${panelY})`);
+    panel.select('clipPath rect').attr('width', w).attr('height', panelH);
+    panel.select('.panel-y-axis').call(d3.axisLeft(yScale).ticks(3).tickSize(2));
+    const lineGen = d3.line()
+      .x((p) => xScale(p.t))
+      .y((p) => yScale(p.v))
+      .curve(d3.curveLinear);
+    panel.select('.panel-line')
+      .attr('clip-path', `url(#panel-clip-${sid}-${d.name})`)
+      .select('path')
+      .attr('stroke', color)
+      .attr('d', lineGen(d.data));
+    panel.select('.panel-label')
+      .text(d.name)
+      .attr('fill', color);
+  });
+
+  // Shared x-axis at bottom of the stack
   const xAxis = d3.axisBottom(xScale).ticks(5).tickFormat(formatPlotTime);
-  const yAxis = d3.axisLeft(yScale).ticks(5);
+  g.select('.plot-x-axis')
+    .attr('transform', `translate(0, ${totalPanelsH})`)
+    .call(xAxis);
 
-  g.select('.plot-x-axis').call(xAxis);
-  g.select('.plot-y-axis').call(yAxis);
+  // Crosshair + overlay span the full panel stack
+  g.select('.plot-overlay').attr('width', w).attr('height', totalPanelsH);
+  g.select('.plot-crosshair').attr('y1', 0).attr('y2', totalPanelsH);
 
-  const line = d3.line()
-    .x((d) => xScale(d.t))
-    .y((d) => yScale(d.v))
-    .curve(d3.curveLinear);
-
-  const linesG = g.select('.plot-lines');
-  const paths = linesG.selectAll('path').data(visible, (d) => d.name);
-  paths.enter().append('path')
-    .attr('fill', 'none')
-    .attr('stroke-width', 1.5)
-    .merge(paths)
-    .attr('stroke', (_, i) => PLOT_COLORS[i % PLOT_COLORS.length])
-    .attr('d', (d) => line(d.data));
-  paths.exit().remove();
-
-  // Hover crosshair + tooltip. Re-bind every render so closures capture
-  // the current visible/xScale/dimensions; d3.on() replaces the handler.
-  g.select('.plot-overlay').attr('width', w).attr('height', h);
-  g.select('.plot-crosshair').attr('y1', 0).attr('y2', h);
   const tooltipEl = plotArea.querySelector('.plot-tooltip');
   const overlay = g.select('.plot-overlay');
   const crosshair = g.select('.plot-crosshair');
