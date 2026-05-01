@@ -50,7 +50,16 @@ let _detailRefreshPending = null;
 
 const metricMaxLen = new Map();
 
-const PLOT_COLORS = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#bc8cff', '#39d2c0'];
+// Read plot colors from CSS custom properties so the palette has a single
+// source of truth. Resolved once at script load — values don't change at
+// runtime since they're not overridden in the light theme.
+const PLOT_COLORS = (() => {
+  const root = getComputedStyle(document.documentElement);
+  const fallback = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#bc8cff', '#39d2c0'];
+  return [1, 2, 3, 4, 5, 6].map((i) => {
+    return root.getPropertyValue(`--plot-${i}`).trim() || fallback[i - 1];
+  });
+})();
 const PLOT_STALE_THRESHOLD = 3;
 const PLOT_TICK_MS = 100;
 
