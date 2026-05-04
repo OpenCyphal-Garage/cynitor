@@ -157,7 +157,8 @@ class CANSession:
         self.bus_load: Optional[BusLoadMonitor] = None
         self.registered_nodes: list[int] = []
         self._tasks: list[asyncio.Task] = []
-        self._busy = False
+        self._lock = asyncio.Lock()
+        self._disconnect_task: Optional[asyncio.Task] = None
         self.last_error: Optional[str] = None
 
     @property
@@ -166,60 +167,61 @@ class CANSession:
 
     async def connect(self, can_iface: str, force_compile: bool = False) -> None:
         """Start all CAN components."""
-        if self.is_running or self._busy:
-            raise RuntimeError("Already connected")
-        self._busy = True
-        self.last_error = None
+        async with self._lock:
+            if self.is_running:
+                raise RuntimeError("Already connected")
+            self.last_error = None
 
-        try:
-            prepare_runtime(can_iface=can_iface, force_compile=force_compile)
+            try:
+                prepare_runtime(can_iface=can_iface, force_compile=force_compile)
 
-            from scanner_node import ScannerNode
-            from telemetry_manager import TelemetryManager
-            from allocator import AllocatorManager
-            from event_logger import EventLogger
+                from scanner_node import ScannerNode
+                from telemetry_manager import TelemetryManager
+                from allocator import AllocatorManager
+                from event_logger import EventLogger
 
-            logger.info("Initializing allocator manager...")
-            self.allocator_manager = AllocatorManager(check_interval=10.0, check_timeout=3.0)
-            await self.allocator_manager.start()
+                logger.info("Initializing allocator manager...")
+                self.allocator_manager = AllocatorManager(check_interval=10.0, check_timeout=3.0)
+                await self.allocator_manager.start()
 
-            logger.info("Initializing ScannerNode...")
-            self.scanner = ScannerNode()
+                logger.info("Initializing ScannerNode...")
+                self.scanner = ScannerNode()
 
-            logger.info("Initializing TelemetryManager...")
-            self.telemetry = TelemetryManager(self.scanner)
-            await self.telemetry.start()
+                logger.info("Initializing TelemetryManager...")
+                self.telemetry = TelemetryManager(self.scanner)
+                await self.telemetry.start()
 
-            logger.info("Initializing EventLogger...")
-            self.event_logger = EventLogger(db_path="telemetry_events.db", max_events=100000)
-            await self.event_logger.start()
+                logger.info("Initializing EventLogger...")
+                self.event_logger = EventLogger(db_path="telemetry_events.db", max_events=100000)
+                await self.event_logger.start()
 
-            logger_queue = self.telemetry.subscribe(max_queue=100)
-            printer_queue = self.telemetry.subscribe(max_queue=100)
-            self._tasks = [
-                asyncio.create_task(_event_logger_loop(self.event_logger, logger_queue)),
-                asyncio.create_task(telemetry_printer(printer_queue)),
-                asyncio.create_task(_register_loop(self.scanner, self.registered_nodes, self)),
-            ]
+                logger_queue = self.telemetry.subscribe(max_queue=100)
+                self._tasks = [
+                    asyncio.create_task(_event_logger_loop(self.event_logger, logger_queue)),
+                    asyncio.create_task(_register_loop(self.scanner, self.registered_nodes, self)),
+                ]
 
-            logger.info("Initializing BusLoadMonitor...")
-            self.bus_load = BusLoadMonitor(can_iface)
-            await self.bus_load.start()
+                logger.info("Initializing BusLoadMonitor...")
+                self.bus_load = BusLoadMonitor(can_iface)
+                await self.bus_load.start()
 
-            self.can_interface = can_iface
-            logger.info("CAN session started on %s", can_iface)
-        except Exception:
-            self._busy = False
-            await self.disconnect()
-            raise
-        self._busy = False
+                self.can_interface = can_iface
+                logger.info("CAN session started on %s", can_iface)
+            except Exception:
+                try:
+                    await self._teardown()
+                except Exception as cleanup_err:
+                    logger.error("Cleanup error during failed connect: %s", cleanup_err)
+                raise
 
     async def disconnect(self) -> None:
         """Stop all CAN components (reverse order of connect)."""
-        if not self.is_running:
-            return
+        async with self._lock:
+            await self._teardown()
 
-        logger.info("Disconnecting CAN session...")
+    async def _teardown(self) -> None:
+        """Internal cleanup — caller must hold self._lock."""
+        logger.info("Tearing down CAN session...")
 
         for task in self._tasks:
             if not task.done():
@@ -254,7 +256,7 @@ class CANSession:
         """Schedule a disconnect due to a fatal CAN error (safe to call from background tasks)."""
         logger.error(f"CAN fatal error: {error_msg}")
         self.last_error = error_msg
-        asyncio.create_task(self._deferred_disconnect())
+        self._disconnect_task = asyncio.create_task(self._deferred_disconnect())
 
     async def _deferred_disconnect(self) -> None:
         """Disconnect in a separate task to avoid deadlock with background tasks."""
@@ -368,29 +370,6 @@ async def _event_logger_loop(event_logger, queue: asyncio.Queue) -> None:
     except asyncio.CancelledError:
         logger.debug("Event logger loop cancelled")
         raise
-
-
-async def telemetry_printer(queue: asyncio.Queue) -> None:
-    while True:
-        try:
-            event = await queue.get()
-
-            subject_id = event.get("subject_id", "?")
-            timestamp = event.get("timestamp", "?")
-            rate = event.get("rate", 0)
-            message_type = event.get("message_type", "?")
-            publisher_node_id = event.get("publisher_node_id", "?")
-
-            logger.debug(
-                f"[SUBJECT {subject_id}] {message_type} "
-                f"publisher_node={publisher_node_id} "
-                f"rate={rate}Hz timestamp={timestamp}"
-            )
-        except asyncio.CancelledError:
-            logger.info("Telemetry printer cancelled")
-            break
-        except Exception as e:
-            logger.error(f"Error processing telemetry event: {e}", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
