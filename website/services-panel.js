@@ -55,6 +55,37 @@ const renderServiceField = (field) => {
   </div>`;
 };
 
+const renderServiceHistory = (nodeId, serviceId) => {
+  const entries = state.serviceCallHistory.filter(
+    (h) => h.nodeId === nodeId && h.serviceId === serviceId
+  );
+  if (!entries.length) return '';
+  const rows = entries.map((h) => {
+    const time = new Date(h.timestamp).toLocaleTimeString();
+    if (h.status === 'done') {
+      return `<div class="svc-history-row svc-history-ok">
+        <span class="svc-history-time">${escapeHtml(time)}</span>
+        <span class="svc-status-badge svc-badge-ok">&#10003; ${h.latencyMs}ms</span>
+        <pre class="svc-history-body">${escapeHtml(h.response)}</pre>
+      </div>`;
+    }
+    if (h.status === 'timeout') {
+      return `<div class="svc-history-row svc-history-timeout">
+        <span class="svc-history-time">${escapeHtml(time)}</span>
+        <span class="svc-status-badge svc-badge-timeout">&#10007; timeout ${h.latencyMs}ms</span>
+      </div>`;
+    }
+    return `<div class="svc-history-row svc-history-error">
+      <span class="svc-history-time">${escapeHtml(time)}</span>
+      <span class="svc-status-badge svc-badge-error">&#10007; ${escapeHtml(h.status)}</span>
+    </div>`;
+  }).join('');
+  return `<details class="svc-history">
+    <summary class="svc-history-toggle">History (${entries.length})</summary>
+    <div class="svc-history-list">${rows}</div>
+  </details>`;
+};
+
 const renderServiceCard = (svc) => {
   const isCallable = svc.callable !== false;
   const isExpanded = isCallable && state.expandedServiceId === svc.service_id;
@@ -121,6 +152,7 @@ const renderServiceCard = (svc) => {
       </div>`;
     }
 
+    const historyHtml = renderServiceHistory(state.selectedNodeId, svc.service_id);
     formHtml = `<div class="svc-form">
       ${fieldsHtml}
       <div class="svc-actions">
@@ -129,6 +161,7 @@ const renderServiceCard = (svc) => {
         </button>
       </div>
       ${responseHtml}
+      ${historyHtml}
     </div>`;
   }
 
@@ -246,6 +279,11 @@ const sendServiceRequest = async (nodeId, serviceId) => {
     state.serviceCallState = { nodeId, serviceId, status: 'error', response: null, error: e.message || 'Request failed', latencyMs: null };
   }
 
+  if (state.serviceCallState && state.serviceCallState.status !== 'sending') {
+    state.serviceCallHistory.unshift({ ...state.serviceCallState, timestamp: Date.now() });
+    if (state.serviceCallHistory.length > 20) state.serviceCallHistory.length = 20;
+  }
+
   renderServicesTab();
   restoreFormState(saved);
 };
@@ -348,7 +386,7 @@ const renderServicesTab = async () => {
         state.expandedServiceId = null;
         const cards = services.map(renderServiceCard).join('');
         content.innerHTML = `
-          <div class="svc-stale-banner">
+          <div class="svc-stale-banner" role="alert">
             <span class="svc-stale-icon">⚠</span>
             Node ${nodeId} is offline — services are unavailable.
           </div>

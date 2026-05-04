@@ -1,5 +1,6 @@
 """Tests for WebSocketServer REST endpoints including CAN connect/disconnect."""
 
+import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from aiohttp import web
@@ -338,3 +339,233 @@ class TestCORS:
         resp = await client.options("/api")
         assert resp.status == 200
         assert "Access-Control-Allow-Methods" in resp.headers
+
+
+class TestGetServices:
+
+    @pytest.mark.asyncio
+    async def test_services_can_not_running(self, client, session):
+        session.is_running = False
+        resp = await client.get("/api/services/42")
+        assert resp.status == 503
+
+    @pytest.mark.asyncio
+    async def test_services_invalid_node_id(self, client, session):
+        session.is_running = True
+        resp = await client.get("/api/services/abc")
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_services_node_not_found(self, client, session):
+        session.is_running = True
+        telemetry = MagicMock()
+        telemetry.get_service_schema.return_value = None
+        session.telemetry = telemetry
+        resp = await client.get("/api/services/99")
+        assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_services_success(self, client, session):
+        session.is_running = True
+        telemetry = MagicMock()
+        telemetry.get_service_schema.return_value = {
+            "node_id": 42,
+            "services": [{"service_id": 100, "full_type": "uavcan.node.GetInfo"}],
+        }
+        session.telemetry = telemetry
+        resp = await client.get("/api/services/42")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["node_id"] == 42
+        assert len(data["services"]) == 1
+
+
+class TestGetClients:
+
+    @pytest.mark.asyncio
+    async def test_clients_can_not_running(self, client, session):
+        session.is_running = False
+        resp = await client.get("/api/clients/42")
+        assert resp.status == 503
+
+    @pytest.mark.asyncio
+    async def test_clients_invalid_node_id(self, client, session):
+        session.is_running = True
+        resp = await client.get("/api/clients/abc")
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_clients_node_not_found(self, client, session):
+        session.is_running = True
+        telemetry = MagicMock()
+        telemetry.get_client_info.return_value = None
+        session.telemetry = telemetry
+        resp = await client.get("/api/clients/99")
+        assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_clients_success(self, client, session):
+        session.is_running = True
+        telemetry = MagicMock()
+        telemetry.get_client_info.return_value = {
+            "node_id": 42,
+            "clients": [{"service_id": 200, "full_type": "uavcan.node.GetInfo", "server_nodes": [10]}],
+        }
+        session.telemetry = telemetry
+        resp = await client.get("/api/clients/42")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["node_id"] == 42
+        assert len(data["clients"]) == 1
+
+
+class TestGetRegisters:
+
+    @pytest.mark.asyncio
+    async def test_registers_can_not_running(self, client, session):
+        session.is_running = False
+        resp = await client.get("/api/registers/42")
+        assert resp.status == 503
+
+    @pytest.mark.asyncio
+    async def test_registers_invalid_node_id(self, client, session):
+        session.is_running = True
+        resp = await client.get("/api/registers/abc")
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_registers_success(self, client, session):
+        session.is_running = True
+        scanner = MagicMock()
+        scanner.get_registers = AsyncMock(return_value=[
+            {"register_name": "uavcan.node.id", "value": "42", "type": "natural16", "access": "read-write"},
+        ])
+        session.scanner = scanner
+        resp = await client.get("/api/registers/42")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["node_id"] == 42
+        assert len(data["registers"]) == 1
+        assert data["registers"][0]["register_name"] == "uavcan.node.id"
+
+    @pytest.mark.asyncio
+    async def test_registers_scanner_error(self, client, session):
+        session.is_running = True
+        scanner = MagicMock()
+        scanner.get_registers = AsyncMock(side_effect=ValueError("Node unreachable"))
+        session.scanner = scanner
+        resp = await client.get("/api/registers/42")
+        assert resp.status == 500
+
+
+class TestSetRegister:
+
+    @pytest.mark.asyncio
+    async def test_set_register_can_not_running(self, client, session):
+        session.is_running = False
+        resp = await client.post("/api/registers/42/set", json={"name": "x", "value": "1", "type": "natural16"})
+        assert resp.status == 503
+
+    @pytest.mark.asyncio
+    async def test_set_register_missing_fields(self, client, session):
+        session.is_running = True
+        resp = await client.post("/api/registers/42/set", json={"name": "x"})
+        assert resp.status == 400
+        data = await resp.json()
+        assert "missing" in data["error"].lower() or "required" in data["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_set_register_invalid_json(self, client, session):
+        session.is_running = True
+        resp = await client.post("/api/registers/42/set", data=b"not json", headers={"Content-Type": "application/json"})
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_set_register_success(self, client, session):
+        session.is_running = True
+        scanner = MagicMock()
+        scanner.set_register = AsyncMock(return_value=[42])
+        session.scanner = scanner
+        resp = await client.post("/api/registers/42/set", json={"name": "uavcan.node.id", "value": "42", "type": "natural16"})
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["status"] == "ok"
+        assert data["value"] == "42"
+
+    @pytest.mark.asyncio
+    async def test_set_register_timeout(self, client, session):
+        session.is_running = True
+        scanner = MagicMock()
+        scanner.set_register = AsyncMock(return_value=None)
+        session.scanner = scanner
+        resp = await client.post("/api/registers/42/set", json={"name": "x", "value": "1", "type": "natural16"})
+        assert resp.status == 504
+
+    @pytest.mark.asyncio
+    async def test_set_register_value_error(self, client, session):
+        session.is_running = True
+        scanner = MagicMock()
+        scanner.set_register = AsyncMock(side_effect=ValueError("Unsupported type"))
+        session.scanner = scanner
+        resp = await client.post("/api/registers/42/set", json={"name": "x", "value": "1", "type": "bogus"})
+        assert resp.status == 400
+
+
+class TestServiceCall:
+
+    @pytest.mark.asyncio
+    async def test_call_can_not_running(self, client, session):
+        session.is_running = False
+        resp = await client.post("/api/services/42/100/call", json={"attributes": {}})
+        assert resp.status == 503
+
+    @pytest.mark.asyncio
+    async def test_call_invalid_ids(self, client, session):
+        session.is_running = True
+        resp = await client.post("/api/services/abc/xyz/call", json={"attributes": {}})
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_call_service_not_found(self, client, session):
+        session.is_running = True
+        scanner = MagicMock()
+        scanner.service_metadata = {}
+        session.scanner = scanner
+        resp = await client.post("/api/services/42/999/call", json={"attributes": {}})
+        assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_call_success(self, client, session):
+        session.is_running = True
+        scanner = MagicMock()
+        scanner.service_metadata = {
+            (42, 100): {"namespace": "uavcan.node", "service_name": "GetInfo_1_0"},
+        }
+        scanner.make_service_call = AsyncMock(return_value="protocol_version: 1.0")
+        session.scanner = scanner
+        resp = await client.post("/api/services/42/100/call", json={"attributes": {}})
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["status"] == "ok"
+        assert "protocol_version" in data["response"]
+        assert data["latency_ms"] >= 0
+
+    @pytest.mark.asyncio
+    async def test_call_timeout(self, client, session):
+        session.is_running = True
+        scanner = MagicMock()
+        scanner.service_metadata = {
+            (42, 100): {"namespace": "uavcan.node", "service_name": "GetInfo_1_0"},
+        }
+        scanner.make_service_call = AsyncMock(side_effect=asyncio.TimeoutError())
+        session.scanner = scanner
+        resp = await client.post("/api/services/42/100/call", json={"attributes": {}})
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["status"] == "timeout"
+
+    @pytest.mark.asyncio
+    async def test_call_invalid_json(self, client, session):
+        session.is_running = True
+        resp = await client.post("/api/services/42/100/call", data=b"not json", headers={"Content-Type": "application/json"})
+        assert resp.status == 400

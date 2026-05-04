@@ -21,7 +21,8 @@ const renderRegisterRow = (reg) => {
       ${isEditable
         ? `<input class="reg-value-input" id="${valueId}" value="${escapeHtml(reg.value)}"
              data-reg-name="${escapeHtml(reg.register_name)}" data-reg-type="${escapeHtml(reg.type)}"
-             data-original="${escapeHtml(reg.value)}" />`
+             data-original="${escapeHtml(reg.value)}" aria-describedby="${valueId}-err" />
+           <span class="reg-error-hint" id="${valueId}-err" role="alert"></span>`
         : `<span class="reg-value-ro">${escapeHtml(reg.value)}</span>`}
     </div>
     ${isEditable
@@ -48,6 +49,20 @@ const showRegStatus = (panel, message, type = 'info') => {
 
 const VALID_BOOL = new Set(['true', 'false', '1', '0']);
 
+const REG_TYPE_RANGES = {
+  natural8:  [0, 255],
+  natural16: [0, 65535],
+  natural32: [0, 4294967295],
+  natural64: [0, Number.MAX_SAFE_INTEGER],
+  integer8:  [-128, 127],
+  integer16: [-32768, 32767],
+  integer32: [-2147483648, 2147483647],
+  integer64: [Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER],
+  real16:    [-65504, 65504],
+  real32:    [-3.4028235e+38, 3.4028235e+38],
+  real64:    [-Number.MAX_VALUE, Number.MAX_VALUE],
+};
+
 const validateRegValue = (value, type) => {
   if (type === 'string') return null;
   const raw = value.trim();
@@ -70,21 +85,34 @@ const validateRegValue = (value, type) => {
   const isNatural = type.startsWith('natural');
   const isInteger = type.startsWith('integer');
   const isReal = type.startsWith('real');
+  const range = REG_TYPE_RANGES[type];
   if (isNatural) {
     for (const p of parts) {
       if (!/^\d+$/.test(p)) return `"${p}" — natural must be a non-negative integer`;
+      if (range) {
+        const n = Number(p);
+        if (n < range[0] || n > range[1]) return `"${p}" out of range for ${type} (${range[0]}–${range[1]})`;
+      }
     }
     return null;
   }
   if (isInteger) {
     for (const p of parts) {
       if (!/^-?\d+$/.test(p)) return `Invalid integer: "${p}"`;
+      if (range) {
+        const n = Number(p);
+        if (n < range[0] || n > range[1]) return `"${p}" out of range for ${type} (${range[0]}–${range[1]})`;
+      }
     }
     return null;
   }
   if (isReal) {
     for (const p of parts) {
       if (isNaN(Number(p))) return `Invalid number: "${p}"`;
+      if (range) {
+        const n = Number(p);
+        if (n < range[0] || n > range[1]) return `"${p}" out of range for ${type}`;
+      }
     }
     return null;
   }
@@ -100,7 +128,10 @@ const bindRegisterEvents = (container, nodeId) => {
       const changed = input.value !== input.dataset.original;
       const error = changed ? validateRegValue(input.value, input.dataset.regType) : null;
       input.classList.toggle('reg-input-invalid', !!error);
+      input.setAttribute('aria-invalid', String(!!error));
       input.title = error || '';
+      const hint = container.querySelector(`#${CSS.escape(input.id)}-err`);
+      if (hint) hint.textContent = error || '';
       if (saveBtn) saveBtn.disabled = !changed || !!error;
     });
     input.addEventListener('keydown', (e) => {
@@ -175,7 +206,7 @@ const renderRegistersTab = async (force) => {
       if (panel) {
         panel.classList.add('svc-panel-stale');
         panel.insertAdjacentHTML('afterbegin',
-          `<div class="svc-stale-banner"><span class="svc-stale-icon">⚠</span>Node ${nodeId} is offline — register data may be stale.</div>`);
+          `<div class="svc-stale-banner" role="alert"><span class="svc-stale-icon">⚠</span>Node ${nodeId} is offline — register data may be stale.</div>`);
       }
       return;
     }
@@ -204,14 +235,24 @@ const renderRegistersTab = async (force) => {
   content.innerHTML = svcStateMsg(
     '<span class="svc-spinner"></span>',
     `Fetching registers from node ${nodeId}…`,
-    'Reading all registers. This may take a moment.'
+    '<span class="reg-progress-text">Reading all registers. This may take a moment.</span>'
   ) + svcSkeleton();
+
+  const progressEl = content.querySelector('.reg-progress-text');
+  const t0 = Date.now();
+  const progressTimer = setInterval(() => {
+    if (!progressEl || !progressEl.isConnected) { clearInterval(progressTimer); return; }
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(0);
+    progressEl.textContent = `Reading registers… ${elapsed}s elapsed`;
+  }, 1000);
 
   try {
     const data = await requestJson(`/api/registers/${nodeId}`);
+    clearInterval(progressTimer);
     if (state.selectedNodeId !== nodeId || state.selectedDetailTab !== 'registers') return;
     REG_CACHE.set(nodeId, data.registers || []);
   } catch {
+    clearInterval(progressTimer);
     if (state.selectedNodeId !== nodeId || state.selectedDetailTab !== 'registers') return;
     REG_CACHE.set(nodeId, 'error');
     renderRegistersTab();

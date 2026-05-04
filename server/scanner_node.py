@@ -996,7 +996,31 @@ class ScannerNode:
                 else:
                     raise ValueError(f"Type mismatch: expected '{current_field_name}', got '{reg_type}'")
 
-            # Step 3: Convert the input value to the appropriate UAVCAN type
+            # Step 3: Range-check numeric values before UAVCAN conversion
+            _int_ranges = {
+                'natural8': (0, 255), 'natural16': (0, 65535),
+                'natural32': (0, 4294967295), 'natural64': (0, 2**64 - 1),
+                'integer8': (-128, 127), 'integer16': (-32768, 32767),
+                'integer32': (-2147483648, 2147483647), 'integer64': (-(2**63), 2**63 - 1),
+            }
+            _real_ranges = {
+                'real16': (-65504, 65504),
+                'real32': (-3.4028235e+38, 3.4028235e+38),
+            }
+            if reg_type in _int_ranges:
+                lo, hi = _int_ranges[reg_type]
+                for v in self._parse_array_value(value):
+                    n = int(v)
+                    if n < lo or n > hi:
+                        raise ValueError(f"Value {n} out of range for {reg_type} ({lo}–{hi})")
+            elif reg_type in _real_ranges:
+                lo, hi = _real_ranges[reg_type]
+                for v in self._parse_array_value(value):
+                    n = float(v)
+                    if n < lo or n > hi:
+                        raise ValueError(f"Value {n} out of range for {reg_type}")
+
+            # Step 4: Convert the input value to the appropriate UAVCAN type
             new_value = uavcan.register.Value_1_0()
             try:
                 match reg_type:
