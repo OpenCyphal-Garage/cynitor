@@ -506,7 +506,11 @@ const renderSelectedNodeContent = () => {
 
   if (state.selectedDetailTab === 'servers') {
     stopPlotAnim();
-    renderServicesTab();
+    const existing = content.querySelector('.svc-panel, .svc-state, .svc-panel-skeleton');
+    if (!existing || content.dataset.svcNodeId !== String(state.selectedNodeId)) {
+      content.dataset.svcNodeId = String(state.selectedNodeId);
+      renderServicesTab();
+    }
     return;
   }
 
