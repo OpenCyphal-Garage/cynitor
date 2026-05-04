@@ -247,6 +247,8 @@ const disconnectAll = ({ persist = true } = {}) => {
   state.latestBySubject.clear();
   state.latestByNode.clear();
   state.subjectHistory.clear();
+  state.serviceSchemas.clear();
+  state.serviceCallState = null;
   state.eventCount = 0;
   stopStatusPolling();
   stopCanStartupDelay();
@@ -258,6 +260,7 @@ const disconnectAll = ({ persist = true } = {}) => {
   updateDashboardConnectButton();
   updateCanConnectButton();
   renderNodesTable();
+  renderSelectedNodeContent();
   updateSemaphores();
   if (persist) saveSettings();
 };
@@ -430,6 +433,8 @@ const connectDashboard = async () => {
     startInterfacePolling();
   }
 
+  renderNodesTable();
+  renderSelectedNodeContent();
   saveSettings();
 };
 
@@ -468,17 +473,23 @@ const connectCan = async () => {
   stopInterfacePolling();
   state.canConnecting = true;
   updateCanConnectButton();
+  renderNodesTable();
+  renderSelectedNodeContent();
 
   const result = await selectInterface();
   state.canConnecting = false;
   if (!result) {
     updateCanConnectButton();
+    renderNodesTable();
+    renderSelectedNodeContent();
     startInterfacePolling();
     return;
   }
 
   state.canConnected = true;
   updateCanConnectButton();
+  renderNodesTable();
+  renderSelectedNodeContent();
   saveSettings();
 
   schedulePostCanStartup(5000);
