@@ -97,6 +97,22 @@ const restoreRevivedNodes = (allNodes) => {
   }
 };
 
+const tablePlaceholder = () => {
+  if (!state.dashboardConnected) {
+    if (state.pendingReconnect) {
+      return svcStateMsg('<span class="svc-spinner"></span>', 'Reconnecting to backend…', 'Restoring previous session.');
+    }
+    return svcStateMsg('⏻', 'Not connected to backend', 'Connect to the backend server to discover CAN nodes.');
+  }
+  if (state.canState === CONN.CONNECTING) {
+    return svcStateMsg('<span class="svc-spinner"></span>', 'Connecting to CAN interface…', 'Establishing CAN bus connection. Nodes will appear shortly.');
+  }
+  if (state.canState !== CONN.CONNECTED) {
+    return svcStateMsg('⛓', 'CAN bus not connected', 'Connect a CAN interface to start discovering nodes.');
+  }
+  return svcStateMsg('<span class="svc-spinner"></span>', 'Waiting for nodes…', 'Listening on the CAN bus. Nodes will appear as they send heartbeats.');
+};
+
 const buildTableData = () => {
   const payloadNodes = state.latestNodesPayload?.nodes;
   const allNodes = payloadNodes && typeof payloadNodes === 'object' ? Object.values(payloadNodes) : [];
@@ -162,7 +178,7 @@ const initNodesTable = () => {
     layout: 'fitColumns',
     resizableColumns: true,
     selectable: 1,
-    placeholder: 'Not connected',
+    placeholder: tablePlaceholder(),
     initialSort,
     columns: [
       { title: '', field: '_fav', formatter: favFormatter, width: 36, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-fav', cellClick: (_e, cell) => { toggleFavourite(cell.getRow().getData().id); } },
@@ -224,8 +240,10 @@ const renderNodesTable = () => {
 
   if (!data.length) {
     nodesTabulator.clearData();
-    nodesTabulator.options.placeholder = state.dashboardConnected ? 'No nodes discovered yet' : 'Not connected';
-    nodesTabulator.redraw(true);
+    const ph = document.querySelector('#nodesTable .tabulator-placeholder');
+    if (ph) {
+      ph.innerHTML = tablePlaceholder();
+    }
     return;
   }
 
