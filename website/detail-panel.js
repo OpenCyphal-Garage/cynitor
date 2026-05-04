@@ -394,18 +394,26 @@ const bindSplitHandle = (splitEl) => {
   });
 };
 
-const buildServicesDetailItems = (services) => {
-  if (!Array.isArray(services) || !services.length) {
-    return ['No services advertised'];
-  }
-  return services.map((serviceId) => `Service ${serviceId}`);
+const KNOWN_SERVICE_NAMES = {
+  384: 'uavcan.register.Access_1_0',
+  385: 'uavcan.register.List_1_0',
+  430: 'uavcan.node.GetInfo_1_0',
 };
 
-const buildClientsDetailItems = (clients) => {
+const renderClientsTab = (clients) => {
   if (!Array.isArray(clients) || !clients.length) {
-    return ['No clients advertised'];
+    return svcStateMsg('○', 'No clients advertised', 'This node does not use any service clients.');
   }
-  return clients.map((clientId) => `Client ${clientId}`);
+  const cards = clients.map((clientId) => {
+    const typeName = KNOWN_SERVICE_NAMES[clientId] || '';
+    return `<div class="svc-card">
+      <div class="svc-card-header svc-card-header-static">
+        <span class="svc-service-id">${clientId}</span>
+        <span class="svc-service-type" title="${escapeHtml(typeName)}">${escapeHtml(typeName || `Client ${clientId}`)}</span>
+      </div>
+    </div>`;
+  }).join('');
+  return `<section class="svc-panel">${cards}</section>`;
 };
 
 const renderListTab = (title, items) => `
@@ -450,7 +458,19 @@ const renderSelectedNodeContent = () => {
 
   if (!node) {
     stopPlotAnim();
-    content.innerHTML = '<div class="detail-empty">Select a node to inspect details.</div>';
+    if (!state.dashboardConnected) {
+      content.innerHTML = state.pendingReconnect
+        ? svcStateMsg('<span class="svc-spinner"></span>', 'Reconnecting to backend…', 'Restoring previous session.')
+        : svcStateMsg('⏻', 'Not connected to backend', 'Connect to the backend server to inspect node details.');
+    } else if (state.canState !== CONN.CONNECTED) {
+      content.innerHTML = state.canState === CONN.CONNECTING
+        ? svcStateMsg('<span class="svc-spinner"></span>', 'Connecting to CAN interface…', 'Establishing CAN bus connection.')
+        : svcStateMsg('⛓', 'CAN bus not connected', 'Connect a CAN interface to discover online nodes.');
+    } else if (state.selectedNodeId == null) {
+      content.innerHTML = svcStateMsg('◎', 'Select a node to inspect details', 'Choose a node from the table above.');
+    } else {
+      content.innerHTML = svcStateMsg('⚠', `Node ${state.selectedNodeId} is offline`, 'This node disappeared from the CAN bus.');
+    }
     return;
   }
 
@@ -486,13 +506,13 @@ const renderSelectedNodeContent = () => {
 
   if (state.selectedDetailTab === 'servers') {
     stopPlotAnim();
-    content.innerHTML = renderListTab('Servers', buildServicesDetailItems(node.servers || []));
+    renderServicesTab();
     return;
   }
 
   if (state.selectedDetailTab === 'clients') {
     stopPlotAnim();
-    content.innerHTML = renderListTab('Clients', buildClientsDetailItems(node.clients || []));
+    content.innerHTML = renderClientsTab(node.clients || []);
     return;
   }
 
