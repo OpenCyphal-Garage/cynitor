@@ -121,7 +121,6 @@ class TelemetryManager:
         nodes_info = {}
         
         for node_id, node in self.scanner.all_nodes.items():
-            node.check_disappeared()
             if node.has_appeared:
                 info_response = getattr(node, "info_response", None)
 
@@ -205,16 +204,15 @@ class TelemetryManager:
 
     async def _telemetry_loop(self) -> None:
         """Main loop that consumes events from scanner and broadcasts them."""
-        while self._running:
-            try:
+        try:
+            while True:
                 event = await self.scanner.message_queue.get()
                 self._update_state(event)
                 await self._broadcast(event)
-            except asyncio.CancelledError:
-                logger.info("Telemetry loop cancelled")
-                break
-            except Exception as e:
-                logger.error(f"Error in telemetry loop: {e}", exc_info=True)
+        except asyncio.CancelledError:
+            logger.info("Telemetry loop cancelled")
+        except Exception as e:
+            logger.error(f"Error in telemetry loop: {e}", exc_info=True)
 
     # ------------------------------------------------------------------
     # STATE MANAGEMENT
@@ -265,11 +263,7 @@ class TelemetryManager:
             try:
                 if queue.full():
                     queue.get_nowait()
-                await queue.put(event)
-            except asyncio.QueueFull:
-                logger.warning("Queue full, dropping oldest event")
-                queue.get_nowait()
-                await queue.put(event)
+                queue.put_nowait(event)
             except Exception as e:
                 logger.error(f"Error broadcasting to queue: {e}")
                 dead_subscribers.append(queue)
