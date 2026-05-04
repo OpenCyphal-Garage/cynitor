@@ -25,7 +25,7 @@ const renderSubjectTable = (title, subjects) => {
       ? `<div class="card-metrics">${s.attributes.map((a) => renderMetric(a, s.subjectId)).join('')}</div>`
       : '<div class="card-metrics"><span class="metrics-empty">no telemetry data</span></div>';
 
-    return `<div class="subject-card" data-subject="${s.subjectId}">
+    return `<div class="subject-card" data-subject="${s.subjectId}" tabindex="0" role="button">
       <div class="card-header">
         <span class="card-subject-id">${escapeHtml(String(s.subjectId))}</span>
         <span class="card-type" title="${escapeHtml(s.messageType || '')}">${escapeHtml(s.messageType || 'awaiting data')}</span>

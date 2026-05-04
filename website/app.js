@@ -134,15 +134,27 @@ const bind = () => {
   });
   el('apiBase').addEventListener('change', saveSettings);
 
-  el('selectedNodeContent').addEventListener('click', (e) => {
-    const card = e.target.closest('.subject-card');
-    if (!card) return;
+  const selectSubjectCard = (card) => {
     const sid = Number(card.dataset.subject);
     state.selectedPlotSubject = sid;
     el('selectedNodeContent').querySelectorAll('.subject-card').forEach((c) => {
       c.classList.toggle('selected', Number(c.dataset.subject) === sid);
     });
     startPlotAnim();
+  };
+
+  el('selectedNodeContent').addEventListener('click', (e) => {
+    const card = e.target.closest('.subject-card');
+    if (!card) return;
+    selectSubjectCard(card);
+  });
+
+  el('selectedNodeContent').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const card = e.target.closest('.subject-card');
+    if (!card) return;
+    e.preventDefault();
+    selectSubjectCard(card);
   });
 
   bindTabs();
