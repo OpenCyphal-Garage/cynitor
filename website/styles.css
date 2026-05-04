@@ -1213,6 +1213,21 @@ button:focus-visible,
 }
 
 /* ── Responsive ── */
+@media (max-width: 80rem) {
+  .sidebar {
+    width: 13rem;
+    min-width: 13rem;
+  }
+
+  .sidebar-collapse-btn {
+    left: 11.75rem;
+  }
+
+  .sidebar.collapsed ~ .sidebar-collapse-btn {
+    left: -0.5rem;
+  }
+}
+
 @media (max-width: 60rem) {
   .app-shell {
     flex-direction: column;
