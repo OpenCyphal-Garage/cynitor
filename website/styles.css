@@ -1215,12 +1215,9 @@ button:focus-visible,
 /* ── Services panel ── */
 
 .svc-panel {
-  padding: 0.75rem;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  overflow-y: auto;
-  height: 100%;
 }
 
 .svc-loading {
@@ -1304,6 +1301,8 @@ button:focus-visible,
   display: flex;
   flex-direction: column;
   gap: 0.625rem;
+  max-height: 24rem;
+  overflow-y: auto;
 }
 
 .svc-no-fields {
