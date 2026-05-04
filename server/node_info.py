@@ -6,6 +6,7 @@ from typing import Dict, List, Deque, Optional
 import datetime
 import collections
 import logging
+import time
 import numpy
 import numpy.typing
 
@@ -72,7 +73,7 @@ class NodeInfo:
     has_servers: bool
     server_ServiceIDs: List[int]
 
-    max_offline_time_microseconds: int = 1100000  # 1.1 seconds
+    OFFLINE_THRESHOLD_S: float = 1.1
     _online_time: Optional[NodeTime] = None
     _offline_time: Optional[NodeTime] = None
     publishers_info: Dict[int, PublisherInfo] = field(default_factory=dict)
@@ -98,20 +99,23 @@ class NodeInfo:
         self.server_ServiceIDs = []
         self.publishers_info = {}
         self.last_info_time: Optional[datetime.datetime] = None
+        self._last_seen_mono: float = 0.0
 
     def mark_appeared(self, first_seen: datetime.datetime):
         self.has_appeared = True
         self.first_seen = first_seen
         self.last_seen.append(first_seen)
-        self.last_seen.append(first_seen)  # Initialize both entries of last_seen
+        self.last_seen.append(first_seen)
+        self._last_seen_mono = time.monotonic()
         self.has_disappeared = False
 
     def mark_seen(self, last_seen: datetime.datetime):
         self.last_seen.append(last_seen)
+        self._last_seen_mono = time.monotonic()
         if self.has_disappeared:
             logging.info(f"Node {self.node_id} has reappeared.")
             self.first_seen = last_seen
-            self.last_seen.append(last_seen)  # Reset the timer
+            self.last_seen.append(last_seen)
         self.has_disappeared = False
 
     def set_info(self, get_info_response: uavcan.node.GetInfo_1_0.Response, transfer_from: pycyphal.transport.TransferFrom) -> None:
@@ -123,8 +127,7 @@ class NodeInfo:
     def check_disappeared(self) -> bool:
         if not self.has_appeared:
             return False
-        delta_time = datetime.datetime.now() - self.last_seen[1]
-        if delta_time.total_seconds() >= self.max_offline_time_microseconds / 1_000_000:
+        if time.monotonic() - self._last_seen_mono >= self.OFFLINE_THRESHOLD_S:
             self.has_disappeared = True
             return True
         return False
@@ -213,8 +216,10 @@ class NodeInfo:
             self.unique_id = self.info_response.unique_id
 
     def _register_ids(self) -> None:
-        if self.has_registered_ports:
-            return
+        self.publisher_SubjectIDs.clear()
+        self.subscriber_SubjectIDs.clear()
+        self.client_ServiceIDs.clear()
+        self.server_ServiceIDs.clear()
         self._register_publisher_ids()
         self._register_subscriber_ids()
         self._register_client_ids()
