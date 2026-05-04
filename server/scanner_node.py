@@ -265,24 +265,22 @@ class ScannerNode:
             dsdl_srv_messages (Dict[int, str]): Dictionary mapping service IDs to service type names.
         """
         service_info_list = {}
-        
+
         for service_id, service_type in dsdl_srv_messages.items():
+            last_dot_index = service_type.rfind('.')
+            if last_dot_index == -1:
+                logging.error(f"Invalid service type format for service_id {service_id}: {service_type}")
+                continue
+
+            namespace = service_type[:last_dot_index]
+            service_name = service_type[last_dot_index + 1:]
+            client_key = (node_id, service_id)
+
             try:
-                # Break service name into namespace and service type
-                last_dot_index = service_type.rfind('.')
-                if last_dot_index == -1:
-                    logging.error(f"Invalid service type format for service_id {service_id}: {service_type}")
-                    continue
-
-                namespace = service_type[:last_dot_index]
-                service_name = service_type[last_dot_index + 1:]
-
                 # Import the service module and class
                 module = importlib.import_module(namespace)
                 service_class = getattr(module, service_name)
 
-                client_key = (node_id, service_id)
-                
                 # Only create if not already cached
                 if client_key not in self.service_clients:
                     client = self._node.make_client(service_class, node_id, service_id)
@@ -296,7 +294,7 @@ class ScannerNode:
 
                 self.service_metadata[client_key] = {
                     "namespace": namespace,
-                    "service_name": service_name
+                    "service_name": service_name,
                 }
 
                 if service_name in self.services:
@@ -315,7 +313,7 @@ class ScannerNode:
                 "node_id": node_id,
                 "attributes": {}
                 }
-                
+
 
                 for attribute in service_class.Request._MODEL_.attributes:
                     attr_name = attribute.name
@@ -324,6 +322,12 @@ class ScannerNode:
 
             except Exception as e:
                 logging.error(f"Failed to create client for service {service_type} (ID: {service_id}) on node {node_id}: {e}")
+                if client_key not in self.service_metadata:
+                    self.service_metadata[client_key] = {
+                        "namespace": namespace,
+                        "service_name": service_name,
+                        "unavailable": True,
+                    }
 
         return service_info_list
     
@@ -535,6 +539,86 @@ class ScannerNode:
         except Exception as e:
             logging.error(f"Error making service call for service {service_id} on node {node_id}: {str(e)}")
             raise
+
+    def get_service_schema(self, node_id: int) -> list[dict[str, Any]]:
+        """Return structured schema for all services on a node."""
+        node = self.all_nodes.get(node_id)
+        if not node or not node.has_appeared:
+            return []
+
+        services = []
+        for sid in node.server_ServiceIDs:
+            sid_int = int(sid)
+            meta = self.service_metadata.get((node_id, sid_int))
+            if not meta:
+                services.append({
+                    "service_id": sid_int,
+                    "name": None,
+                    "namespace": None,
+                    "full_type": None,
+                    "callable": False,
+                    "request_fields": None,
+                })
+                continue
+
+            namespace = meta.get("namespace")
+            service_name = meta.get("service_name")
+            full_type = f"{namespace}.{service_name}" if namespace and service_name else None
+            is_unavailable = meta.get("unavailable", False)
+
+            if is_unavailable:
+                services.append({
+                    "service_id": sid_int,
+                    "name": service_name,
+                    "namespace": namespace,
+                    "full_type": full_type,
+                    "callable": False,
+                    "request_fields": None,
+                })
+                continue
+
+            fields = []
+            try:
+                module = importlib.import_module(namespace)
+                service_class = getattr(module, service_name)
+                for attr in service_class.Request._MODEL_.attributes:
+                    fields.append(self._describe_field(attr))
+            except Exception as e:
+                logging.warning(f"Cannot introspect request fields for {full_type}: {e}")
+
+            services.append({
+                "service_id": sid_int,
+                "name": service_name,
+                "namespace": namespace,
+                "full_type": full_type,
+                "callable": True,
+                "request_fields": fields,
+            })
+
+        return services
+
+    def _describe_field(self, attr) -> dict[str, Any]:
+        """Build a JSON-safe field descriptor from a pydsdl attribute."""
+        type_str = str(attr.data_type)
+        is_composite = isinstance(attr.data_type, CompositeType)
+        desc = {
+            "name": attr.name,
+            "type": type_str,
+            "kind": "composite" if is_composite else "primitive",
+        }
+        if is_composite:
+            try:
+                sub_fields = []
+                for sub_attr in attr.data_type.attributes:
+                    sub_fields.append({
+                        "name": sub_attr.name,
+                        "type": str(sub_attr.data_type),
+                        "kind": "composite" if isinstance(sub_attr.data_type, CompositeType) else "primitive",
+                    })
+                desc["fields"] = sub_fields
+            except Exception:
+                desc["fields"] = []
+        return desc
 
     def _find_non_none_field(self, union_value: uavcan.register.Value_1_0) -> tuple[str | None, Any | None]:
         """

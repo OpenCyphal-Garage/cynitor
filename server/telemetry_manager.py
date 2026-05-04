@@ -156,6 +156,13 @@ class TelemetryManager:
             "nodes": nodes_info
         }
 
+    def get_service_schema(self, node_id: int) -> Optional[dict[str, Any]]:
+        """Return service metadata and request field schema for a node."""
+        services = self.scanner.get_service_schema(node_id)
+        if not services and not self.scanner.all_nodes.get(node_id, None):
+            return None
+        return {"node_id": node_id, "services": services}
+
     @staticmethod
     def _to_builtin_int(value: Any) -> Optional[int]:
         """Convert NumPy/PyCyphal integer-like values into plain Python ints."""

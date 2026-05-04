@@ -321,6 +321,66 @@ Response:
 }
 ```
 
+**Get service schema for a node (types, request fields):**
+```bash
+curl http://localhost:8080/api/services/37
+```
+
+Response:
+```json
+{
+    "node_id": 37,
+    "services": [
+        {
+            "service_id": 430,
+            "name": "GetInfo_1_0",
+            "namespace": "uavcan.node",
+            "full_type": "uavcan.node.GetInfo_1_0",
+            "request_fields": []
+        },
+        {
+            "service_id": 384,
+            "name": "Access_1_0",
+            "namespace": "uavcan.register",
+            "full_type": "uavcan.register.Access_1_0",
+            "request_fields": [
+                {"name": "name", "type": "uavcan.register.Name_1_0", "kind": "composite", "fields": [...]},
+                {"name": "value", "type": "uavcan.register.Value_1_0", "kind": "composite", "fields": [...]}
+            ]
+        }
+    ]
+}
+```
+
+Returns `404` if the node is not found, `503` if CAN is not connected.
+
+**Invoke a service on a node:**
+```bash
+curl -X POST http://localhost:8080/api/services/37/430/call \
+  -H 'Content-Type: application/json' \
+  -d '{"attributes": {}}'
+```
+
+Response (success):
+```json
+{
+    "status": "ok",
+    "latency_ms": 23,
+    "response": "GetInfo_1_0.Response(...)"
+}
+```
+
+Response (timeout):
+```json
+{
+    "status": "timeout",
+    "latency_ms": 5000,
+    "error": "Service 430 on node 37 timed out"
+}
+```
+
+Returns `400` for invalid request body or attribute validation errors, `404` if the service is not found on the node, `503` if CAN is not connected.
+
 ### Event Logger (SQLite)
 
 Events are automatically logged to `telemetry_events.db` with fields:

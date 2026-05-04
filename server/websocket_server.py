@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import time
 from typing import Optional, Set, Any
 from aiohttp import web, WSCloseCode
 
@@ -70,6 +71,8 @@ class WebSocketServer:
         self.app.router.add_get('/api/latest/node/{node_id}', self._get_latest_node)
         self.app.router.add_get('/api/logs', self._get_logs)
         self.app.router.add_get('/api/health', self._health_check)
+        self.app.router.add_get('/api/services/{node_id}', self._get_services)
+        self.app.router.add_post('/api/services/{node_id}/{service_id}/call', self._call_service)
         self.app.router.add_post('/api/can/connect', self._can_connect)
         self.app.router.add_post('/api/can/disconnect', self._can_disconnect)
 
@@ -153,6 +156,81 @@ class WebSocketServer:
             "status": "idle",
             "available_interfaces": available,
         })
+
+    # ------------------------------------------------------------------
+    # Service endpoints
+    # ------------------------------------------------------------------
+
+    async def _get_services(self, request: web.Request) -> web.Response:
+        """Return service schema metadata for a node."""
+        try:
+            node_id = int(request.match_info['node_id'])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid node_id"}, status=400)
+
+        if not self.session.is_running:
+            return web.json_response({"error": "CAN bus not connected"}, status=503)
+
+        schema = self.session.telemetry.get_service_schema(node_id)
+        if schema is None:
+            return web.json_response({"error": f"Node {node_id} not found"}, status=404)
+        return web.json_response(schema)
+
+    async def _call_service(self, request: web.Request) -> web.Response:
+        """Invoke a service on a remote node and return the response."""
+        try:
+            node_id = int(request.match_info['node_id'])
+            service_id = int(request.match_info['service_id'])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid node_id or service_id"}, status=400)
+
+        if not self.session.is_running:
+            return web.json_response({"error": "CAN bus not connected"}, status=503)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+        attributes = body.get("attributes", {})
+
+        meta = self.session.scanner.service_metadata.get((node_id, service_id))
+        if not meta:
+            return web.json_response(
+                {"status": "error", "error": f"Service {service_id} not found on node {node_id}"},
+                status=404,
+            )
+
+        service_type = f"{meta['namespace']}.{meta['service_name']}"
+
+        t0 = time.monotonic()
+        try:
+            response_str = await self.session.scanner.make_service_call(
+                node_id, service_id, service_type, attributes
+            )
+            latency_ms = round((time.monotonic() - t0) * 1000)
+            return web.json_response({
+                "status": "ok",
+                "latency_ms": latency_ms,
+                "response": response_str,
+            })
+        except asyncio.TimeoutError:
+            latency_ms = round((time.monotonic() - t0) * 1000)
+            return web.json_response({
+                "status": "timeout",
+                "latency_ms": latency_ms,
+                "error": f"Service {service_id} on node {node_id} timed out",
+            })
+        except ValueError as e:
+            return web.json_response({"status": "error", "error": str(e)}, status=400)
+        except Exception as e:
+            latency_ms = round((time.monotonic() - t0) * 1000)
+            logger.error(f"Service call failed: {e}", exc_info=True)
+            return web.json_response({
+                "status": "error",
+                "latency_ms": latency_ms,
+                "error": str(e),
+            })
 
     # ------------------------------------------------------------------
     # WebSocket handler
