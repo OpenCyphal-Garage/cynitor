@@ -307,7 +307,7 @@ const pollStatus = async () => {
     startInterfacePolling();
 
     if (data.last_error) {
-      alert(`CAN disconnected due to error:\n${data.last_error}`);
+      showToast(`CAN disconnected: ${data.last_error}`, 'error');
     }
   }
 

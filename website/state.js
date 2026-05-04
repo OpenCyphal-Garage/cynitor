@@ -146,6 +146,21 @@ const getMetricMinWidth = (subjectId, attr, displayStr) => {
   return len;
 };
 
+// ── Toast notifications ──
+
+const showToast = (message, type = 'info', durationMs = 5000) => {
+  const container = el('toastContainer');
+  if (!container) return;
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => {
+    toast.classList.add('toast-exit');
+    toast.addEventListener('transitionend', () => toast.remove());
+  }, durationMs);
+};
+
 // ── API helpers ──
 
 const apiBase = () => el('apiBase').value.trim().replace(/\/$/, '');
