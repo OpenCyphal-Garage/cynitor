@@ -93,8 +93,8 @@ class ScannerNode:
             Tuple of two dictionaries: (pub_messages_dict, srv_messages_dict)
         """
         await asyncio.sleep(1)  # Allow node to stabilize
-        self.register_list_client = self._node.make_client(uavcan.register.List_1_0, node_id, "register_list")
-        self.register_access_client = self._node.make_client(uavcan.register.Access_1_0, node_id, "register_access")
+        register_list_client = self._node.make_client(uavcan.register.List_1_0, node_id, "register_list")
+        register_access_client = self._node.make_client(uavcan.register.Access_1_0, node_id, "register_access")
         dsdl_pub_messages: dict[int, str] = {}
         dsdl_srv_messages: dict[int, str] = {}
 
@@ -106,7 +106,7 @@ class ScannerNode:
             while True:
                 list_request = uavcan.register.List_1_0.Request(index=index)
                 list_response_tuple = await asyncio.wait_for(
-                    self.register_list_client.call(list_request), timeout=self.REGISTER_TIMEOUT
+                    register_list_client.call(list_request), timeout=self.REGISTER_TIMEOUT
                 )
                 if not list_response_tuple or not list_response_tuple[0]:
                     logging.debug(f"No response for register list at index {index} for node {node_id}")
@@ -129,7 +129,7 @@ class ScannerNode:
                         name=uavcan.register.Name_1_0(name=reg_name.encode("utf-8"))
                     )
                     access_response_tuple = await asyncio.wait_for(
-                        self.register_access_client.call(access_request), timeout=self.REGISTER_TIMEOUT
+                        register_access_client.call(access_request), timeout=self.REGISTER_TIMEOUT
                     )
                     if not access_response_tuple or not access_response_tuple[0]:
                         logging.warning(f"Failed to access register '{reg_name}' for node {node_id}")
@@ -156,7 +156,7 @@ class ScannerNode:
                         name=uavcan.register.Name_1_0(name=type_reg_name.encode("utf-8"))
                     )
                     type_access_response_tuple = await asyncio.wait_for(
-                        self.register_access_client.call(type_access_request), timeout=self.REGISTER_TIMEOUT
+                        register_access_client.call(type_access_request), timeout=self.REGISTER_TIMEOUT
                     )
                     if not type_access_response_tuple or not type_access_response_tuple[0]:
                         logging.warning(f"Failed to access type register '{type_reg_name}' for node {node_id}")
@@ -187,7 +187,7 @@ class ScannerNode:
                         name=uavcan.register.Name_1_0(name=reg_name.encode("utf-8"))
                     )
                     access_response_tuple = await asyncio.wait_for(
-                        self.register_access_client.call(access_request), timeout=5.0
+                        register_access_client.call(access_request), timeout=5.0
                     )
                     if not access_response_tuple or not access_response_tuple[0]:
                         logging.warning(f"Failed to access service register '{reg_name}' for node {node_id}")
@@ -216,10 +216,10 @@ class ScannerNode:
 
         finally:
             # Clean up clients
-            if self.register_list_client:
-                self.register_list_client.close()
-            if self.register_access_client:
-                self.register_access_client.close()
+            if register_list_client:
+                register_list_client.close()
+            if register_access_client:
+                register_access_client.close()
 
     async def add_subscriptions(self, node_id: int, dsdl_pub_messages: dict[int, str]) -> None:
         # Creates a subscription if it was not existed before.
@@ -588,8 +588,8 @@ class ScannerNode:
 
         try:
             # Ensure clients are initialized for the specific node
-            self.register_list_client = self._node.make_client(uavcan.register.List_1_0, node_id, "register_list")
-            self.register_access_client = self._node.make_client(uavcan.register.Access_1_0, node_id, "register_access")
+            register_list_client = self._node.make_client(uavcan.register.List_1_0, node_id, "register_list")
+            register_access_client = self._node.make_client(uavcan.register.Access_1_0, node_id, "register_access")
 
             index = 0
             while True:
@@ -600,13 +600,13 @@ class ScannerNode:
                 try:
                     # Send the list request with a timeout
                     list_response_tuple = await asyncio.wait_for(
-                        self.register_list_client.call(list_request), timeout=self.REGISTER_TIMEOUT
+                        register_list_client.call(list_request), timeout=self.REGISTER_TIMEOUT
                     )
                     if not list_response_tuple or not list_response_tuple[0]:
                         logging.debug(f"No response for List request for node_id={node_id}, index={index}, trying again")
                         try:
                             list_response_tuple = await asyncio.wait_for(
-                                self.register_list_client.call(list_request), timeout=self.REGISTER_TIMEOUT
+                                register_list_client.call(list_request), timeout=self.REGISTER_TIMEOUT
                             )
                         except asyncio.TimeoutError:
                             logging.debug(f"List request timed out after retry for node_id={node_id}, index={index}")
@@ -636,12 +636,12 @@ class ScannerNode:
 
                     try:
                         access_response_tuple = await asyncio.wait_for(
-                            self.register_access_client.call(access_request), timeout=self.REGISTER_TIMEOUT
+                            register_access_client.call(access_request), timeout=self.REGISTER_TIMEOUT
                         )
                         if not access_response_tuple or not access_response_tuple[0]:
                             try:
                                 access_response_tuple = await asyncio.wait_for(
-                                    self.register_access_client.call(access_request), timeout=2.0
+                                    register_access_client.call(access_request), timeout=2.0
                                 )
                             except asyncio.TimeoutError:
                                 logging.debug(f"Access request timed out after retry for register '{register_name}' on node_id={node_id}")
@@ -685,18 +685,16 @@ class ScannerNode:
                     logging.error(f"Error fetching register list for node_id={node_id} at index={index}: {str(e)}")
                     index += 1
                     continue
-            self.register_list_client.close()
-            self.register_access_client.close()
             if not registers:
                 logging.warning(f"No registers found for node_id={node_id}")
-                return registers
-
             return registers
 
         except Exception as e:
             logging.error(f"Critical error fetching registers for node_id={node_id}: {str(e)}")
             raise ValueError(f"Failed to fetch registers for node {node_id}: {str(e)}")
-        
+        finally:
+            register_list_client.close()
+            register_access_client.close()
 
 
     def get_message_rate(self, subject_id: int) -> float:
@@ -871,7 +869,7 @@ class ScannerNode:
 
         try:
             # Initialize or reuse the register access client for the specific node
-            self.register_access_client = self._node.make_client(uavcan.register.Access_1_0, node_id, uavcan.register.Access_1_0._FIXED_PORT_ID_)
+            register_access_client = self._node.make_client(uavcan.register.Access_1_0, node_id, uavcan.register.Access_1_0._FIXED_PORT_ID_)
 
             # Step 1: Read the current register to check its type and mutability
             access_request = uavcan.register.Access_1_0.Request(
@@ -880,7 +878,7 @@ class ScannerNode:
             )
 
             access_response_tuple = await asyncio.wait_for(
-                self.register_access_client.call(access_request), timeout=self.REGISTER_TIMEOUT
+                register_access_client.call(access_request), timeout=self.REGISTER_TIMEOUT
             )
             if not access_response_tuple or not access_response_tuple[0]:
                 logging.error(f"Failed to access register '{register_name}' on node_id={node_id}")
@@ -947,7 +945,7 @@ class ScannerNode:
             # Step 4: Send the update request
             access_request.value = new_value
             access_response_tuple = await asyncio.wait_for(
-                self.register_access_client.call(access_request), timeout=self.REGISTER_TIMEOUT
+                register_access_client.call(access_request), timeout=self.REGISTER_TIMEOUT
             )
             if not access_response_tuple or not access_response_tuple[0]:
                 logging.error(f"Failed to set register '{register_name}' on node_id={node_id}")
@@ -972,8 +970,7 @@ class ScannerNode:
             logging.error(f"Error setting register '{register_name}' on node_id={node_id}: {str(e)}")
             raise
         finally:
-            if hasattr(self, 'register_access_client'):
-                self.register_access_client.close()
+            register_access_client.close()
 
     def cleanup_subscriptions(self, node_id: int) -> None:
         # Stops subscriptions if no publishers exist. It removes offline node from all lists in active_publishers 
@@ -1094,18 +1091,17 @@ class ScannerNode:
         )
 
     async def getInfo(self, node_id: int) -> None:
-        self.info_client    = self._node.make_client(uavcan.node.GetInfo_1, node_id)
+        info_client    = self._node.make_client(uavcan.node.GetInfo_1, node_id)
         try:
             request         = uavcan.node.GetInfo_1.Request()
-            response        = await self.info_client.call(request)
+            response        = await info_client.call(request)
             self.all_nodes[node_id].set_info(get_info_response=response[0], transfer_from=response[1])
             self.all_nodes[node_id].last_info_time = datetime.datetime.now()
             logging.debug(f"Node {node_id} has responded to getInfo service.")
         except Exception as e:
             logging.warning(f"Node {node_id} could not provide GetInfo service. Threw {e}")
         finally:
-            if hasattr(self, 'info_client') and self.info_client:
-                self.info_client.close()
+            info_client.close()
 
     def close(self) -> None:
         self._node.close()
