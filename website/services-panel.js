@@ -175,6 +175,34 @@ const collectFormAttributes = (cardEl, schema) => {
   return attributes;
 };
 
+const saveFormState = () => {
+  const container = el('selectedNodeContent');
+  const values = {};
+  container.querySelectorAll('.svc-field-input').forEach((input) => {
+    if (input.value) values[input.id] = input.value;
+  });
+  const openDetails = [];
+  container.querySelectorAll('details.svc-fieldset[open]').forEach((d) => {
+    const summary = d.querySelector('summary');
+    if (summary) openDetails.push(summary.textContent.trim());
+  });
+  return { values, openDetails };
+};
+
+const restoreFormState = (saved) => {
+  const container = el('selectedNodeContent');
+  for (const [id, val] of Object.entries(saved.values)) {
+    const input = container.querySelector(`#${CSS.escape(id)}`);
+    if (input) input.value = val;
+  }
+  container.querySelectorAll('details.svc-fieldset').forEach((d) => {
+    const summary = d.querySelector('summary');
+    if (summary && saved.openDetails.includes(summary.textContent.trim())) {
+      d.open = true;
+    }
+  });
+};
+
 const sendServiceRequest = async (nodeId, serviceId) => {
   const container = el('selectedNodeContent');
   const card = container.querySelector(`.svc-card[data-service-id="${serviceId}"]`);
@@ -186,9 +214,11 @@ const sendServiceRequest = async (nodeId, serviceId) => {
   if (!schema) return;
 
   const attributes = collectFormAttributes(card, schema);
+  const saved = saveFormState();
 
   state.serviceCallState = { nodeId, serviceId, status: 'sending', response: null, error: null, latencyMs: null };
   renderServicesTab();
+  restoreFormState(saved);
 
   try {
     const data = await requestJson(`/api/services/${nodeId}/${serviceId}/call`, {
@@ -201,6 +231,7 @@ const sendServiceRequest = async (nodeId, serviceId) => {
     if (!nodeStillOnline && state.serviceCallState?.status === 'sending') {
       state.serviceCallState = { nodeId, serviceId, status: 'node-lost', response: null, error: 'Node went offline', latencyMs: null };
       renderServicesTab();
+      restoreFormState(saved);
       return;
     }
 
@@ -216,6 +247,7 @@ const sendServiceRequest = async (nodeId, serviceId) => {
   }
 
   renderServicesTab();
+  restoreFormState(saved);
 };
 
 const bindServiceCardEvents = (content, nodeId) => {
