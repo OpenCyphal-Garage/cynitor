@@ -148,8 +148,6 @@ const connectWs = () => {
         return;
       }
       cacheEvent(event);
-      state.eventCount += 1;
-      el('eventCount').textContent = String(state.eventCount);
       scheduleDetailRefresh();
       scheduleTableRefresh();
     } catch {
@@ -250,7 +248,6 @@ const disconnectAll = ({ persist = true } = {}) => {
   state.serviceSchemas.clear();
   state.serviceCallState = null;
   REG_CACHE.clear();
-  state.eventCount = 0;
   stopStatusPolling();
   stopCanStartupDelay();
   stopNodesPolling();
@@ -355,16 +352,13 @@ const getAllNodes = async () => {
   }
 };
 
-const startNodesPolling = () => {
-  const seconds = Math.max(1, Math.min(60, Number.parseInt(el('nodesRefreshSlider').value, 10) || 3));
-  el('nodesRefreshSlider').value = String(seconds);
-  el('refreshValue').textContent = seconds >= 60 ? '1m' : `${seconds}s`;
-  saveSettings();
+const NODES_POLL_INTERVAL_MS = 3000;
 
+const startNodesPolling = () => {
   if (state.nodesTimer) {
     clearInterval(state.nodesTimer);
   }
-  state.nodesTimer = window.setInterval(getAllNodes, seconds * 1000);
+  state.nodesTimer = window.setInterval(getAllNodes, NODES_POLL_INTERVAL_MS);
 };
 
 const stopNodesPolling = () => {

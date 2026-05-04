@@ -21,7 +21,6 @@ const state = {
   preferredCanInterface: '',
   favouriteNodeIds: new Set(),
   deletedNodeIds: new Set(),
-  eventCount: 0,
   latestNodesPayload: { node_count: 0, nodes: {} },
   latestBySubject: new Map(),
   latestByNode: new Map(),
@@ -238,7 +237,6 @@ const _writeSettingsNow = () => {
     apiBase: el('apiBase').value.trim(),
     canInterface: interfacesSelect ? interfacesSelect.value : '',
     dashboardConnected: state.dashboardConnected,
-    nodesRefreshSeconds: el('nodesRefreshSlider').value,
     selectedDetailTab: state.selectedDetailTab,
     tableSort: state.tableSort,
     sidebarCollapsed: state.sidebarCollapsed,
@@ -284,11 +282,6 @@ const loadSettings = () => {
   }
   if (settings.tableSort && settings.tableSort.key) {
     state.tableSort = settings.tableSort;
-  }
-  if (typeof settings.nodesRefreshSeconds === 'string' && settings.nodesRefreshSeconds) {
-    const val = Math.max(1, Math.min(60, Number(settings.nodesRefreshSeconds) || 3));
-    el('nodesRefreshSlider').value = String(val);
-    el('refreshValue').textContent = val >= 60 ? '1m' : `${val}s`;
   }
   if (typeof settings.selectedDetailTab === 'string') {
     const validTabs = ['publishers', 'subscribers', 'servers', 'clients', 'registers'];

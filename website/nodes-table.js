@@ -229,12 +229,7 @@ const initNodesTable = () => {
 };
 
 const renderNodesTable = () => {
-  const countEl = el('nodeCount');
   const data = buildTableData();
-
-  if (countEl) {
-    countEl.textContent = String(data.length);
-  }
 
   if (!nodesTabulator) return;
 

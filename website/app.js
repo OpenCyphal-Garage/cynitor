@@ -20,11 +20,6 @@ const bind = () => {
     state.preferredCanInterface = el('interfacesSelect').value;
     saveSettings();
   });
-  el('nodesRefreshSlider').addEventListener('input', () => {
-    const val = el('nodesRefreshSlider').value;
-    el('refreshValue').textContent = Number(val) >= 60 ? '1m' : `${val}s`;
-    startNodesPolling();
-  });
   el('sidebarCollapseBtn').addEventListener('click', () => {
     const sidebar = document.querySelector('.sidebar');
     sidebar.classList.toggle('collapsed');
