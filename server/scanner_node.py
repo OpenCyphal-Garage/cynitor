@@ -38,6 +38,7 @@ class ScannerNode:
     MESSAGE_RATE_WINDOW_SECONDS = 10
     MAX_SUBJECT_ID = 8191
     MAX_SERVICE_ID = 511
+    MAX_REGISTERS = 256
     STANDARD_SERVICES = {
         384: 'uavcan.register.Access_1_0',
         385: 'uavcan.register.List_1_0',
@@ -72,7 +73,7 @@ class ScannerNode:
         self.message_timestamps: dict[int, list[float]] = {}              # Maps subject_id to timestamps for rate calculation
         self.message_queue: asyncio.Queue = asyncio.Queue(maxsize=self.MESSAGE_QUEUE_SIZE)
         self.active_publishers: dict[int, set] = {}                        # Maps subject_id to set of publisher node_ids
-        self.services  = []
+        self.services: set[str] = set()
         self.service_metadata = {}  # (node_id, service_id) -> {"namespace": str, "service_name": str}
         self.service_clients = {}   
         try:
@@ -103,7 +104,7 @@ class ScannerNode:
             index = 0
 
             # Step 1: Collect all register names
-            while True:
+            while index < self.MAX_REGISTERS:
                 list_request = uavcan.register.List_1_0.Request(index=index)
                 list_response_tuple = await asyncio.wait_for(
                     register_list_client.call(list_request), timeout=self.REGISTER_TIMEOUT
@@ -307,7 +308,7 @@ class ScannerNode:
                     }
                     continue
                 else:
-                    self.services.append(service_name)
+                    self.services.add(service_name)
 
                 service_info_list[service_id] = {
                 "name": service_name,
@@ -592,7 +593,7 @@ class ScannerNode:
             register_access_client = self._node.make_client(uavcan.register.Access_1_0, node_id, "register_access")
 
             index = 0
-            while True:
+            while index < self.MAX_REGISTERS:
                 # Create a request for the register name at the current index
                 list_request = uavcan.register.List_1_0.Request(index=index)
                 logging.debug(f"Sending List_1_0 request for node_id={node_id}, index={index}")
@@ -796,57 +797,18 @@ class ScannerNode:
             await self.message_queue.put(event)
 
     async def _publisher_callback(self, msg, transfer: pycyphal.transport.TransferFrom, subject_id: int) -> None:
-        """
-        Callback for publisher messages. Extracts attributes and queues standardized event.
-        
-        Event dict format:
-        {
-            "subject_id": int,
-            "timestamp": str,           # ISO 8601 timestamp
-            "timestamp_unix": float,    # Unix timestamp
-            "rate": int,                # Messages per second (Hz)
-            "message_type": str,        # Message class name (e.g., "Heartbeat_1_0")
-            "attributes": list,         # List of {attribute, value, unit?, ...}
-            "publisher_node_id": int,   # Source node ID
-        }
-        """
-        timestamp = time.time()
-        timestamp_str = datetime.datetime.fromtimestamp(timestamp).isoformat(timespec="seconds")
-        publisher_node_id = transfer.source_node_id
-        message_type = msg.__class__.__name__
-
-        if subject_id not in self.message_timestamps:
-            self.message_timestamps[subject_id] = []
-        self.message_timestamps[subject_id].append(timestamp)
-        self.message_timestamps[subject_id] = [t for t in self.message_timestamps[subject_id] 
-                                                if t > timestamp - self.MESSAGE_RATE_WINDOW_SECONDS]
-        rate = round(self.get_message_rate(subject_id))
-
-        # Check if subject attributes exist before processing
+        """Callback for publisher messages. Extracts attributes and queues standardized event."""
         if subject_id not in self.subject_attributes:
             logging.warning(f"Subject attributes not found for subject_id {subject_id}")
             return
-        
-        # Extract values for each attribute (recursively handles nested DSDL types)
+
         attributes = self._extract_attributes(msg, self.subject_attributes[subject_id])
-        
-        # Create standardized event dict
-        event = {
-            "subject_id": subject_id,
-            "timestamp": timestamp_str,
-            "timestamp_unix": timestamp,
-            "rate": rate,
-            "message_type": message_type,
-            "attributes": attributes,
-            "publisher_node_id": publisher_node_id,
-        }
-        
-        try:
-            self.message_queue.put_nowait(event)
-        except asyncio.QueueFull:
-            logging.warning("Message queue full, dropping oldest message")
-            self.message_queue.get_nowait()  # Remove oldest
-            await self.message_queue.put(event)
+        await self._queue_event(
+            subject_id=subject_id,
+            message_type=msg.__class__.__name__,
+            attributes=attributes,
+            publisher_node_id=transfer.source_node_id,
+        )
 
     async def set_register(self, node_id: int, register_name: str, value: str, type: str) -> Any | None:
         """
