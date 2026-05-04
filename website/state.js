@@ -40,6 +40,7 @@ const state = {
   splitRatio: 0.6,
   serviceSchemas: new Map(),
   serviceCallState: null,
+  serviceCallHistory: [],
   expandedServiceId: null,
 };
 
@@ -61,9 +62,7 @@ let _detailRefreshPending = null;
 
 const metricMaxLen = new Map();
 
-// Read plot colors from CSS custom properties so the palette has a single
-// source of truth. Resolved once at script load — values don't change at
-// runtime since they're not overridden in the light theme.
+// Read plot colors from CSS custom properties. Resolved once at script load.
 const PLOT_COLORS = (() => {
   const root = getComputedStyle(document.documentElement);
   const fallback = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#bc8cff', '#39d2c0'];
@@ -242,7 +241,7 @@ const _writeSettingsNow = () => {
     sidebarCollapsed: state.sidebarCollapsed,
     detailPanelHeight: state.detailPanelHeight,
     detailPanelCollapsed: state.detailPanelCollapsed,
-    theme: document.documentElement.getAttribute('data-theme') || 'dark',
+    theme: document.documentElement.getAttribute('data-theme') || 'light',
     columnWidths: getColumnWidths(),
     headerFilters: getHeaderFilters(),
     selectedNodeId: state.selectedNodeId,
@@ -298,9 +297,9 @@ const loadSettings = () => {
   if (settings.detailPanelCollapsed) {
     state.detailPanelCollapsed = true;
   }
-  if (settings.theme === 'light') {
-    document.documentElement.setAttribute('data-theme', 'light');
-    el('themeLabel').textContent = 'White';
+  if (settings.theme === 'dark') {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    el('themeLabel').textContent = 'Dark';
   }
   if (typeof settings.canInterface === 'string') {
     state.preferredCanInterface = settings.canInterface;

@@ -118,13 +118,13 @@ const bind = () => {
 
   el('themeToggle').addEventListener('click', () => {
     const html = document.documentElement;
-    const isLight = html.getAttribute('data-theme') === 'light';
-    if (isLight) {
+    const isDark = html.getAttribute('data-theme') === 'dark';
+    if (isDark) {
       html.removeAttribute('data-theme');
     } else {
-      html.setAttribute('data-theme', 'light');
+      html.setAttribute('data-theme', 'dark');
     }
-    el('themeLabel').textContent = isLight ? 'Black' : 'White';
+    el('themeLabel').textContent = isDark ? 'Light' : 'Dark';
     saveSettings();
   });
   el('apiBase').addEventListener('change', saveSettings);
