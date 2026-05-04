@@ -124,6 +124,10 @@ class BusLoadMonitor:
         self.utilization = 0.0
         logger.info("BusLoadMonitor stopped")
 
+    @property
+    def is_alive(self) -> bool:
+        return self._proc is not None and self._proc.returncode is None
+
     async def _read_loop(self) -> None:
         try:
             assert self._proc and self._proc.stdout
@@ -173,7 +177,7 @@ class CANSession:
             self.last_error = None
 
             try:
-                prepare_runtime(can_iface=can_iface, force_compile=force_compile)
+                await asyncio.to_thread(prepare_runtime, can_iface, force_compile)
 
                 from scanner_node import ScannerNode
                 from telemetry_manager import TelemetryManager
@@ -340,23 +344,26 @@ async def _register_loop(scanner, registered_nodes: list[int], session: 'CANSess
         while True:
             await asyncio.sleep(1)
 
-            # Check CAN interface health every 3 seconds
             health_check_counter += 1
             if session and session.can_interface and health_check_counter >= 3:
                 health_check_counter = 0
 
-                error = _check_can_health(session.can_interface)
-                if not error and session.bus_load and session.bus_load._proc:
-                    if session.bus_load._proc.returncode is not None:
-                        error = f"CAN bus monitor process exited unexpectedly (code {session.bus_load._proc.returncode})"
+                error = await asyncio.to_thread(_check_can_health, session.can_interface)
+                if not error and session.bus_load and not session.bus_load.is_alive:
+                    error = "CAN bus monitor process exited unexpectedly"
 
                 if error:
                     session.schedule_fatal_disconnect(error)
                     return
 
-            for node in scanner.all_nodes.values():
-                node.check_disappeared()
-            await register_nodes(scanner, registered_nodes)
+            try:
+                for node in scanner.all_nodes.values():
+                    node.check_disappeared()
+                await register_nodes(scanner, registered_nodes)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error("Error in register loop iteration: %s", e, exc_info=True)
     except asyncio.CancelledError:
         logger.debug("Register loop cancelled")
         raise

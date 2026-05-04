@@ -105,10 +105,11 @@ class WebSocketServer:
     async def _get_status(self, request: web.Request) -> web.Response:
         from main import discover_can_interfaces
         bus_load = self.session.bus_load
+        available = await asyncio.to_thread(discover_can_interfaces)
         return web.json_response({
             "status": "running" if self.session.is_running else "idle",
             "can_interface": self.session.can_interface,
-            "available_interfaces": discover_can_interfaces(),
+            "available_interfaces": available,
             "bus_utilization": bus_load.utilization if bus_load else None,
             "last_error": self.session.last_error,
         })
@@ -127,7 +128,7 @@ class WebSocketServer:
         if self.session.is_running:
             return web.json_response({"error": "Already connected"}, status=409)
 
-        available = discover_can_interfaces()
+        available = await asyncio.to_thread(discover_can_interfaces)
         if iface not in available:
             return web.json_response(
                 {"error": f"Unknown interface: {iface}", "available_interfaces": available},
@@ -147,9 +148,10 @@ class WebSocketServer:
             return web.json_response({"error": "Not connected"}, status=409)
 
         await self.session.disconnect()
+        available = await asyncio.to_thread(discover_can_interfaces)
         return web.json_response({
             "status": "idle",
-            "available_interfaces": discover_can_interfaces(),
+            "available_interfaces": available,
         })
 
     # ------------------------------------------------------------------
