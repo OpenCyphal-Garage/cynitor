@@ -23,7 +23,12 @@ const healthFormatter = (cell) => {
     : v === 'CAUTION' ? 'caution'
     : v === 'WARNING' ? 'warning'
     : 'unknown';
-  return `<span class="health-text health-${escapeHtml(cls)}">${escapeHtml(v)}</span>`;
+  const icon = v === 'NOMINAL' ? ''
+    : v === 'ADVISORY' ? '<span class="health-icon" aria-hidden="true">~</span>'
+    : v === 'CAUTION' ? '<span class="health-icon" aria-hidden="true">!</span>'
+    : v === 'WARNING' ? '<span class="health-icon" aria-hidden="true">!!</span>'
+    : '';
+  return `<span class="health-text health-${escapeHtml(cls)}">${icon}${escapeHtml(v)}</span>`;
 };
 
 const portsFormatter = (cell) => {

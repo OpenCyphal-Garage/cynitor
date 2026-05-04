@@ -1193,6 +1193,11 @@ button:focus-visible,
 .health-warning { color: var(--error); }
 .health-unknown { color: var(--muted); }
 
+.health-icon {
+  margin-right: 0.25rem;
+  font-weight: 700;
+}
+
 
 .port-ids {
   color: var(--muted);
