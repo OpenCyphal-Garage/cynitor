@@ -169,24 +169,26 @@ updateSemaphores();
 // ── Frontend server heartbeat ──
 (() => {
   const HEARTBEAT_INTERVAL = 5000;
+  const FAIL_THRESHOLD = 2;
   const overlay = el('serverDownOverlay');
   let serverDown = false;
+  let consecutiveFailures = 0;
 
-  // persist=false so on heartbeat recovery (page reload) auto-reconnect
-  // sees the prior connected state and resumes without manual action.
   const tearDown = () => disconnectAll({ persist: false });
 
   const check = async () => {
     try {
       const resp = await fetch(window.location.href, { method: 'HEAD', cache: 'no-store' });
       if (!resp.ok) throw new Error();
+      consecutiveFailures = 0;
       if (serverDown) {
         serverDown = false;
         overlay.classList.add('hidden');
         window.location.reload();
       }
     } catch {
-      if (!serverDown) {
+      consecutiveFailures += 1;
+      if (!serverDown && consecutiveFailures >= FAIL_THRESHOLD) {
         serverDown = true;
         tearDown();
         overlay.classList.remove('hidden');
