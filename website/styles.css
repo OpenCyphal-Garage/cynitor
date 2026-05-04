@@ -1212,6 +1212,407 @@ button:focus-visible,
   display: none !important;
 }
 
+/* ── Services panel ── */
+
+.svc-panel {
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow-y: auto;
+  height: 100%;
+}
+
+.svc-loading {
+  padding: 1.5rem;
+  text-align: center;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+}
+
+.svc-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  overflow: hidden;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.svc-card:hover {
+  border-color: var(--border-subtle);
+  box-shadow: 0 0.125rem 0.5rem rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="light"] .svc-card:hover {
+  box-shadow: 0 0.125rem 0.5rem rgba(0, 0, 0, 0.06);
+}
+
+.svc-card-expanded {
+  border-color: var(--accent);
+  background: var(--accent-muted);
+}
+
+.svc-card-expanded:hover {
+  border-color: var(--accent);
+}
+
+.svc-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.625rem 0.75rem;
+  cursor: pointer;
+  user-select: none;
+  font-family: var(--mono);
+}
+
+.svc-card-header:hover {
+  background: transparent;
+}
+
+.svc-card-header-static {
+  cursor: default;
+}
+
+.svc-expand-icon {
+  color: var(--muted);
+  font-size: 0.75rem;
+  width: 0.75rem;
+}
+
+.svc-service-id {
+  font-family: var(--mono);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.svc-service-type {
+  font-family: var(--mono);
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.svc-form {
+  padding: 0.625rem 0.75rem 0.75rem;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.svc-no-fields {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-family: var(--sans);
+}
+
+.svc-field,
+.svc-subfield {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.svc-fieldset {
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.375rem;
+  padding: 0.5rem 0.625rem;
+  margin: 0;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.svc-fieldset legend {
+  padding: 0 0.25rem;
+  font-size: 0.75rem;
+}
+
+.svc-field-label {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--text);
+}
+
+.svc-type-hint {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.svc-field-input {
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+}
+
+.svc-field-input:focus {
+  border-color: var(--accent);
+}
+
+.svc-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.svc-btn {
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.svc-btn:hover:not(:disabled) {
+  background: var(--surface-1);
+  border-color: var(--accent);
+}
+
+.svc-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.svc-send-btn {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.svc-send-btn:hover:not(:disabled) {
+  background: var(--accent);
+  opacity: 0.9;
+}
+
+.svc-btn-small {
+  font-size: 0.6875rem;
+  padding: 0.25rem 0.5rem;
+}
+
+.svc-response {
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  padding: 0.5rem 0.625rem;
+  margin-top: 0.375rem;
+  background: var(--bg);
+}
+
+.svc-response-ok {
+  border-color: var(--ok);
+}
+
+.svc-response-timeout {
+  border-color: var(--warn);
+}
+
+.svc-response-error {
+  border-color: var(--error);
+}
+
+.svc-response-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.375rem;
+}
+
+.svc-status-badge {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.svc-badge-ok { color: var(--ok); }
+.svc-badge-timeout { color: var(--warn); }
+.svc-badge-error { color: var(--error); }
+
+.svc-response-body {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.svc-error-text {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--error);
+}
+
+/* ── Service state messages ── */
+
+.svc-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+}
+
+.svc-state-icon {
+  font-size: 1.5rem;
+  color: var(--muted);
+  line-height: 1;
+}
+
+.svc-state-message {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 0.875rem;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.svc-state-helper {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  color: var(--muted);
+  max-width: 28rem;
+}
+
+.svc-state-action {
+  margin-top: 0.375rem;
+}
+
+/* ── Service spinner ── */
+
+.svc-spinner {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: svc-spin 0.7s linear infinite;
+}
+
+@keyframes svc-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Service skeleton loading ── */
+
+.svc-panel-skeleton {
+  pointer-events: none;
+}
+
+.svc-skeleton-card {
+  height: 2.5rem;
+  border-radius: var(--radius);
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%);
+  background-size: 200% 100%;
+  animation: svc-shimmer 1.5s ease-in-out infinite;
+}
+
+@keyframes svc-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ── Stale / offline overlay ── */
+
+.svc-stale-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  color: var(--warn);
+  background: var(--warn-muted);
+  border-bottom: 1px solid var(--warn);
+}
+
+.svc-stale-icon {
+  font-size: 0.875rem;
+}
+
+.svc-panel-stale {
+  opacity: 0.6;
+}
+
+/* ── Response idle / sending states ── */
+
+.svc-response-idle {
+  border-color: var(--border);
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 0.75rem;
+}
+
+.svc-idle-text {
+  color: var(--muted);
+}
+
+.svc-response-sending {
+  border-color: var(--accent);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.svc-sending-text {
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  color: var(--accent);
+}
+
+/* ── Schema incomplete badge ── */
+
+.svc-incomplete-badge {
+  margin-left: auto;
+  font-family: var(--sans);
+  font-size: 0.625rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius);
+  background: var(--warn-muted);
+  color: var(--warn);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.svc-card-unavailable {
+  opacity: 0.5;
+}
+
+.svc-card-unavailable:hover {
+  box-shadow: none;
+  border-color: var(--border);
+}
+
+.svc-badge-unavailable {
+  background: var(--surface-3);
+  color: var(--muted);
+}
+
+.svc-schema-warn {
+  color: var(--warn);
+}
+
 /* ── Responsive ── */
 @media (max-width: 80rem) {
   .sidebar {

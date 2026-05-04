@@ -39,6 +39,9 @@ const state = {
   detailPanelHeight: null,
   detailPanelCollapsed: false,
   splitRatio: 0.6,
+  serviceSchemas: new Map(),
+  serviceCallState: null,
+  expandedServiceId: null,
 };
 
 // Derived accessors for CAN connection state — keeps existing code readable
