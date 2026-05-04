@@ -80,6 +80,9 @@ def _auto_node_id() -> str | None:
     if not value:
         logger.warning("'yakut accommodate' returned an empty node-ID")
         return None
+    if not value.isdigit():
+        logger.warning("'yakut accommodate' returned non-numeric node-ID: %s", value)
+        return None
     return value
 
 

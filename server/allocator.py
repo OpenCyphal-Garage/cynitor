@@ -49,12 +49,15 @@ class AllocatorApp:
         transport = CANTransport(media, local_node_id=AllocatorApp.NODE_ID)
         self.registry = pycyphal.application.make_registry(AllocatorApp.REGISTER_FILE)
         self.node = pycyphal.application.make_node(info=node_info, transport=transport, registry=self.registry)
-        self.allocator = CentralizedAllocator(node=self.node)
-
-        self.heartbeat_publisher = self.node.make_publisher(Heartbeat_1_0, "uavcan.node.heartbeat")
-        self.node.heartbeat_publisher.mode = uavcan.node.Mode_1.OPERATIONAL
-        self.node.heartbeat_publisher.vendor_specific_status_code = os.getpid() % 100
-        self.node.start()
+        try:
+            self.allocator = CentralizedAllocator(node=self.node)
+            self.heartbeat_publisher = self.node.make_publisher(Heartbeat_1_0, "uavcan.node.heartbeat")
+            self.node.heartbeat_publisher.mode = uavcan.node.Mode_1.OPERATIONAL
+            self.node.heartbeat_publisher.vendor_specific_status_code = os.getpid() % 100
+            self.node.start()
+        except Exception:
+            self.node.close()
+            raise
         logger.info("Local allocator started on %s with node-ID %d", can_interface, AllocatorApp.NODE_ID)
 
     def close(self) -> None:
