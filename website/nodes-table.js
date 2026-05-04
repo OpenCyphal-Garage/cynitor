@@ -89,15 +89,18 @@ const deleteOfflineNode = (nodeId) => {
   renderNodesTable();
 };
 
-const buildTableData = () => {
-  const payloadNodes = state.latestNodesPayload?.nodes;
-  const allNodes = payloadNodes && typeof payloadNodes === 'object' ? Object.values(payloadNodes) : [];
-  // If a deleted node comes back online, restore it
+const restoreRevivedNodes = (allNodes) => {
   for (const node of allNodes) {
     if (state.deletedNodeIds.has(node.node_id) && getNodeVisualState(node) !== 'offline') {
       state.deletedNodeIds.delete(node.node_id);
     }
   }
+};
+
+const buildTableData = () => {
+  const payloadNodes = state.latestNodesPayload?.nodes;
+  const allNodes = payloadNodes && typeof payloadNodes === 'object' ? Object.values(payloadNodes) : [];
+  restoreRevivedNodes(allNodes);
 
   const rows = allNodes
     .filter((node) => !state.deletedNodeIds.has(node.node_id))
