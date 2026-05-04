@@ -531,8 +531,10 @@ const renderSelectedNodeContent = () => {
     ? `<div class="svc-stale-banner"><span class="svc-stale-icon">⚠</span>Node ${node.node_id} is offline — data may be stale.</div>`
     : '';
 
+  const transitioned = wasOffline !== isOffline;
+
   const renderSubjectTab = (title, subjects) => {
-    if (!staleBanner && updateSubjectTableInPlace(content, subjects)) {
+    if (!staleBanner && !transitioned && updateSubjectTableInPlace(content, subjects)) {
       if (!state.plotTimer) startPlotAnim();
       return;
     }
