@@ -291,7 +291,7 @@ const loadSettings = () => {
     el('refreshValue').textContent = val >= 60 ? '1m' : `${val}s`;
   }
   if (typeof settings.selectedDetailTab === 'string') {
-    const validTabs = ['publishers', 'subscribers', 'servers', 'clients'];
+    const validTabs = ['publishers', 'subscribers', 'servers', 'clients', 'registers'];
     const tab = settings.selectedDetailTab === 'services' ? 'servers' : settings.selectedDetailTab;
     state.selectedDetailTab = validTabs.includes(tab) ? tab : 'publishers';
   }

@@ -73,6 +73,8 @@ class WebSocketServer:
         self.app.router.add_get('/api/health', self._health_check)
         self.app.router.add_get('/api/services/{node_id}', self._get_services)
         self.app.router.add_get('/api/clients/{node_id}', self._get_clients)
+        self.app.router.add_get('/api/registers/{node_id}', self._get_registers)
+        self.app.router.add_post('/api/registers/{node_id}/set', self._set_register)
         self.app.router.add_post('/api/services/{node_id}/{service_id}/call', self._call_service)
         self.app.router.add_post('/api/can/connect', self._can_connect)
         self.app.router.add_post('/api/can/disconnect', self._can_disconnect)
@@ -191,6 +193,59 @@ class WebSocketServer:
         if info is None:
             return web.json_response({"error": f"Node {node_id} not found"}, status=404)
         return web.json_response(info)
+
+    async def _get_registers(self, request: web.Request) -> web.Response:
+        """Return all registers for a node."""
+        try:
+            node_id = int(request.match_info['node_id'])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid node_id"}, status=400)
+
+        if not self.session.is_running:
+            return web.json_response({"error": "CAN bus not connected"}, status=503)
+
+        try:
+            registers = await self.session.scanner.get_registers(node_id)
+            return web.json_response({"node_id": node_id, "registers": registers})
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=500)
+        except Exception as e:
+            logger.error(f"Error in GET /api/registers/{node_id}: {e}", exc_info=True)
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def _set_register(self, request: web.Request) -> web.Response:
+        """Set a register value on a node."""
+        try:
+            node_id = int(request.match_info['node_id'])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid node_id"}, status=400)
+
+        if not self.session.is_running:
+            return web.json_response({"error": "CAN bus not connected"}, status=503)
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+        name = body.get("name")
+        value = body.get("value")
+        reg_type = body.get("type")
+        if not name or value is None or not reg_type:
+            return web.json_response({"error": "Missing required fields: name, value, type"}, status=400)
+
+        try:
+            updated = await self.session.scanner.set_register(node_id, name, str(value), reg_type)
+            if isinstance(updated, list):
+                formatted = ', '.join(str(v) for v in updated)
+            else:
+                formatted = str(updated) if updated is not None else None
+            return web.json_response({"status": "ok", "name": name, "value": formatted})
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        except Exception as e:
+            logger.error(f"Error in POST /api/registers/{node_id}/set: {e}", exc_info=True)
+            return web.json_response({"error": str(e)}, status=500)
 
     async def _call_service(self, request: web.Request) -> web.Response:
         """Invoke a service on a remote node and return the response."""

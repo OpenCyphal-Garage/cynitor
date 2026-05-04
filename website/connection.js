@@ -249,6 +249,7 @@ const disconnectAll = ({ persist = true } = {}) => {
   state.subjectHistory.clear();
   state.serviceSchemas.clear();
   state.serviceCallState = null;
+  REG_CACHE.clear();
   state.eventCount = 0;
   stopStatusPolling();
   stopCanStartupDelay();
