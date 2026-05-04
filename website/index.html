@@ -86,11 +86,11 @@
         </button>
       </div>
       <div class="detail-panel" id="detailPanel">
-        <div class="detail-tabs">
-          <button class="detail-tab active" data-tab="publishers">Publishers</button>
-          <button class="detail-tab" data-tab="subscribers">Subscribers</button>
-          <button class="detail-tab" data-tab="servers">Servers</button>
-          <button class="detail-tab" data-tab="clients">Clients</button>
+        <div class="detail-tabs" role="tablist">
+          <button class="detail-tab active" data-tab="publishers" role="tab" aria-selected="true">Publishers</button>
+          <button class="detail-tab" data-tab="subscribers" role="tab" aria-selected="false">Subscribers</button>
+          <button class="detail-tab" data-tab="servers" role="tab" aria-selected="false">Servers</button>
+          <button class="detail-tab" data-tab="clients" role="tab" aria-selected="false">Clients</button>
         </div>
         <div class="detail-panel-content" id="selectedNodeContent">
           <div class="detail-empty">Select a node to inspect details.</div>

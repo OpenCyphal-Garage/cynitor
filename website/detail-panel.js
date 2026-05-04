@@ -414,7 +414,9 @@ const renderSelectedNodeContent = () => {
   const node = getSelectedNode();
 
   document.querySelectorAll('.detail-tab').forEach((button) => {
-    button.classList.toggle('active', button.dataset.tab === state.selectedDetailTab);
+    const isActive = button.dataset.tab === state.selectedDetailTab;
+    button.classList.toggle('active', isActive);
+    button.setAttribute('aria-selected', String(isActive));
   });
 
   const tabCounts = node ? {
