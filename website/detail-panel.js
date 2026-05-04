@@ -358,6 +358,8 @@ const startPlotAnim = () => {
   const container = el('selectedNodeContent');
   const tick = () => {
     if (state.detailPanelCollapsed) { state.plotTimer = null; return; }
+    const node = getSelectedNode();
+    if (node?.has_disappeared) { state.plotTimer = null; return; }
     const isLive = renderPlot(container);
     if (isLive) {
       state.plotTimer = window.setTimeout(tick, PLOT_TICK_MS);
@@ -430,6 +432,12 @@ const renderClientsTab = async () => {
   const clients = node?.clients || [];
   if (!clients.length) {
     content.innerHTML = svcStateMsg('○', 'No clients advertised', 'This node does not use any service clients.');
+    return;
+  }
+
+  if (node.has_disappeared) {
+    content.innerHTML = `<div class="svc-stale-banner"><span class="svc-stale-icon">⚠</span>Node ${nodeId} is offline — client data may be stale.</div>`
+      + `<div class="svc-panel-stale">${renderClientCards(clients, new Map())}</div>`;
     return;
   }
 
@@ -511,14 +519,26 @@ const renderSelectedNodeContent = () => {
     return;
   }
 
+  const wasOffline = content.dataset.nodeOffline === 'true';
+  const isOffline = !!node.has_disappeared;
+  content.dataset.nodeOffline = String(isOffline);
+
+  if (wasOffline !== isOffline) {
+    delete content.dataset.svcTab;
+  }
+
+  const staleBanner = isOffline
+    ? `<div class="svc-stale-banner"><span class="svc-stale-icon">⚠</span>Node ${node.node_id} is offline — data may be stale.</div>`
+    : '';
+
   const renderSubjectTab = (title, subjects) => {
-    if (updateSubjectTableInPlace(content, subjects)) {
+    if (!staleBanner && updateSubjectTableInPlace(content, subjects)) {
       if (!state.plotTimer) startPlotAnim();
       return;
     }
     const selected = state.selectedPlotSubject;
     const pct = (state.splitRatio * 100).toFixed(1);
-    content.innerHTML = `<div class="detail-split">
+    content.innerHTML = `${staleBanner}<div class="detail-split${isOffline ? ' svc-panel-stale' : ''}">
       <div class="detail-subject-list" style="flex:0 0 ${pct}%">${renderSubjectTable(title, subjects)}</div>
       <div class="detail-split-handle"></div>
       <div class="detail-plot-area">${''}
@@ -528,7 +548,7 @@ const renderSelectedNodeContent = () => {
       if (Number(card.dataset.subject) === selected) card.classList.add('selected');
     });
     bindSplitHandle(content.querySelector('.detail-split'));
-    startPlotAnim();
+    if (!isOffline) startPlotAnim();
   };
 
   if (state.selectedDetailTab !== 'servers' && state.selectedDetailTab !== 'clients' && state.selectedDetailTab !== 'registers') {

@@ -345,13 +345,14 @@ const renderServicesTab = async () => {
     if (hasStaleSchema && state.serviceSchemas.get(nodeId) !== SVC_SCHEMA_ERROR) {
       const services = state.serviceSchemas.get(nodeId) || [];
       if (services.length) {
+        state.expandedServiceId = null;
+        const cards = services.map(renderServiceCard).join('');
         content.innerHTML = `
           <div class="svc-stale-banner">
             <span class="svc-stale-icon">⚠</span>
-            Node ${nodeId} is offline — service data may be stale.
+            Node ${nodeId} is offline — services are unavailable.
           </div>
-          <section class="svc-panel svc-panel-stale">${services.map(renderServiceCard).join('')}</section>`;
-        bindServiceCardEvents(content, nodeId);
+          <section class="svc-panel svc-panel-stale">${cards}</section>`;
         return;
       }
     }

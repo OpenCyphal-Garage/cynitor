@@ -1,8 +1,19 @@
 // Telemetry cache and per-node accessors. Reads/writes the latestBy*
 // maps and subjectHistory in `state` (state.js). No DOM access here.
 
+const isNodeDisappeared = (nodeId) => {
+  const nodes = state.latestNodesPayload?.nodes;
+  if (!nodes) return false;
+  const node = nodes[String(nodeId)];
+  return node?.has_disappeared === true;
+};
+
 const cacheEvent = (event) => {
   if (!event || !Number.isInteger(event.subject_id)) {
+    return;
+  }
+
+  if (Number.isInteger(event.publisher_node_id) && isNodeDisappeared(event.publisher_node_id)) {
     return;
   }
 
