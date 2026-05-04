@@ -3,6 +3,9 @@
 
 const STORAGE_KEY = 'pycyphal.dashboard.settings.v2';
 
+// Connection state enums — prevent impossible flag combinations
+const CONN = Object.freeze({ IDLE: 'idle', CONNECTING: 'connecting', CONNECTED: 'connected', DISCONNECTING: 'disconnecting' });
+
 const state = {
   ws: null,
   wsReconnectTimer: null,
@@ -14,9 +17,7 @@ const state = {
   nodesTimer: null,
   throughputTimer: null,
   dashboardConnected: false,
-  canConnected: false,
-  canConnecting: false,
-  canDisconnecting: false,
+  canState: CONN.IDLE,
   preferredCanInterface: '',
   favouriteNodeIds: new Set(),
   deletedNodeIds: new Set(),
@@ -39,6 +40,14 @@ const state = {
   detailPanelCollapsed: false,
   splitRatio: 0.6,
 };
+
+// Derived accessors for CAN connection state — keeps existing code readable
+// while the source of truth is the single `state.canState` enum.
+Object.defineProperties(state, {
+  canConnected:     { get() { return this.canState === CONN.CONNECTED; },     set(v) { this.canState = v ? CONN.CONNECTED : CONN.IDLE; } },
+  canConnecting:    { get() { return this.canState === CONN.CONNECTING; },    set(v) { if (v) this.canState = CONN.CONNECTING; else if (this.canState === CONN.CONNECTING) this.canState = CONN.IDLE; } },
+  canDisconnecting: { get() { return this.canState === CONN.DISCONNECTING; }, set(v) { if (v) this.canState = CONN.DISCONNECTING; else if (this.canState === CONN.DISCONNECTING) this.canState = CONN.IDLE; } },
+});
 
 // Tabulator instance. Initialized in nodes-table.js#initNodesTable.
 let nodesTabulator = null;
