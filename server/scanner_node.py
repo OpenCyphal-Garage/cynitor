@@ -622,6 +622,28 @@ class ScannerNode:
             })
         return results
 
+    @staticmethod
+    def _parse_array_value(value_str: str) -> list[str]:
+        """Parse a value string that may be a scalar or array: '1200', '[1200]', '[1000000 4000000]', '[1, 2, 3]'."""
+        s = value_str.strip()
+        if s.startswith('[') and s.endswith(']'):
+            s = s[1:-1].strip()
+        if not s:
+            return []
+        parts = [p.strip() for p in re.split(r'[,\s]+', s) if p.strip()]
+        return parts
+
+    @staticmethod
+    def _format_register_value(value) -> str:
+        """Format a register value for display — scalars as plain values, arrays with brackets."""
+        if value is None:
+            return "N/A"
+        if isinstance(value, np.ndarray):
+            if value.size == 1:
+                return str(value.item())
+            return ', '.join(str(v) for v in value.tolist())
+        return str(value)
+
     def _describe_field(self, attr) -> dict[str, Any]:
         """Build a JSON-safe field descriptor from a pydsdl attribute."""
         type_str = str(attr.data_type)
@@ -770,7 +792,7 @@ class ScannerNode:
                         # Format the register data
                         register_data = {
                             "register_name": register_name,
-                            "value": str(value) if value is not None else "N/A",
+                            "value": self._format_register_value(value),
                             "type": field_name if field_name else "unknown",
                             "access": access_type
                         }
@@ -983,29 +1005,37 @@ class ScannerNode:
                     case 'unstructured':
                         new_value.unstructured = uavcan.primitive.Unstructured_1_0(value=uavcan.primitive.array.UnstructuredElement1_0(data=bytearray.fromhex(value)))
                     case 'bit':
-                        new_value.bit = uavcan.primitive.array.Bit_1_0(value=bool(int(value)))
+                        parsed = self._parse_array_value(value)
+                        valid_bool = {'true': True, '1': True, 'false': False, '0': False}
+                        bools = []
+                        for v in parsed:
+                            key = v.lower()
+                            if key not in valid_bool:
+                                raise ValueError(f"Invalid boolean: '{v}' — use True/False or 1/0")
+                            bools.append(valid_bool[key])
+                        new_value.bit = uavcan.primitive.array.Bit_1_0(value=bools)
                     case 'integer64':
-                        new_value.integer64 = uavcan.primitive.array.Integer64_1_0(value=int(value))
+                        new_value.integer64 = uavcan.primitive.array.Integer64_1_0(value=[int(v) for v in self._parse_array_value(value)])
                     case 'integer32':
-                        new_value.integer32 = uavcan.primitive.array.Integer32_1_0(value=int(value))
+                        new_value.integer32 = uavcan.primitive.array.Integer32_1_0(value=[int(v) for v in self._parse_array_value(value)])
                     case 'integer16':
-                        new_value.integer16 = uavcan.primitive.array.Integer16_1_0(value=int(value))
+                        new_value.integer16 = uavcan.primitive.array.Integer16_1_0(value=[int(v) for v in self._parse_array_value(value)])
                     case 'integer8':
-                        new_value.integer8 = uavcan.primitive.array.Integer8_1_0(value=int(value))
+                        new_value.integer8 = uavcan.primitive.array.Integer8_1_0(value=[int(v) for v in self._parse_array_value(value)])
                     case 'natural64':
-                        new_value.natural64 = uavcan.primitive.array.Natural64_1_0(value=int(value))
+                        new_value.natural64 = uavcan.primitive.array.Natural64_1_0(value=[int(v) for v in self._parse_array_value(value)])
                     case 'natural32':
-                        new_value.natural32 = uavcan.primitive.array.Natural32_1_0(value=int(value))
+                        new_value.natural32 = uavcan.primitive.array.Natural32_1_0(value=[int(v) for v in self._parse_array_value(value)])
                     case 'natural16':
-                        new_value.natural16 = uavcan.primitive.array.Natural16_1_0(value=int(value))
+                        new_value.natural16 = uavcan.primitive.array.Natural16_1_0(value=[int(v) for v in self._parse_array_value(value)])
                     case 'natural8':
-                        new_value.natural8 = uavcan.primitive.array.Natural8_1_0(value=int(value))
+                        new_value.natural8 = uavcan.primitive.array.Natural8_1_0(value=[int(v) for v in self._parse_array_value(value)])
                     case 'real64':
-                        new_value.real64 = uavcan.primitive.array.Real64_1_0(value=float(value))
+                        new_value.real64 = uavcan.primitive.array.Real64_1_0(value=[float(v) for v in self._parse_array_value(value)])
                     case 'real32':
-                        new_value.real32 = uavcan.primitive.array.Real32_1_0(value=float(value))
+                        new_value.real32 = uavcan.primitive.array.Real32_1_0(value=[float(v) for v in self._parse_array_value(value)])
                     case 'real16':
-                        new_value.real16 = uavcan.primitive.array.Real16_1_0(value=float(value))
+                        new_value.real16 = uavcan.primitive.array.Real16_1_0(value=[float(v) for v in self._parse_array_value(value)])
                     case _:
                         logging.error(f"Unsupported register type '{type}'")
                         raise ValueError(f"Unsupported register type '{type}'")
