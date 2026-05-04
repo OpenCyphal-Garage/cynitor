@@ -244,6 +244,10 @@ const disconnectAll = ({ persist = true } = {}) => {
   state.dashboardConnected = false;
   state.canConnected = false;
   state.busUtilization = null;
+  state.latestBySubject.clear();
+  state.latestByNode.clear();
+  state.subjectHistory.clear();
+  state.eventCount = 0;
   stopStatusPolling();
   stopCanStartupDelay();
   stopNodesPolling();
