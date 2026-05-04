@@ -171,9 +171,8 @@ updateSemaphores();
 // Restore previous connection state
 (async () => {
   if (state.pendingReconnect) {
-    delete state.pendingReconnect;
-    delete state.pendingCanReconnect;
     await connectDashboard();
+    delete state.pendingReconnect;
   }
   updateSemaphores();
 })();
