@@ -393,6 +393,7 @@ const schedulePostCanStartup = (delayMs = 10000) => {
 };
 
 const connectDashboard = async () => {
+  if (state.canConnecting || state.canDisconnecting) return;
   if (state.dashboardConnected) {
     disconnectAll();
     return;
@@ -433,6 +434,7 @@ const connectDashboard = async () => {
 };
 
 const connectCan = async () => {
+  if (state.canConnecting || state.canDisconnecting) return;
   if (state.canConnected) {
     // Disconnect CAN
     state.canDisconnecting = true;
