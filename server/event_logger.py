@@ -31,7 +31,8 @@ class EventLogger:
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
         self._running = False
         self._task: Optional[asyncio.Task] = None
-        
+        self._write_count = 0
+
         self._init_db()
     
     def _init_db(self) -> None:
@@ -59,6 +60,7 @@ class EventLogger:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_subject ON events(subject_id)")
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_node ON events(publisher_node_id)")
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON events(timestamp_unix)")
+                conn.execute("PRAGMA journal_mode=WAL")
             logger.info(f"Database initialized at {self.db_path}")
         except Exception as e:
             logger.error(f"Failed to initialize database: {e}", exc_info=True)
@@ -154,8 +156,9 @@ class EventLogger:
                     json.dumps(event.get("attributes", []))
                 ))
 
-            # Prune old events if needed
-            if self.max_events > 0:
+            self._write_count += len(events)
+            if self.max_events > 0 and self._write_count >= self.max_events:
+                self._write_count = 0
                 cursor.execute(f"""
                     DELETE FROM events
                     WHERE id NOT IN (
