@@ -174,7 +174,7 @@ class ScannerNode:
                     logging.debug(f"Node {node_id} subject {subject_id}: {dots_to_underscores}")
 
                 # Process service registers (uavcan.srv.<service_id>.type)
-                elif re.match(r'^uavcan\\.srv\\.(\\d+)\\.type$', reg_name):
+                elif re.match(r'^uavcan\.srv\.(\d+)\.type$', reg_name):
                     service_id_match = re.match(r'^uavcan\.srv\.(\d+)\.type$', reg_name)
                     service_id = int(service_id_match.group(1))
                     
@@ -207,7 +207,7 @@ class ScannerNode:
             # Step 3: Check for standard services
             for standard_service_id, service_type in self.STANDARD_SERVICES.items():
                 if standard_service_id not in dsdl_srv_messages:
-                    dsdl_srv_messages[standard_service_id] = re.sub(r'(?<=\d)\\.(?=\d)|(?<=\w)\\.(?=\d)', '_', service_type)
+                    dsdl_srv_messages[standard_service_id] = re.sub(r'(?<=\d)\.(?=\d)|(?<=\w)\.(?=\d)', '_', service_type)
                     logging.debug(f"Node {node_id} standard service {standard_service_id}: {dsdl_srv_messages[standard_service_id]}")
 
             logging.debug(f"Node {node_id} has registered messages: {dsdl_pub_messages}, services: {dsdl_srv_messages}")
