@@ -1322,17 +1322,36 @@ button:focus-visible,
 .svc-fieldset {
   border: 1px solid var(--border-subtle);
   border-radius: 0.375rem;
-  padding: 0.5rem 0.625rem;
   margin: 0;
   background: var(--bg);
+}
+
+.svc-fieldset-toggle {
+  cursor: pointer;
+  padding: 0.375rem 0.5rem;
+  list-style: none;
+  user-select: none;
+}
+
+.svc-fieldset-toggle::-webkit-details-marker { display: none; }
+
+.svc-fieldset-toggle::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 0.375rem;
+  font-size: 0.625rem;
+  transition: transform 0.15s;
+}
+
+.svc-fieldset[open] > .svc-fieldset-toggle::before {
+  transform: rotate(90deg);
+}
+
+.svc-fieldset-body {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
-}
-
-.svc-fieldset legend {
-  padding: 0 0.25rem;
-  font-size: 0.75rem;
+  padding: 0.25rem 0.625rem 0.5rem;
 }
 
 .svc-field-label {

@@ -42,10 +42,10 @@ const renderServiceField = (field) => {
                placeholder="${escapeHtml(sub.type)}" />
       </div>
     `).join('');
-    return `<fieldset class="svc-fieldset">
-      <legend class="svc-field-label">${escapeHtml(field.name)} <span class="svc-type-hint">${escapeHtml(typeHint)}</span></legend>
-      ${subInputs}
-    </fieldset>`;
+    return `<details class="svc-fieldset">
+      <summary class="svc-field-label svc-fieldset-toggle">${escapeHtml(field.name)} <span class="svc-type-hint">${escapeHtml(typeHint)}</span></summary>
+      <div class="svc-fieldset-body">${subInputs}</div>
+    </details>`;
   }
   return `<div class="svc-field">
     <label class="svc-field-label" for="${id}">
