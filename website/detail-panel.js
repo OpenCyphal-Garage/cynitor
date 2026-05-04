@@ -494,6 +494,10 @@ const renderSelectedNodeContent = () => {
     startPlotAnim();
   };
 
+  if (state.selectedDetailTab !== 'servers') {
+    delete content.dataset.svcTab;
+  }
+
   if (state.selectedDetailTab === 'publishers') {
     renderSubjectTab('Publishers', buildSubjectDetailData(node.publishers || [], node.node_id));
     return;
@@ -506,8 +510,8 @@ const renderSelectedNodeContent = () => {
 
   if (state.selectedDetailTab === 'servers') {
     stopPlotAnim();
-    const existing = content.querySelector('.svc-panel, .svc-state, .svc-panel-skeleton');
-    if (!existing || content.dataset.svcNodeId !== String(state.selectedNodeId)) {
+    if (content.dataset.svcTab !== 'servers' || content.dataset.svcNodeId !== String(state.selectedNodeId)) {
+      content.dataset.svcTab = 'servers';
       content.dataset.svcNodeId = String(state.selectedNodeId);
       renderServicesTab();
     }
