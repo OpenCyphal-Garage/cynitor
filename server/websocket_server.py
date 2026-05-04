@@ -236,10 +236,12 @@ class WebSocketServer:
 
         try:
             updated = await self.session.scanner.set_register(node_id, name, str(value), reg_type)
+            if updated is None:
+                return web.json_response({"error": "Write failed — no response from node"}, status=504)
             if isinstance(updated, list):
                 formatted = ', '.join(str(v) for v in updated)
             else:
-                formatted = str(updated) if updated is not None else None
+                formatted = str(updated)
             return web.json_response({"status": "ok", "name": name, "value": formatted})
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=400)

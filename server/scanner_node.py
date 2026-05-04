@@ -941,7 +941,7 @@ class ScannerNode:
             publisher_node_id=transfer.source_node_id,
         )
 
-    async def set_register(self, node_id: int, register_name: str, value: str, type: str) -> Any | None:
+    async def set_register(self, node_id: int, register_name: str, value: str, reg_type: str) -> Any | None:
         """
         Sets the value of a register on a remote node using uavcan.register.Access_1_0.
 
@@ -949,7 +949,7 @@ class ScannerNode:
             node_id (int): The ID of the target node.
             register_name (str): The name of the register to set.
             value (str): The new value to set (will be converted to the appropriate type).
-            type (str): The expected data type of the register (e.g., 'string', 'natural16', 'real32').
+            reg_type (str): The expected data type of the register (e.g., 'string', 'natural16', 'real32').
 
         Returns:
             Optional[Any]: The updated value (converted to JSON-serializable format) if successful, None if the operation fails.
@@ -958,7 +958,7 @@ class ScannerNode:
             ValueError: If the register is read-only, the type is incompatible, or the value is invalid.
             Exception: If the service call fails due to network issues or other errors.
         """
-        logging.info(f"Attempting to set register '{register_name}' on node_id={node_id} to value '{value}' (type: {type})")
+        logging.info(f"Attempting to set register '{register_name}' on node_id={node_id} to value '{value}' (type: {reg_type})")
 
         try:
             # Initialize or reuse the register access client for the specific node
@@ -986,20 +986,20 @@ class ScannerNode:
                 raise ValueError(f"Register '{register_name}' is read-only")
 
             # Step 2: Validate the provided type against the register's actual type
-            if current_field_name != type:
-                logging.warning(f"Provided type '{type}' does not match register type '{current_field_name}'")
+            if current_field_name != reg_type:
+                logging.warning(f"Provided type '{reg_type}' does not match register type '{current_field_name}'")
                 numeric_types = {'integer64', 'integer32', 'integer16', 'integer8',
                                 'natural64', 'natural32', 'natural16', 'natural8',
                                 'real64', 'real32', 'real16'}
-                if (type in numeric_types and current_field_name in numeric_types):
-                    logging.warning(f"Type mismatch tolerated: converting '{type}' to '{current_field_name}'")
+                if (reg_type in numeric_types and current_field_name in numeric_types):
+                    logging.warning(f"Type mismatch tolerated: converting '{reg_type}' to '{current_field_name}'")
                 else:
-                    raise ValueError(f"Type mismatch: expected '{current_field_name}', got '{type}'")
+                    raise ValueError(f"Type mismatch: expected '{current_field_name}', got '{reg_type}'")
 
             # Step 3: Convert the input value to the appropriate UAVCAN type
             new_value = uavcan.register.Value_1_0()
             try:
-                match type:
+                match reg_type:
                     case 'string':
                         new_value.string = uavcan.primitive.String_1_0(value=value.encode("utf-8"))
                     case 'unstructured':
@@ -1037,11 +1037,11 @@ class ScannerNode:
                     case 'real16':
                         new_value.real16 = uavcan.primitive.array.Real16_1_0(value=[float(v) for v in self._parse_array_value(value)])
                     case _:
-                        logging.error(f"Unsupported register type '{type}'")
-                        raise ValueError(f"Unsupported register type '{type}'")
+                        logging.error(f"Unsupported register type '{reg_type}'")
+                        raise ValueError(f"Unsupported register type '{reg_type}'")
             except ValueError as e:
-                logging.error(f"Invalid value '{value}' for type '{type}': {str(e)}")
-                raise ValueError(f"Invalid value '{value}' for type '{type}'")
+                logging.error(f"Invalid value '{value}' for type '{reg_type}': {str(e)}")
+                raise ValueError(f"Invalid value '{value}' for type '{reg_type}'")
 
             # Step 4: Send the update request
             access_request.value = new_value
