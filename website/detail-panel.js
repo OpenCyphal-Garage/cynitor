@@ -76,75 +76,39 @@ const updateSubjectTableInPlace = (container, subjects) => {
   return true;
 };
 
-const renderPlot = (container) => {
-  const plotArea = container.querySelector('.detail-plot-area');
-  if (!plotArea) return;
+const PLOT_MARGIN = { top: 8, right: 12, bottom: 24, left: 48 };
+const PLOT_PANEL_GAP = 8;
+const PLOT_WINDOW_SECS = 60;
 
-  const sid = state.selectedPlotSubject;
-  if (sid == null) {
-    plotArea.innerHTML = '<div class="plot-empty">Click a subject to plot its data</div>';
-    return;
-  }
-
+const collectPlotSeries = (sid) => {
   const allSeries = [];
   for (const [key, buf] of state.subjectHistory) {
     if (!key.startsWith(sid + ':')) continue;
     if (buf.length < 2) continue;
     allSeries.push({ name: key.split(':')[1], data: buf });
   }
+  return allSeries;
+};
 
-  if (!allSeries.length) {
-    plotArea.innerHTML = '<div class="plot-empty">No numeric data to plot</div>';
-    return;
-  }
-
-  // Hidden-series state is keyed by subject so unchecking "uptime" on
-  // one subject doesn't carry over when the user clicks a different one.
-  if (!state.hiddenPlotSeries.has(sid)) {
-    state.hiddenPlotSeries.set(sid, new Set());
-  }
-  const hidden = state.hiddenPlotSeries.get(sid);
-
-  const visible = allSeries.filter((s) => !hidden.has(s.name));
-
-  const margin = { top: 8, right: 12, bottom: 24, left: 48 };
-  const PANEL_GAP = 8;
-  const rect = plotArea.getBoundingClientRect();
-  const w = rect.width - margin.left - margin.right;
-  // Title + legend share a single header row whose height we measure
-  // each render — pills wrap to a second row on subjects with many
-  // attributes, so a fixed value would lie.
-  const headerEl = plotArea.querySelector('.plot-header');
-  const HEADER_H = headerEl ? Math.max(28, Math.ceil(headerEl.getBoundingClientRect().height)) : 28;
-  const totalPanelsH = rect.height - margin.top - margin.bottom - HEADER_H;
-  if (w < 40 || totalPanelsH < 40) return;
-
-  // Time domain across all visible series (shared x-axis)
-  let tDataMin = Infinity, tDataMax = -Infinity;
+const computePlotScales = (visible, w, totalPanelsH) => {
+  let tDataMax = -Infinity;
   for (const s of visible) {
     for (const p of s.data) {
-      if (p.t < tDataMin) tDataMin = p.t;
       if (p.t > tDataMax) tDataMax = p.t;
     }
   }
-  if (!isFinite(tDataMin)) {
-    tDataMin = Date.now() / 1000 - 60;
-    tDataMax = Date.now() / 1000;
-  }
+  if (!isFinite(tDataMax)) tDataMax = Date.now() / 1000;
 
-  const WINDOW_SECS = 60;
   const now = Date.now() / 1000;
   const dataIsLive = (now - tDataMax) < PLOT_STALE_THRESHOLD;
   const tRight = dataIsLive ? now : tDataMax;
-  const tWindowStart = tRight - WINDOW_SECS;
-  const tWindowEnd = tRight + WINDOW_SECS * 0.5;
-  const xScale = d3.scaleLinear().domain([tWindowStart, tWindowEnd]).range([0, w]);
+  const xScale = d3.scaleLinear()
+    .domain([tRight - PLOT_WINDOW_SECS, tRight + PLOT_WINDOW_SECS * 0.5])
+    .range([0, w]);
 
-  // Per-series y-scale: each attribute gets its own panel and its own
-  // domain so a fast-growing uptime doesn't squash a small voltage.
   const numPanels = Math.max(1, visible.length);
-  const panelH = (totalPanelsH - (numPanels - 1) * PANEL_GAP) / numPanels;
-  const seriesScales = visible.map((s) => {
+  const panelH = (totalPanelsH - (numPanels - 1) * PLOT_PANEL_GAP) / numPanels;
+  const yScales = visible.map((s) => {
     let min = Infinity, max = -Infinity;
     for (const p of s.data) {
       if (p.v < min) min = p.v;
@@ -155,54 +119,210 @@ const renderPlot = (container) => {
     return d3.scaleLinear().domain([min - pad, max + pad]).range([panelH, 0]);
   });
 
-  // One-time SVG setup. Detect both "no plot yet" and "old single-panel
-  // structure" so a hot reload after the multi-panel refactor wipes
-  // cleanly.
-  let gNode = plotArea.querySelector('.plot-root');
-  if (!gNode || !gNode.querySelector('.plot-panels') || !plotArea.querySelector('.plot-header')) {
-    plotArea.innerHTML = '';
-    const header = document.createElement('div');
-    header.className = 'plot-header';
-    const titleNode = document.createElement('div');
-    titleNode.className = 'plot-title';
-    header.appendChild(titleNode);
-    const legendNode = document.createElement('div');
-    legendNode.className = 'plot-legend';
-    // Look up the active subject's hidden set fresh each click so the
-    // listener stays correct after the user switches subjects.
-    legendNode.addEventListener('click', (e) => {
-      const btn = e.target.closest('button[data-series]');
-      if (!btn) return;
-      const activeSid = state.selectedPlotSubject;
-      if (activeSid == null) return;
-      if (!state.hiddenPlotSeries.has(activeSid)) {
-        state.hiddenPlotSeries.set(activeSid, new Set());
-      }
-      const activeHidden = state.hiddenPlotSeries.get(activeSid);
-      const name = btn.dataset.series;
-      if (activeHidden.has(name)) activeHidden.delete(name);
-      else activeHidden.add(name);
-      // Update class immediately so the click feels responsive even
-      // when the next plot tick is up to PLOT_TICK_MS away.
-      const isActive = !activeHidden.has(name);
+  return { xScale, yScales, panelH, dataIsLive };
+};
+
+const setupPlotSvg = (plotArea, margin) => {
+  plotArea.innerHTML = '';
+  const header = document.createElement('div');
+  header.className = 'plot-header';
+  const titleNode = document.createElement('div');
+  titleNode.className = 'plot-title';
+  header.appendChild(titleNode);
+  const legendNode = document.createElement('div');
+  legendNode.className = 'plot-legend';
+  legendNode.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-series]');
+    if (!btn) return;
+    const activeSid = state.selectedPlotSubject;
+    if (activeSid == null) return;
+    if (!state.hiddenPlotSeries.has(activeSid)) {
+      state.hiddenPlotSeries.set(activeSid, new Set());
+    }
+    const activeHidden = state.hiddenPlotSeries.get(activeSid);
+    const name = btn.dataset.series;
+    if (activeHidden.has(name)) activeHidden.delete(name);
+    else activeHidden.add(name);
+    const isActive = !activeHidden.has(name);
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-pressed', String(isActive));
+    startPlotAnim();
+  });
+  header.appendChild(legendNode);
+  plotArea.appendChild(header);
+  const svgEl = d3.select(plotArea).append('svg')
+    .attr('width', '100%')
+    .attr('aria-label', 'Time series plot')
+    .attr('tabindex', '0')
+    .attr('role', 'img');
+  const g = svgEl.append('g').attr('class', 'plot-root')
+    .attr('transform', `translate(${margin.left},${margin.top})`);
+  g.append('g').attr('class', 'plot-panels');
+  g.append('g').attr('class', 'plot-x-axis');
+  g.append('line').attr('class', 'plot-crosshair').attr('opacity', 0);
+  g.append('rect').attr('class', 'plot-overlay').attr('fill', 'none').style('pointer-events', 'all');
+  const tooltip = document.createElement('div');
+  tooltip.className = 'plot-tooltip';
+  tooltip.style.display = 'none';
+  plotArea.appendChild(tooltip);
+  return g.node();
+};
+
+const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPanelsH) => {
+  const panelsG = g.select('.plot-panels');
+  const panels = panelsG.selectAll('.plot-panel').data(visible, (d) => d.name);
+  const panelsEnter = panels.enter().append('g').attr('class', 'plot-panel');
+  panelsEnter.append('clipPath').attr('id', (d) => `panel-clip-${sid}-${d.name}`)
+    .append('rect');
+  panelsEnter.append('g').attr('class', 'panel-y-axis');
+  panelsEnter.append('g').attr('class', 'panel-line')
+    .append('path').attr('fill', 'none').attr('stroke-width', 1.5);
+  panelsEnter.append('text').attr('class', 'panel-label').attr('x', 4).attr('y', 11);
+  panels.exit().remove();
+
+  panelsG.selectAll('.plot-panel').each(function (d, i) {
+    const yScale = yScales[i];
+    const color = PLOT_COLORS[i % PLOT_COLORS.length];
+    const panel = d3.select(this);
+    panel.attr('transform', `translate(0, ${i * (panelH + PLOT_PANEL_GAP)})`);
+    panel.select('clipPath rect').attr('width', w).attr('height', panelH);
+    panel.select('.panel-y-axis').call(d3.axisLeft(yScale).ticks(3).tickSize(2));
+    const lineGen = d3.line().x((p) => xScale(p.t)).y((p) => yScale(p.v)).curve(d3.curveLinear);
+    panel.select('.panel-line')
+      .attr('clip-path', `url(#panel-clip-${sid}-${d.name})`)
+      .select('path').attr('stroke', color).attr('d', lineGen(d.data));
+    panel.select('.panel-label').text(d.name).attr('fill', color);
+  });
+
+  const xAxis = d3.axisBottom(xScale).ticks(5).tickFormat(formatPlotTime);
+  g.select('.plot-x-axis').attr('transform', `translate(0, ${totalPanelsH})`).call(xAxis);
+  g.select('.plot-overlay').attr('width', w).attr('height', totalPanelsH);
+  g.select('.plot-crosshair').attr('y1', 0).attr('y2', totalPanelsH);
+};
+
+const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect) => {
+  const tooltipEl = plotArea.querySelector('.plot-tooltip');
+  const overlay = g.select('.plot-overlay');
+  const crosshair = g.select('.plot-crosshair');
+  const bisect = d3.bisector((d) => d.t).left;
+
+  const showCrosshairAt = (mx) => {
+    if (mx < 0 || mx > w || !visible.length) {
+      crosshair.attr('opacity', 0);
+      tooltipEl.style.display = 'none';
+      return;
+    }
+    const t0 = xScale.invert(mx);
+    const samples = visible.map((s) => {
+      const i = bisect(s.data, t0);
+      const a = s.data[i - 1];
+      const b = s.data[i];
+      const sample = !b ? a : !a ? b : (Math.abs(a.t - t0) < Math.abs(b.t - t0) ? a : b);
+      return { name: s.name, sample };
+    }).filter((x) => x.sample);
+    if (!samples.length) {
+      crosshair.attr('opacity', 0);
+      tooltipEl.style.display = 'none';
+      return;
+    }
+    crosshair.attr('opacity', 1).attr('x1', mx).attr('x2', mx);
+    const formattedT = formatPlotTime(samples[0].sample.t);
+    const rows = samples.map((s) => {
+      const idx = visible.findIndex((v) => v.name === s.name);
+      const color = PLOT_COLORS[idx % PLOT_COLORS.length];
+      const v = typeof s.sample.v === 'number' && !Number.isInteger(s.sample.v)
+        ? s.sample.v.toFixed(2) : String(s.sample.v);
+      return `<div class="plot-tooltip-row"><span class="plot-tooltip-swatch" style="background:${color}"></span><span class="plot-tooltip-name">${escapeHtml(s.name)}</span><span class="plot-tooltip-val">${escapeHtml(v)}</span></div>`;
+    }).join('');
+    tooltipEl.innerHTML = `<div class="plot-tooltip-time">${formattedT}</div>${rows}`;
+    tooltipEl.style.display = 'block';
+    let tx = mx + PLOT_MARGIN.left + 12;
+    const tw = tooltipEl.offsetWidth;
+    if (tx + tw > rect.width - 4) tx = mx + PLOT_MARGIN.left - 12 - tw;
+    tooltipEl.style.left = `${Math.max(4, tx)}px`;
+    tooltipEl.style.top = `${HEADER_H + 4}px`;
+  };
+
+  overlay
+    .on('mousemove', (event) => {
+      const [mx] = d3.pointer(event);
+      showCrosshairAt(mx);
+    })
+    .on('mouseleave', () => {
+      crosshair.attr('opacity', 0);
+      tooltipEl.style.display = 'none';
+    });
+
+  const svgEl = plotArea.querySelector('svg');
+  if (svgEl && !svgEl._kbBound) {
+    svgEl._kbBound = true;
+    let kbPos = w / 2;
+    svgEl.addEventListener('keydown', (e) => {
+      const step = w / 20;
+      if (e.key === 'ArrowLeft') { kbPos = Math.max(0, kbPos - step); }
+      else if (e.key === 'ArrowRight') { kbPos = Math.min(w, kbPos + step); }
+      else if (e.key === 'Escape') { crosshair.attr('opacity', 0); tooltipEl.style.display = 'none'; return; }
+      else return;
+      e.preventDefault();
+      showCrosshairAt(kbPos);
+    });
+  }
+};
+
+const updatePlotLegend = (plotArea, allSeries, hidden) => {
+  const legend = plotArea.querySelector('.plot-legend');
+  if (!legend) return;
+  const seriesKey = allSeries.map((s) => s.name).join('|');
+  if (legend.dataset.seriesKey !== seriesKey) {
+    legend.dataset.seriesKey = seriesKey;
+    legend.innerHTML = allSeries.map((s, i) => {
+      const isActive = !hidden.has(s.name);
+      const color = PLOT_COLORS[i % PLOT_COLORS.length];
+      return `<button type="button" class="plot-legend-item${isActive ? ' active' : ''}" data-series="${escapeHtml(s.name)}" aria-pressed="${isActive}"><span class="plot-legend-swatch" style="background:${color}"></span>${escapeHtml(s.name)}</button>`;
+    }).join('');
+  } else {
+    for (const btn of legend.querySelectorAll('button[data-series]')) {
+      const isActive = !hidden.has(btn.dataset.series);
       btn.classList.toggle('active', isActive);
       btn.setAttribute('aria-pressed', String(isActive));
-      startPlotAnim();
-    });
-    header.appendChild(legendNode);
-    plotArea.appendChild(header);
-    const svgEl = d3.select(plotArea).append('svg').attr('width', '100%');
-    const g = svgEl.append('g').attr('class', 'plot-root')
-      .attr('transform', `translate(${margin.left},${margin.top})`);
-    g.append('g').attr('class', 'plot-panels');
-    g.append('g').attr('class', 'plot-x-axis');
-    g.append('line').attr('class', 'plot-crosshair').attr('opacity', 0);
-    g.append('rect').attr('class', 'plot-overlay').attr('fill', 'none').style('pointer-events', 'all');
-    const tooltip = document.createElement('div');
-    tooltip.className = 'plot-tooltip';
-    tooltip.style.display = 'none';
-    plotArea.appendChild(tooltip);
-    gNode = g.node();
+    }
+  }
+};
+
+const renderPlot = (container) => {
+  const plotArea = container.querySelector('.detail-plot-area');
+  if (!plotArea) return;
+
+  const sid = state.selectedPlotSubject;
+  if (sid == null) {
+    plotArea.innerHTML = '<div class="plot-empty">Click a subject to plot its data</div>';
+    return;
+  }
+
+  const allSeries = collectPlotSeries(sid);
+  if (!allSeries.length) {
+    plotArea.innerHTML = '<div class="plot-empty">No numeric data to plot</div>';
+    return;
+  }
+
+  if (!state.hiddenPlotSeries.has(sid)) {
+    state.hiddenPlotSeries.set(sid, new Set());
+  }
+  const hidden = state.hiddenPlotSeries.get(sid);
+  const visible = allSeries.filter((s) => !hidden.has(s.name));
+
+  const rect = plotArea.getBoundingClientRect();
+  const w = rect.width - PLOT_MARGIN.left - PLOT_MARGIN.right;
+  const headerEl = plotArea.querySelector('.plot-header');
+  const HEADER_H = headerEl ? Math.max(28, Math.ceil(headerEl.getBoundingClientRect().height)) : 28;
+  const totalPanelsH = rect.height - PLOT_MARGIN.top - PLOT_MARGIN.bottom - HEADER_H;
+  if (w < 40 || totalPanelsH < 40) return;
+
+  const { xScale, yScales, panelH, dataIsLive } = computePlotScales(visible, w, totalPanelsH);
+
+  let gNode = plotArea.querySelector('.plot-root');
+  if (!gNode || !gNode.querySelector('.plot-panels') || !plotArea.querySelector('.plot-header')) {
+    gNode = setupPlotSvg(plotArea, PLOT_MARGIN);
   }
 
   const svgEl = plotArea.querySelector('svg');
@@ -218,123 +338,9 @@ const renderPlot = (container) => {
   }
 
   const g = d3.select(gNode);
-  const panelsG = g.select('.plot-panels');
-
-  // Stacked per-attribute panels. Data joined by attribute name so a
-  // panel persists across renders and only its line/axis update.
-  const panels = panelsG.selectAll('.plot-panel').data(visible, (d) => d.name);
-  const panelsEnter = panels.enter().append('g').attr('class', 'plot-panel');
-  panelsEnter.append('clipPath').attr('id', (d) => `panel-clip-${sid}-${d.name}`)
-    .append('rect');
-  panelsEnter.append('g').attr('class', 'panel-y-axis');
-  panelsEnter.append('g').attr('class', 'panel-line')
-    .append('path').attr('fill', 'none').attr('stroke-width', 1.5);
-  panelsEnter.append('text').attr('class', 'panel-label').attr('x', 4).attr('y', 11);
-  panels.exit().remove();
-
-  panelsG.selectAll('.plot-panel').each(function (d, i) {
-    const yScale = seriesScales[i];
-    const color = PLOT_COLORS[i % PLOT_COLORS.length];
-    const panel = d3.select(this);
-    const panelY = i * (panelH + PANEL_GAP);
-    panel.attr('transform', `translate(0, ${panelY})`);
-    panel.select('clipPath rect').attr('width', w).attr('height', panelH);
-    panel.select('.panel-y-axis').call(d3.axisLeft(yScale).ticks(3).tickSize(2));
-    const lineGen = d3.line()
-      .x((p) => xScale(p.t))
-      .y((p) => yScale(p.v))
-      .curve(d3.curveLinear);
-    panel.select('.panel-line')
-      .attr('clip-path', `url(#panel-clip-${sid}-${d.name})`)
-      .select('path')
-      .attr('stroke', color)
-      .attr('d', lineGen(d.data));
-    panel.select('.panel-label')
-      .text(d.name)
-      .attr('fill', color);
-  });
-
-  // Shared x-axis at bottom of the stack
-  const xAxis = d3.axisBottom(xScale).ticks(5).tickFormat(formatPlotTime);
-  g.select('.plot-x-axis')
-    .attr('transform', `translate(0, ${totalPanelsH})`)
-    .call(xAxis);
-
-  // Crosshair + overlay span the full panel stack
-  g.select('.plot-overlay').attr('width', w).attr('height', totalPanelsH);
-  g.select('.plot-crosshair').attr('y1', 0).attr('y2', totalPanelsH);
-
-  const tooltipEl = plotArea.querySelector('.plot-tooltip');
-  const overlay = g.select('.plot-overlay');
-  const crosshair = g.select('.plot-crosshair');
-  const bisect = d3.bisector((d) => d.t).left;
-
-  overlay
-    .on('mousemove', (event) => {
-      const [mx] = d3.pointer(event);
-      if (mx < 0 || mx > w || !visible.length) {
-        crosshair.attr('opacity', 0);
-        tooltipEl.style.display = 'none';
-        return;
-      }
-      const t0 = xScale.invert(mx);
-      const samples = visible.map((s) => {
-        const i = bisect(s.data, t0);
-        const a = s.data[i - 1];
-        const b = s.data[i];
-        const sample = !b ? a : !a ? b : (Math.abs(a.t - t0) < Math.abs(b.t - t0) ? a : b);
-        return { name: s.name, sample };
-      }).filter((x) => x.sample);
-      if (!samples.length) {
-        crosshair.attr('opacity', 0);
-        tooltipEl.style.display = 'none';
-        return;
-      }
-      crosshair.attr('opacity', 1).attr('x1', mx).attr('x2', mx);
-      const formattedT = formatPlotTime(samples[0].sample.t);
-      const rows = samples.map((s) => {
-        const idx = visible.findIndex((v) => v.name === s.name);
-        const color = PLOT_COLORS[idx % PLOT_COLORS.length];
-        const v = typeof s.sample.v === 'number' && !Number.isInteger(s.sample.v)
-          ? s.sample.v.toFixed(2)
-          : String(s.sample.v);
-        return `<div class="plot-tooltip-row"><span class="plot-tooltip-swatch" style="background:${color}"></span><span class="plot-tooltip-name">${escapeHtml(s.name)}</span><span class="plot-tooltip-val">${escapeHtml(v)}</span></div>`;
-      }).join('');
-      tooltipEl.innerHTML = `<div class="plot-tooltip-time">${formattedT}</div>${rows}`;
-      tooltipEl.style.display = 'block';
-      let tx = mx + margin.left + 12;
-      const tw = tooltipEl.offsetWidth;
-      if (tx + tw > rect.width - 4) tx = mx + margin.left - 12 - tw;
-      tooltipEl.style.left = `${Math.max(4, tx)}px`;
-      tooltipEl.style.top = `${HEADER_H + 4}px`;
-    })
-    .on('mouseleave', () => {
-      crosshair.attr('opacity', 0);
-      tooltipEl.style.display = 'none';
-    });
-
-  // Only rebuild the legend's DOM when the series set actually changes;
-  // otherwise update each pill's active class in place. Rebuilding the
-  // innerHTML on every plot tick was destroying the pill elements
-  // mid-click, eating clicks and creating a 10Hz visual flicker.
-  const legend = plotArea.querySelector('.plot-legend');
-  if (legend) {
-    const seriesKey = allSeries.map((s) => s.name).join('|');
-    if (legend.dataset.seriesKey !== seriesKey) {
-      legend.dataset.seriesKey = seriesKey;
-      legend.innerHTML = allSeries.map((s, i) => {
-        const isActive = !hidden.has(s.name);
-        const color = PLOT_COLORS[i % PLOT_COLORS.length];
-        return `<button type="button" class="plot-legend-item${isActive ? ' active' : ''}" data-series="${escapeHtml(s.name)}" aria-pressed="${isActive}"><span class="plot-legend-swatch" style="background:${color}"></span>${escapeHtml(s.name)}</button>`;
-      }).join('');
-    } else {
-      for (const btn of legend.querySelectorAll('button[data-series]')) {
-        const isActive = !hidden.has(btn.dataset.series);
-        btn.classList.toggle('active', isActive);
-        btn.setAttribute('aria-pressed', String(isActive));
-      }
-    }
-  }
+  renderPanelLines(g, sid, visible, xScale, yScales, panelH, w, totalPanelsH);
+  bindPlotTooltip(g, plotArea, visible, xScale, w, HEADER_H, rect);
+  updatePlotLegend(plotArea, allSeries, hidden);
 
   return dataIsLive;
 };
@@ -348,8 +354,10 @@ const stopPlotAnim = () => {
 
 const startPlotAnim = () => {
   stopPlotAnim();
+  if (state.detailPanelCollapsed || state.selectedPlotSubject == null) return;
   const container = el('selectedNodeContent');
   const tick = () => {
+    if (state.detailPanelCollapsed) { state.plotTimer = null; return; }
     const isLive = renderPlot(container);
     if (isLive) {
       state.plotTimer = window.setTimeout(tick, PLOT_TICK_MS);
