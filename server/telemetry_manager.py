@@ -163,6 +163,14 @@ class TelemetryManager:
             return None
         return {"node_id": node_id, "services": services}
 
+    def get_client_info(self, node_id: int) -> Optional[dict[str, Any]]:
+        """Return enriched client port info: type names and possible server nodes."""
+        node = self.scanner.all_nodes.get(node_id)
+        if not node or not node.has_appeared:
+            return None
+        clients = self.scanner.get_client_info(node_id)
+        return {"node_id": node_id, "clients": clients}
+
     @staticmethod
     def _to_builtin_int(value: Any) -> Optional[int]:
         """Convert NumPy/PyCyphal integer-like values into plain Python ints."""

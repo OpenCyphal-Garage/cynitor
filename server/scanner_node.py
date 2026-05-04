@@ -75,7 +75,8 @@ class ScannerNode:
         self.active_publishers: dict[int, set] = {}                        # Maps subject_id to set of publisher node_ids
         self.services: set[str] = set()
         self.service_metadata = {}  # (node_id, service_id) -> {"namespace": str, "service_name": str}
-        self.service_clients = {}   
+        self.service_clients = {}
+        self.node_service_types: dict[int, dict[int, str]] = {}  # node_id -> {service_id -> type_string}
         try:
             self._node.start()
         except Exception as e:
@@ -596,6 +597,30 @@ class ScannerNode:
             })
 
         return services
+
+    def get_client_info(self, node_id: int) -> list[dict[str, Any]]:
+        """Return enriched info for client ports: type name and possible server nodes."""
+        node = self.all_nodes.get(node_id)
+        if not node or not node.has_appeared or not node.has_clients:
+            return []
+
+        type_map = self.node_service_types.get(node_id, {})
+        results = []
+        for cid in node.client_ServiceIDs:
+            cid_int = int(cid)
+            type_str = type_map.get(cid_int)
+            server_nodes = []
+            for nid, n in self.all_nodes.items():
+                if nid == node_id or not n.has_appeared or n.has_disappeared:
+                    continue
+                if n.has_servers and cid_int in [int(s) for s in n.server_ServiceIDs]:
+                    server_nodes.append(nid)
+            results.append({
+                "service_id": cid_int,
+                "full_type": type_str,
+                "server_nodes": sorted(server_nodes),
+            })
+        return results
 
     def _describe_field(self, attr) -> dict[str, Any]:
         """Build a JSON-safe field descriptor from a pydsdl attribute."""

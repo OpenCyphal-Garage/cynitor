@@ -72,6 +72,7 @@ class WebSocketServer:
         self.app.router.add_get('/api/logs', self._get_logs)
         self.app.router.add_get('/api/health', self._health_check)
         self.app.router.add_get('/api/services/{node_id}', self._get_services)
+        self.app.router.add_get('/api/clients/{node_id}', self._get_clients)
         self.app.router.add_post('/api/services/{node_id}/{service_id}/call', self._call_service)
         self.app.router.add_post('/api/can/connect', self._can_connect)
         self.app.router.add_post('/api/can/disconnect', self._can_disconnect)
@@ -175,6 +176,21 @@ class WebSocketServer:
         if schema is None:
             return web.json_response({"error": f"Node {node_id} not found"}, status=404)
         return web.json_response(schema)
+
+    async def _get_clients(self, request: web.Request) -> web.Response:
+        """Return enriched client port info for a node."""
+        try:
+            node_id = int(request.match_info['node_id'])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid node_id"}, status=400)
+
+        if not self.session.is_running:
+            return web.json_response({"error": "CAN bus not connected"}, status=503)
+
+        info = self.session.telemetry.get_client_info(node_id)
+        if info is None:
+            return web.json_response({"error": f"Node {node_id} not found"}, status=404)
+        return web.json_response(info)
 
     async def _call_service(self, request: web.Request) -> web.Response:
         """Invoke a service on a remote node and return the response."""

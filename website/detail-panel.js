@@ -394,26 +394,63 @@ const bindSplitHandle = (splitEl) => {
   });
 };
 
-const KNOWN_SERVICE_NAMES = {
-  384: 'uavcan.register.Access_1_0',
-  385: 'uavcan.register.List_1_0',
-  430: 'uavcan.node.GetInfo_1_0',
-};
-
-const renderClientsTab = (clients) => {
-  if (!Array.isArray(clients) || !clients.length) {
-    return svcStateMsg('○', 'No clients advertised', 'This node does not use any service clients.');
-  }
+const renderClientCards = (clients, enrichedMap) => {
   const cards = clients.map((clientId) => {
-    const typeName = KNOWN_SERVICE_NAMES[clientId] || '';
+    const info = enrichedMap.get(clientId);
+    const typeName = info?.full_type || '';
+    const serverNodes = info?.server_nodes || [];
+    const serverHtml = serverNodes.length
+      ? `<span class="svc-client-servers" title="Nodes serving this service">→ node ${serverNodes.join(', ')}</span>`
+      : '';
     return `<div class="svc-card">
       <div class="svc-card-header svc-card-header-static">
         <span class="svc-service-id">${clientId}</span>
         <span class="svc-service-type" title="${escapeHtml(typeName)}">${escapeHtml(typeName || `Client ${clientId}`)}</span>
+        ${serverHtml}
       </div>
     </div>`;
   }).join('');
   return `<section class="svc-panel">${cards}</section>`;
+};
+
+const renderClientsTab = async () => {
+  const content = el('selectedNodeContent');
+  const nodeId = state.selectedNodeId;
+
+  if (!state.dashboardConnected || state.canState !== CONN.CONNECTED) {
+    content.innerHTML = svcStateMsg('○', 'No clients advertised', 'Connect to the CAN bus to see client info.');
+    return;
+  }
+  if (nodeId == null) {
+    content.innerHTML = svcStateMsg('○', 'Select a node', 'Choose a node to view its client ports.');
+    return;
+  }
+
+  const node = getSelectedNode();
+  const clients = node?.clients || [];
+  if (!clients.length) {
+    content.innerHTML = svcStateMsg('○', 'No clients advertised', 'This node does not use any service clients.');
+    return;
+  }
+
+  content.innerHTML = svcStateMsg('<span class="svc-spinner"></span>', 'Loading client info…', '');
+
+  let enriched = null;
+  try {
+    const data = await requestJson(`/api/clients/${nodeId}`);
+    enriched = data.clients || [];
+  } catch {
+    enriched = null;
+  }
+
+  if (state.selectedNodeId !== nodeId || state.selectedDetailTab !== 'clients') return;
+
+  const enrichedMap = new Map();
+  if (enriched) {
+    for (const c of enriched) enrichedMap.set(c.service_id, c);
+  }
+
+  content.innerHTML = renderClientCards(clients, enrichedMap);
 };
 
 const renderListTab = (title, items) => `
@@ -494,7 +531,7 @@ const renderSelectedNodeContent = () => {
     startPlotAnim();
   };
 
-  if (state.selectedDetailTab !== 'servers') {
+  if (state.selectedDetailTab !== 'servers' && state.selectedDetailTab !== 'clients') {
     delete content.dataset.svcTab;
   }
 
@@ -520,7 +557,11 @@ const renderSelectedNodeContent = () => {
 
   if (state.selectedDetailTab === 'clients') {
     stopPlotAnim();
-    content.innerHTML = renderClientsTab(node.clients || []);
+    if (content.dataset.svcTab !== 'clients' || content.dataset.svcNodeId !== String(state.selectedNodeId)) {
+      content.dataset.svcTab = 'clients';
+      content.dataset.svcNodeId = String(state.selectedNodeId);
+      renderClientsTab();
+    }
     return;
   }
 

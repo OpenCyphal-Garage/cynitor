@@ -1612,6 +1612,13 @@ button:focus-visible,
   color: var(--warn);
 }
 
+.svc-client-servers {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 /* ── Responsive ── */
 @media (max-width: 80rem) {
   .sidebar {

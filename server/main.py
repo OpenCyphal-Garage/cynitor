@@ -292,6 +292,7 @@ async def register_nodes(scanner, registered_nodes_list: list[int]) -> None:
 
             registered_nodes_list.append(node.node_id)
             dsdl_pub_messages, dsdl_srv_messages = await scanner.update_reg_list(node.node_id)
+            scanner.node_service_types[node.node_id] = dict(dsdl_srv_messages)
             await scanner.add_subscriptions(node.node_id, dsdl_pub_messages)
             await scanner.add_servers(node.node_id, dsdl_srv_messages)
             logger.info(
