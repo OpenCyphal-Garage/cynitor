@@ -29,6 +29,8 @@ TelemetryManager (pub-sub router)
 ✅ **Allocator Guard** - Reuses external allocator if present, otherwise starts local allocator and re-checks every 10s
 ✅ **CAN Health Monitoring** - Detects CAN bus faults (BUS-OFF, ERROR-PASSIVE, interface disappearance) and auto-disconnects
 ✅ **Bus Load Monitoring** - Real-time CAN bus utilization via `canbusload` subprocess, streamed to clients via WebSocket  
+✅ **Register Access** - Read and write Cyphal node registers via REST API  
+✅ **Offline Node Detection** - Tracks node disappearance with `last_seen` timestamps and stale state handling  
 
 ## Setup
 
@@ -265,7 +267,8 @@ Response:
             "publishers": [1235, 1236, 7509, 7510],
             "subscribers": [7509],
             "clients": [],
-            "servers": [384, 385, 430]
+            "servers": [384, 385, 430],
+            "last_seen": ["2026-05-04T12:30:45.123456"]
         },
         "74": {
             ...
@@ -380,6 +383,69 @@ Response (timeout):
 ```
 
 Returns `400` for invalid request body or attribute validation errors, `404` if the service is not found on the node, `503` if CAN is not connected.
+
+**Get client ports for a node (with type names and server cross-references):**
+```bash
+curl http://localhost:8080/api/clients/37
+```
+
+Response:
+```json
+{
+    "node_id": 37,
+    "clients": [
+        {
+            "service_id": 430,
+            "full_type": "uavcan.node.GetInfo_1_0",
+            "server_nodes": [74, 99]
+        }
+    ]
+}
+```
+
+Returns `404` if the node is not found, `503` if CAN is not connected.
+
+**Get all registers for a node:**
+```bash
+curl http://localhost:8080/api/registers/37
+```
+
+Response:
+```json
+{
+    "node_id": 37,
+    "registers": [
+        {
+            "register_name": "uavcan.node.id",
+            "value": "37",
+            "type": "natural16",
+            "access": "read-write"
+        },
+        {
+            "register_name": "uavcan.node.description",
+            "value": "My node",
+            "type": "string",
+            "access": "read-only"
+        }
+    ]
+}
+```
+
+Returns `503` if CAN is not connected.
+
+**Set a register value on a node:**
+```bash
+curl -X POST http://localhost:8080/api/registers/37/set \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "uavcan.node.id", "value": "42", "type": "natural16"}'
+```
+
+Response (success):
+```json
+{"status": "ok", "name": "uavcan.node.id", "value": "42"}
+```
+
+Returns `400` if required fields (`name`, `value`, `type`) are missing, the register is read-only, or the type is incompatible. Returns `503` if CAN is not connected.
 
 ### Event Logger (SQLite)
 
