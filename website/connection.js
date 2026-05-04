@@ -301,6 +301,7 @@ const pollStatus = async () => {
     // CAN disconnected (by another client or due to error)
     state.canConnected = false;
     state.busUtilization = null;
+    REG_CACHE.clear();
     updateCanConnectButton();
     stopCanStartupDelay();
     stopNodesPolling();
@@ -352,7 +353,7 @@ const getAllNodes = async () => {
   }
 };
 
-const NODES_POLL_INTERVAL_MS = 3000;
+const NODES_POLL_INTERVAL_MS = 1000;
 
 const startNodesPolling = () => {
   if (state.nodesTimer) {
@@ -447,6 +448,7 @@ const connectCan = async () => {
 
     state.canDisconnecting = false;
     state.canConnected = false;
+    REG_CACHE.clear();
     updateCanConnectButton();
     stopCanStartupDelay();
     stopNodesPolling();
