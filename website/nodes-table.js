@@ -106,14 +106,11 @@ const startNameEdit = (cell) => {
   input.addEventListener('blur', commit);
 };
 
-const actionsFormatter = (cell) => {
-  return `<button type="button" class="action-hide" aria-label="Hide node">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
-      <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
-      <line x1="1" y1="1" x2="23" y2="23"/>
-    </svg>
-  </button>`;
+const EYE_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+
+const actionsFormatter = () => {
+  return `<button type="button" class="action-hide" aria-label="Hide node">${EYE_ICON}</button>`;
 };
 
 const toggleFavourite = (nodeId) => {
@@ -190,7 +187,7 @@ const updateHiddenChip = () => {
     return;
   }
   chip.classList.remove('hidden');
-  chip.textContent = `Hidden: ${count}`;
+  chip.innerHTML = EYE_OFF_ICON + `<span>${count}</span>`;
 };
 
 const renderHiddenPopover = () => {
@@ -334,7 +331,7 @@ const initNodesTable = () => {
       colDef('Subscribers', 'subscribers', { minWidth: 80, widthGrow: 1, formatter: portsFormatter, headerFilterPlaceholder: 'sub', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
       colDef('Servers', 'servers', { minWidth: 80, widthGrow: 1, formatter: portsFormatter, headerFilterPlaceholder: 'srv', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
       colDef('Clients', 'clients', { minWidth: 80, widthGrow: 1, formatter: portsFormatter, headerFilterPlaceholder: 'clt', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
-      { title: '', field: '_actions', formatter: actionsFormatter, width: 36, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-actions', cellClick: (_e, cell) => { hideNode(cell.getRow().getData().id); } },
+      { title: '', field: '_actions', formatter: actionsFormatter, width: 36, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-actions', cellClick: (e, cell) => { e.stopPropagation(); hideNode(cell.getRow().getData().id); } },
     ],
   });
 
