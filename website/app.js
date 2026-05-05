@@ -128,7 +128,6 @@ const bind = () => {
     saveSettings();
   });
   el('apiBase').addEventListener('change', saveSettings);
-  el('hiddenNodesChip').addEventListener('click', renderHiddenPopover);
   document.addEventListener('click', (e) => {
     const popover = el('hiddenNodesPopover');
     if (popover && !popover.classList.contains('hidden')
@@ -170,7 +169,6 @@ updateDashboardConnectButton();
 updateCanConnectButton();
 renderSelectedNodeContent();
 updateSemaphores();
-updateHiddenChip();
 
 // Restore previous connection state
 (async () => {

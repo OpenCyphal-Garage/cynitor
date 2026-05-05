@@ -92,13 +92,16 @@ const startNameEdit = (cell) => {
   input.focus();
   input.select();
 
+  let committed = false;
   const commit = () => {
+    if (committed) return;
+    committed = true;
     setNodeAlias(row._uid, input.value);
     renderNodesTable();
   };
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); commit(); }
-    if (e.key === 'Escape') { e.preventDefault(); renderNodesTable(); }
+    if (e.key === 'Escape') { e.preventDefault(); committed = true; renderNodesTable(); }
   });
   input.addEventListener('blur', commit);
 };
@@ -156,6 +159,26 @@ const unhideAllNodes = () => {
   updateHiddenChip();
 };
 
+const injectHiddenChip = () => {
+  const actionsCol = nodesTabulator?.getColumn('_actions');
+  if (!actionsCol) return;
+  const headerEl = actionsCol.getElement();
+  if (!headerEl || headerEl.querySelector('.hidden-chip-wrap')) return;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'hidden-chip-wrap';
+  wrap.innerHTML = '<button type="button" id="hiddenNodesChip" class="hidden-chip hidden" aria-label="Show hidden nodes"></button>'
+    + '<div id="hiddenNodesPopover" class="hidden-popover hidden"></div>';
+  headerEl.style.overflow = 'visible';
+  headerEl.style.position = 'relative';
+  headerEl.appendChild(wrap);
+
+  wrap.querySelector('#hiddenNodesChip').addEventListener('click', (e) => {
+    e.stopPropagation();
+    renderHiddenPopover();
+  });
+};
+
 const updateHiddenChip = () => {
   const chip = el('hiddenNodesChip');
   if (!chip) return;
@@ -186,21 +209,28 @@ const renderHiddenPopover = () => {
     + '<div class="hidden-popover-list">';
   for (const id of state.hiddenNodeIds) {
     const node = nodes[id];
-    const name = node?.name || `Node ${id}`;
+    const name = getNodeAlias(node?.unique_id) || node?.name || `Node ${id}`;
+    const online = node && !node.has_disappeared;
+    const dotCls = online ? 'ok' : '';
+    const stateLabel = online ? 'online' : 'offline';
     html += `<div class="hidden-popover-row" data-node-id="${id}">`
+      + `<span class="hidden-popover-dot ${dotCls}"></span>`
       + `<span class="hidden-popover-id">${escapeHtml(id)}</span>`
       + `<span class="hidden-popover-name">${escapeHtml(name)}</span>`
+      + `<span class="hidden-popover-state">${stateLabel}</span>`
       + `<button type="button" class="hidden-unhide-btn" aria-label="Unhide node ${id}">Unhide</button>`
       + `</div>`;
   }
   html += '</div>';
   popover.innerHTML = html;
 
-  popover.querySelector('.hidden-unhide-all')?.addEventListener('click', () => {
+  popover.querySelector('.hidden-unhide-all')?.addEventListener('click', (e) => {
+    e.stopPropagation();
     unhideAllNodes();
   });
   for (const btn of popover.querySelectorAll('.hidden-unhide-btn')) {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
       const nodeId = Number(btn.closest('.hidden-popover-row').dataset.nodeId);
       unhideNode(nodeId);
       renderHiddenPopover();
@@ -309,6 +339,7 @@ const initNodesTable = () => {
   });
 
   nodesTabulator.on('rowClick', (_e, row) => {
+    if (_e.target.closest('.name-input')) return;
     const clickedId = row.getData().id;
     if (clickedId === state.selectedNodeId) {
       clearSelectedNode();
@@ -336,6 +367,8 @@ const initNodesTable = () => {
         nodesTabulator.setHeaderFilterValue(field, value);
       }
     }
+    injectHiddenChip();
+    updateHiddenChip();
     renderNodesTable();
   });
 };

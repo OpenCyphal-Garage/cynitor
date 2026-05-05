@@ -417,18 +417,13 @@ button:focus-visible,
   flex-direction: column;
 }
 
-/* ── Table toolbar (hidden chip) ── */
-.table-toolbar {
-  position: relative;
-  display: flex;
-  align-items: center;
-  padding: 0.25rem 0.5rem;
-  min-height: 0;
-}
-
-.table-toolbar:empty,
-.table-toolbar:not(:has(.hidden-chip:not(.hidden))) {
-  display: none;
+/* ── Hidden nodes chip (inside Tabulator header) ── */
+.hidden-chip-wrap {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  z-index: 5;
 }
 
 .hidden-chip {
@@ -451,8 +446,8 @@ button:focus-visible,
 
 .hidden-popover {
   position: absolute;
-  top: 100%;
-  left: 0.5rem;
+  top: calc(100% + 0.25rem);
+  right: 0;
   z-index: 20;
   min-width: 14rem;
   background: var(--surface);
@@ -508,6 +503,18 @@ button:focus-visible,
   border-bottom: none;
 }
 
+.hidden-popover-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--error);
+  flex-shrink: 0;
+}
+
+.hidden-popover-dot.ok {
+  background: var(--ok);
+}
+
 .hidden-popover-id {
   font-family: var(--mono);
   font-weight: 600;
@@ -521,6 +528,12 @@ button:focus-visible,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.hidden-popover-state {
+  font-size: 0.6875rem;
+  color: var(--muted);
+  flex-shrink: 0;
 }
 
 .hidden-unhide-btn {
