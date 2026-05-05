@@ -46,8 +46,9 @@ const portsFormatter = (cell) => {
 const portsToString = (arr) => (Array.isArray(arr) && arr.length ? arr.join(', ') : '-');
 
 const rateFormatter = (cell) => {
-  const v = cell.getValue();
-  return `${escapeHtml(Number(v).toFixed(1))} Hz`;
+  const v = Number(cell.getValue());
+  if (v > 0 && v < 1) return '&lt;1 Hz';
+  return `${escapeHtml(v.toFixed(1))} Hz`;
 };
 
 const favFormatter = (cell) => {
