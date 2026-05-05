@@ -21,7 +21,11 @@ const svcSkeleton = () => `
 const fetchServiceSchema = async (nodeId) => {
   try {
     const data = await requestJson(`/api/services/${nodeId}`);
-    state.serviceSchemas.set(nodeId, data.services || []);
+    const services = data.services || [];
+    state.serviceSchemas.set(nodeId, services);
+    if (services.some((s) => s.callable === false)) {
+      setTimeout(() => state.serviceSchemas.delete(nodeId), 3000);
+    }
   } catch {
     state.serviceSchemas.set(nodeId, SVC_SCHEMA_ERROR);
   }
@@ -160,7 +164,7 @@ const renderServiceCard = (svc, forSubjects = false) => {
     } else if (isSending) {
       responseHtml = `<div class="svc-response svc-response-sending">
         <span class="svc-spinner"></span>
-        <span class="svc-sending-text">Waiting for response from node ${state.selectedNodeId}…</span>
+        <span class="svc-sending-text">Waiting for response from node ${activeNodeId}…</span>
       </div>`;
     } else if (callState.status === 'done') {
       responseHtml = `<div class="svc-response svc-response-ok">
@@ -339,12 +343,6 @@ const sendServiceRequest = async (nodeId, serviceId) => {
     }
   } catch (e) {
     _setCallState({ nodeId, serviceId, status: 'error', response: null, error: e.message || 'Request failed', latencyMs: null }, inSubjectsView);
-  }
-
-  const finalState = _getCallState(inSubjectsView);
-  if (finalState && finalState.status !== 'sending') {
-    state.serviceCallHistory.unshift({ ...finalState, timestamp: Date.now() });
-    if (state.serviceCallHistory.length > 20) state.serviceCallHistory.length = 20;
   }
 
   _rerenderServiceUI(inSubjectsView, schema, nodeId);

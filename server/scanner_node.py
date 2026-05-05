@@ -553,15 +553,37 @@ class ScannerNode:
             return []
 
         services = []
+        node_types = self.node_service_types.get(node_id, {})
         for sid in node.server_ServiceIDs:
             sid_int = int(sid)
             meta = self.service_metadata.get((node_id, sid_int))
             if not meta:
+                type_str = node_types.get(sid_int) or self.STANDARD_SERVICES.get(sid_int)
+                if type_str:
+                    dot = type_str.rfind('.')
+                    ns = type_str[:dot] if dot != -1 else None
+                    sn = type_str[dot + 1:] if dot != -1 else type_str
+                    try:
+                        mod = importlib.import_module(ns)
+                        svc_cls = getattr(mod, sn)
+                        fields = []
+                        for attr in svc_cls.Request._MODEL_.attributes:
+                            fields.append(self._describe_field(attr))
+                        services.append({
+                            "service_id": sid_int,
+                            "name": sn, "namespace": ns,
+                            "full_type": type_str,
+                            "callable": True,
+                            "request_fields": fields,
+                        })
+                        continue
+                    except Exception:
+                        pass
                 services.append({
                     "service_id": sid_int,
                     "name": None,
                     "namespace": None,
-                    "full_type": None,
+                    "full_type": type_str,
                     "callable": False,
                     "request_fields": None,
                 })

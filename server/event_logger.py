@@ -404,8 +404,12 @@ class EventLogger:
     ) -> list[dict[str, Any]]:
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
-            query = "SELECT * FROM node_history WHERE event_type = 'service_call'"
-            params: list[Any] = []
+            query = (
+                "SELECT * FROM node_history"
+                " WHERE event_type = 'service_call'"
+                " AND json_extract(detail, '$.service_id') = ?"
+            )
+            params: list[Any] = [service_id]
             if since_unix is not None:
                 query += " AND timestamp_unix >= ?"
                 params.append(since_unix)
@@ -416,8 +420,6 @@ class EventLogger:
         results = []
         for row in rows:
             detail = json.loads(row["detail"]) if row["detail"] else {}
-            if detail.get("service_id") != service_id:
-                continue
             results.append({
                 "node_id": row["node_id"],
                 "timestamp_unix": row["timestamp_unix"],

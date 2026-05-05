@@ -43,6 +43,7 @@ const state = {
   serviceSchemas: new Map(),
   serviceCallState: null,
   _subjectServiceCallState: null,
+  _subjectServiceNodeId: null,
   serviceCallHistory: [],
   expandedServiceId: null,
   _subjectExpandedServiceId: null,

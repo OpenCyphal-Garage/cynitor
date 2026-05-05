@@ -346,7 +346,10 @@ class WebSocketServer:
         types_str = request.query.get("types")
         event_types = types_str.split(",") if types_str else None
 
-        limit = min(int(request.query.get("limit", "500")), 2000)
+        try:
+            limit = min(int(request.query.get("limit", "500")), 2000)
+        except (ValueError, TypeError):
+            return web.json_response({"error": "Invalid limit parameter"}, status=400)
 
         events = await self.session.event_logger.get_node_history(
             node_id, since_unix=since_unix, event_types=event_types, limit=limit,
@@ -378,22 +381,25 @@ class WebSocketServer:
         offset = self._TIME_RANGE_MAP.get(range_str)
         since_unix = time.time() - offset if offset else time.time() - 604800
 
-        limit = min(int(request.query.get("limit", "50")), 200)
+        try:
+            limit = min(int(request.query.get("limit", "50")), 200)
+        except (ValueError, TypeError):
+            return web.json_response({"error": "Invalid limit parameter"}, status=400)
 
-        # Get history and enrich with node info
         history = await self.session.event_logger.get_service_call_history(
             service_id, since_unix=since_unix, limit=limit,
         )
 
         telemetry = self.session.telemetry
-        for entry in history:
-            nid = entry.get("node_id")
-            if telemetry and nid is not None:
-                nodes_info = telemetry.get_all_nodes_info().get("nodes", {})
-                node_info = nodes_info.get(str(nid))
-                if node_info:
-                    entry["node_name"] = node_info.get("name")
-                    entry["node_unique_id"] = node_info.get("unique_id")
+        if telemetry:
+            nodes_info = telemetry.get_all_nodes_info().get("nodes", {})
+            for entry in history:
+                nid = entry.get("node_id")
+                if nid is not None:
+                    node_info = nodes_info.get(str(nid))
+                    if node_info:
+                        entry["node_name"] = node_info.get("name")
+                        entry["node_unique_id"] = node_info.get("unique_id")
 
         return web.json_response({"service_id": service_id, "history": history})
 
