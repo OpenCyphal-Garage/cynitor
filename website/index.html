@@ -44,7 +44,10 @@
           <span class="throughput-value hidden" id="canUtilization"></span>
         </div>
         <div class="sidebar-connect">
-          <select id="interfacesSelect"></select>
+          <div class="sparkline-wrap">
+            <select id="interfacesSelect"></select>
+            <canvas id="busLoadSparkline" class="bus-load-sparkline hidden"></canvas>
+          </div>
           <button id="connectCanBtn" class="sidebar-action btn-primary">Connect</button>
         </div>
       </div>

@@ -3,6 +3,74 @@
 // shared disconnectAll teardown used by pollStatus, connectDashboard, and
 // the heartbeat in app.js.
 
+const BUS_LOAD_MAX_SAMPLES = 60;
+
+const drawBusLoadSparkline = () => {
+  const canvas = el('busLoadSparkline');
+  if (!canvas) return;
+
+  const history = state.busLoadHistory;
+  if (!state.canConnected || history.length < 2) {
+    canvas.classList.add('hidden');
+    return;
+  }
+  canvas.classList.remove('hidden');
+
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth * dpr;
+  const h = canvas.clientHeight * dpr;
+  canvas.width = w;
+  canvas.height = h;
+
+  ctx.clearRect(0, 0, w, h);
+
+  const max = Math.max(10, ...history);
+  const fontSize = 9 * dpr;
+  const padTop = fontSize + 2 * dpr;
+  const padBottom = 2 * dpr;
+  const plotH = h - padTop - padBottom;
+  const step = w / (BUS_LOAD_MAX_SAMPLES - 1);
+  const xOffset = (BUS_LOAD_MAX_SAMPLES - history.length) * step;
+
+  const toX = (i) => xOffset + i * step;
+  const toY = (v) => padTop + plotH - (v / max) * plotH;
+
+  const style = getComputedStyle(canvas);
+  const accent = style.getPropertyValue('--accent').trim() || '#58a6ff';
+  const muted = style.getPropertyValue('--muted').trim() || '#656d76';
+
+  ctx.beginPath();
+  for (let i = 0; i < history.length; i++) {
+    const x = toX(i);
+    const y = toY(history[i]);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = 1.5 * dpr;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+
+  // Label local peaks that are at least 15% above their neighbors
+  ctx.font = `${fontSize}px sans-serif`;
+  ctx.fillStyle = muted;
+  ctx.textAlign = 'center';
+  let lastLabelX = -Infinity;
+  const minLabelGap = 28 * dpr;
+  for (let i = 1; i < history.length - 1; i++) {
+    if (history[i] > history[i - 1] && history[i] >= history[i + 1]) {
+      const x = toX(i);
+      const pct = history[i] % 1 === 0 ? `${history[i]}%` : `${history[i].toFixed(1)}%`;
+      const textW = ctx.measureText(pct).width;
+      if (x - textW / 2 < 0) continue;
+      if (x - lastLabelX < minLabelGap) continue;
+      ctx.fillText(pct, x, padTop - 3 * dpr);
+      lastLabelX = x;
+    }
+  }
+};
+
 const updateSemaphores = () => {
   const serverDot = el('serverSemaphore');
   const canDot = el('canSemaphore');
@@ -145,6 +213,13 @@ const connectWs = () => {
       }
       if (event.type === 'metrics') {
         state.busUtilization = event.bus_utilization ?? null;
+        if (state.busUtilization != null) {
+          state.busLoadHistory.push(state.busUtilization);
+          if (state.busLoadHistory.length > BUS_LOAD_MAX_SAMPLES) {
+            state.busLoadHistory.shift();
+          }
+          drawBusLoadSparkline();
+        }
         return;
       }
       cacheEvent(event);
@@ -242,6 +317,8 @@ const disconnectAll = ({ persist = true } = {}) => {
   state.dashboardConnected = false;
   state.canConnected = false;
   state.busUtilization = null;
+  state.busLoadHistory.length = 0;
+  drawBusLoadSparkline();
   state.latestBySubject.clear();
   state.latestByNode.clear();
   state.subjectHistory.clear();

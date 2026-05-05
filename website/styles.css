@@ -31,6 +31,7 @@
   --plot-5: #8250df;
   --plot-6: #0e8a6d;
   --row-bg: var(--surface);
+  --row-alt-bg: #f6f8fa;
   --row-hover-bg: #e8ecf0;
   --row-select-bg: #e8ecf0;
   --row-select-border: rgba(0, 0, 0, 0.06);
@@ -64,6 +65,7 @@
   --plot-5: #bc8cff;
   --plot-6: #39d2c0;
   --row-bg: var(--bg);
+  --row-alt-bg: #262b33;
   --row-hover-bg: rgba(255, 255, 255, 0.06);
   --row-select-bg: rgba(255, 255, 255, 0.07);
   --row-select-border: rgba(255, 255, 255, 0.10);
@@ -260,6 +262,19 @@ body {
 @keyframes semaphore-disconnecting {
   0%, 100% { background: var(--warn); }
   50% { background: var(--error); }
+}
+
+.sparkline-wrap {
+  position: relative;
+}
+
+.bus-load-sparkline {
+  position: absolute;
+  top: 0;
+  right: 1rem;
+  width: 55%;
+  height: 100%;
+  pointer-events: none;
 }
 
 .sidebar-connect {
@@ -985,6 +1000,10 @@ button:focus-visible,
   transition: background 0.08s;
 }
 
+.tabulator .tabulator-row:nth-child(even) {
+  background: var(--row-alt-bg);
+}
+
 .tabulator .tabulator-row:hover {
   background: var(--row-hover-bg) !important;
 }
@@ -1671,7 +1690,7 @@ button:focus-visible,
 
 .reg-header {
   display: grid;
-  grid-template-columns: 1fr 5.5rem 3rem 1fr 3.5rem;
+  grid-template-columns: 1.5rem 1fr 5.5rem 3rem 1fr 3.5rem;
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
   border-bottom: 2px solid var(--border);
@@ -1687,16 +1706,21 @@ button:focus-visible,
 .reg-body {
   display: flex;
   flex-direction: column;
+  margin: 0 -0.75rem;
 }
 
 .reg-row {
   display: grid;
-  grid-template-columns: 1fr 5.5rem 3rem 1fr 3.5rem;
+  grid-template-columns: 1.5rem 1fr 5.5rem 3rem 1fr 3.5rem;
   gap: 0.5rem;
   padding: 0.375rem 0.75rem;
   align-items: center;
   border-bottom: 1px solid var(--border-subtle);
   transition: background 0.1s;
+}
+
+.reg-row:nth-child(even) {
+  background: var(--row-alt-bg);
 }
 
 .reg-row:last-child {
@@ -1705,6 +1729,15 @@ button:focus-visible,
 
 .reg-row:hover {
   background: var(--surface-2);
+}
+
+.reg-index {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--muted);
+  text-align: center;
 }
 
 .reg-name {

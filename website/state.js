@@ -33,6 +33,7 @@ const state = {
   wsBytesAccum: 0,
   wsThroughput: 0,
   busUtilization: null,
+  busLoadHistory: [],
   tableSort: { key: 'id', dir: 'asc' },
   sidebarCollapsed: false,
   detailPanelHeight: null,
