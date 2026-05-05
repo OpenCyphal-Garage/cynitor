@@ -157,18 +157,15 @@ const unhideAllNodes = () => {
 };
 
 const injectHiddenChip = () => {
-  const actionsCol = nodesTabulator?.getColumn('_actions');
-  if (!actionsCol) return;
-  const headerEl = actionsCol.getElement();
-  if (!headerEl || headerEl.querySelector('.hidden-chip-wrap')) return;
+  const tableEl = document.querySelector('#nodesTable');
+  if (!tableEl || tableEl.querySelector('.hidden-chip-wrap')) return;
 
+  tableEl.style.position = 'relative';
   const wrap = document.createElement('div');
   wrap.className = 'hidden-chip-wrap';
   wrap.innerHTML = '<button type="button" id="hiddenNodesChip" class="hidden-chip hidden" aria-label="Show hidden nodes"></button>'
     + '<div id="hiddenNodesPopover" class="hidden-popover hidden"></div>';
-  headerEl.style.overflow = 'visible';
-  headerEl.style.position = 'relative';
-  headerEl.appendChild(wrap);
+  tableEl.appendChild(wrap);
 
   wrap.querySelector('#hiddenNodesChip').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -336,7 +333,7 @@ const initNodesTable = () => {
   });
 
   nodesTabulator.on('rowClick', (_e, row) => {
-    if (_e.target.closest('.name-input')) return;
+    if (_e.target.closest('.name-input') || _e.target.closest('.action-hide')) return;
     const clickedId = row.getData().id;
     if (clickedId === state.selectedNodeId) {
       clearSelectedNode();

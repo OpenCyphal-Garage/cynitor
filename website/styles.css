@@ -417,12 +417,16 @@ button:focus-visible,
   flex-direction: column;
 }
 
-/* ── Hidden nodes chip (inside Tabulator header) ── */
+/* ── Hidden nodes chip (overlays table header) ── */
 .hidden-chip-wrap {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 10;
+  height: 2.25rem;
   display: flex;
   align-items: center;
-  justify-content: center;
-  height: 100%;
+  padding-right: 0.5rem;
 }
 
 .hidden-chip {
@@ -451,7 +455,7 @@ button:focus-visible,
 
 .hidden-popover {
   position: absolute;
-  top: 100%;
+  top: 2.25rem;
   right: 0;
   z-index: 100;
   min-width: 14rem;
