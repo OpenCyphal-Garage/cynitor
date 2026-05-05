@@ -77,6 +77,11 @@ class ScannerNode:
         self.service_metadata = {}  # (node_id, service_id) -> {"namespace": str, "service_name": str}
         self.service_clients = {}
         self.node_service_types: dict[int, dict[int, str]] = {}  # node_id -> {service_id -> type_string}
+        self.on_node_event: Optional[Callable] = None
+        self._prev_health: dict[int, int] = {}
+        self._prev_mode: dict[int, int] = {}
+        self._prev_uptime: dict[int, int] = {}
+        self._prev_ports: dict[int, dict] = {}  # node_id -> {publishers: [...], ...}
         try:
             self._node.start()
         except Exception as e:
@@ -1098,7 +1103,7 @@ class ScannerNode:
             register_access_client.close()
 
     def cleanup_subscriptions(self, node_id: int) -> None:
-        # Stops subscriptions if no publishers exist. It removes offline node from all lists in active_publishers 
+        self._emit_node_event(node_id, "disappeared")
         to_remove = []
 
         for subject_id, nodes in self.active_publishers.items():
@@ -1118,12 +1123,40 @@ class ScannerNode:
     HEALTH_NAMES = {0: "NOMINAL", 1: "ADVISORY", 2: "CAUTION", 3: "WARNING"}
     MODE_NAMES = {0: "OPERATIONAL", 1: "INITIALIZATION", 2: "MAINTENANCE", 3: "SOFTWARE_UPDATE"}
 
+    def _emit_node_event(self, node_id: int, event_type: str, detail: Optional[dict] = None) -> None:
+        if self.on_node_event:
+            asyncio.ensure_future(self.on_node_event(node_id, event_type, detail))
+
     async def port_callback(self, msg: uavcan.node.port.List_1_0, transfer: pycyphal.transport.TransferFrom):
         node_id: int = transfer.source_node_id
+
+        # Snapshot ports before update for change detection
+        node = self.all_nodes[node_id]
+        def _port_ids(ids):
+            return sorted(self._make_json_serializable(s.value) if hasattr(s, 'value') else int(s) for s in ids)
+
+        old_ports = {
+            "publishers": _port_ids(node.publisher_SubjectIDs) if node.has_publishers else [],
+            "subscribers": _port_ids(node.subscriber_SubjectIDs) if node.has_subscribers else [],
+            "servers": _port_ids(node.server_ServiceIDs) if node.has_servers else [],
+            "clients": _port_ids(node.client_ServiceIDs) if node.has_clients else [],
+        }
+
         self.all_nodes[node_id].set_port_list(port_list=msg)
 
+        # Detect port changes
+        new_ports = {
+            "publishers": _port_ids(node.publisher_SubjectIDs) if node.has_publishers else [],
+            "subscribers": _port_ids(node.subscriber_SubjectIDs) if node.has_subscribers else [],
+            "servers": _port_ids(node.server_ServiceIDs) if node.has_servers else [],
+            "clients": _port_ids(node.client_ServiceIDs) if node.has_clients else [],
+        }
+        prev = self._prev_ports.get(node_id)
+        if prev is not None and new_ports != prev:
+            self._emit_node_event(node_id, "port_change", {"old": prev, "new": new_ports})
+        self._prev_ports[node_id] = new_ports
+
         # Count advertised ports for telemetry
-        node = self.all_nodes[node_id]
         pub_count = len(node.publisher_SubjectIDs) if node.has_publishers else 0
         sub_count = len(node.subscriber_SubjectIDs) if node.has_subscribers else 0
         srv_count = len(node.server_ServiceIDs) if node.has_servers else 0
@@ -1148,10 +1181,24 @@ class ScannerNode:
         if not node.has_appeared:
             node.mark_appeared(first_seen=now)
             logging.debug(f"Node {node_id} has appeared for the first time.")
+            self._emit_node_event(node_id, "first_seen")
             await self.getInfo(node_id)
 
         else:
+            was_disappeared = node.has_disappeared
             node.mark_seen(last_seen=now)
+
+            if was_disappeared:
+                self._emit_node_event(node_id, "reappeared")
+
+            # Restart detection: uptime jumped backward
+            prev_uptime = self._prev_uptime.get(node_id)
+            new_uptime = self._make_json_serializable(msg.uptime)
+            if prev_uptime is not None and new_uptime < prev_uptime and prev_uptime > 5:
+                self._emit_node_event(node_id, "restart_suspected", {
+                    "old_uptime": prev_uptime, "new_uptime": new_uptime,
+                })
+
             node.uptime = msg.uptime
 
             # Refresh getInfo periodically (every 60s) to detect node replacements
@@ -1168,6 +1215,28 @@ class ScannerNode:
                     logging.info(f"Node {node_id} unique_id changed: {old_unique_id} -> {new_unique_id}. Resetting.")
                     self.all_nodes[node_id] = NodeInfo(node_id=node.node_id)
                     await self.getInfo(node_id)
+
+        # Track health/mode changes
+        health_val = self._make_json_serializable(msg.health.value)
+        mode_val = self._make_json_serializable(msg.mode.value)
+
+        prev_health = self._prev_health.get(node_id)
+        if prev_health is not None and health_val != prev_health:
+            self._emit_node_event(node_id, "health_change", {
+                "old": self.HEALTH_NAMES.get(prev_health, str(prev_health)),
+                "new": self.HEALTH_NAMES.get(health_val, str(health_val)),
+            })
+        self._prev_health[node_id] = health_val
+
+        prev_mode = self._prev_mode.get(node_id)
+        if prev_mode is not None and mode_val != prev_mode:
+            self._emit_node_event(node_id, "mode_change", {
+                "old": self.MODE_NAMES.get(prev_mode, str(prev_mode)),
+                "new": self.MODE_NAMES.get(mode_val, str(mode_val)),
+            })
+        self._prev_mode[node_id] = mode_val
+
+        self._prev_uptime[node_id] = self._make_json_serializable(msg.uptime)
 
         # Queue heartbeat as a telemetry event
         health_val = self._make_json_serializable(msg.health.value)

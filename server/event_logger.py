@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import sqlite3
+import time
 from pathlib import Path
 from typing import Optional, Any
 import json
@@ -40,7 +41,7 @@ class EventLogger:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
-                
+
                 # Create events table
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS events (
@@ -55,11 +56,25 @@ class EventLogger:
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
-                
+
                 # Create indexes separately
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_subject ON events(subject_id)")
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_node ON events(publisher_node_id)")
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON events(timestamp_unix)")
+
+                # Node lifecycle history table (30-day retention)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS node_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        node_id INTEGER NOT NULL,
+                        timestamp_unix REAL NOT NULL,
+                        event_type TEXT NOT NULL,
+                        detail TEXT
+                    )
+                """)
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_nh_node ON node_history(node_id)")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_nh_timestamp ON node_history(timestamp_unix)")
+
                 conn.execute("PRAGMA journal_mode=WAL")
             logger.info(f"Database initialized at {self.db_path}")
         except Exception as e:
@@ -273,3 +288,110 @@ class EventLogger:
         except Exception as e:
             logger.error(f"Failed to clear events: {e}", exc_info=True)
             return 0
+
+    # ------------------------------------------------------------------
+    # Node history (lifecycle events, 30-day retention)
+    # ------------------------------------------------------------------
+
+    NODE_HISTORY_RETENTION_DAYS = 30
+
+    def _log_node_event_sync(self, node_id: int, event_type: str, detail: Optional[dict] = None) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO node_history (node_id, timestamp_unix, event_type, detail) VALUES (?, ?, ?, ?)",
+                (node_id, time.time(), event_type, json.dumps(detail) if detail else None),
+            )
+            # Prune old entries periodically
+            self._write_count += 1
+            if self._write_count % 100 == 0:
+                cutoff = time.time() - self.NODE_HISTORY_RETENTION_DAYS * 86400
+                cursor.execute("DELETE FROM node_history WHERE timestamp_unix < ?", (cutoff,))
+
+    async def log_node_event(self, node_id: int, event_type: str, detail: Optional[dict] = None) -> None:
+        try:
+            await asyncio.to_thread(self._log_node_event_sync, node_id, event_type, detail)
+            logger.debug(f"Node history: node={node_id} type={event_type}")
+        except Exception as e:
+            logger.error(f"Failed to log node event: {e}", exc_info=True)
+
+    def _get_node_history_sync(
+        self,
+        node_id: int,
+        since_unix: Optional[float] = None,
+        event_types: Optional[list[str]] = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            query = "SELECT * FROM node_history WHERE node_id = ?"
+            params: list[Any] = [node_id]
+            if since_unix is not None:
+                query += " AND timestamp_unix >= ?"
+                params.append(since_unix)
+            if event_types:
+                placeholders = ",".join("?" for _ in event_types)
+                query += f" AND event_type IN ({placeholders})"
+                params.extend(event_types)
+            query += " ORDER BY timestamp_unix DESC LIMIT ?"
+            params.append(limit)
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "node_id": row["node_id"],
+                "timestamp_unix": row["timestamp_unix"],
+                "event_type": row["event_type"],
+                "detail": json.loads(row["detail"]) if row["detail"] else None,
+            }
+            for row in rows
+        ]
+
+    async def get_node_history(
+        self,
+        node_id: int,
+        since_unix: Optional[float] = None,
+        event_types: Optional[list[str]] = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        try:
+            return await asyncio.to_thread(
+                self._get_node_history_sync, node_id, since_unix, event_types, limit
+            )
+        except Exception as e:
+            logger.error(f"Failed to query node history: {e}", exc_info=True)
+            return []
+
+    def _get_subject_summary_sync(self, node_id: int) -> list[dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("""
+                SELECT subject_id, message_type,
+                       COUNT(*) as total_events,
+                       AVG(rate) as avg_rate,
+                       MIN(timestamp_unix) as first_seen_unix,
+                       MAX(timestamp_unix) as last_seen_unix
+                FROM events
+                WHERE publisher_node_id = ?
+                  AND subject_id NOT IN (7509, 7510)
+                GROUP BY subject_id
+                ORDER BY subject_id
+            """, (node_id,)).fetchall()
+        return [
+            {
+                "subject_id": row["subject_id"],
+                "message_type": row["message_type"],
+                "total_events": row["total_events"],
+                "avg_rate": round(row["avg_rate"], 1) if row["avg_rate"] else 0,
+                "first_seen_unix": row["first_seen_unix"],
+                "last_seen_unix": row["last_seen_unix"],
+            }
+            for row in rows
+        ]
+
+    async def get_subject_summary(self, node_id: int) -> list[dict[str, Any]]:
+        try:
+            return await asyncio.to_thread(self._get_subject_summary_sync, node_id)
+        except Exception as e:
+            logger.error(f"Failed to query subject summary: {e}", exc_info=True)
+            return []

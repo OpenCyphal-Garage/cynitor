@@ -199,6 +199,8 @@ class CANSession:
                 self.event_logger = EventLogger(db_path="telemetry_events.db", max_events=100000)
                 await self.event_logger.start()
 
+                self.scanner.on_node_event = self.event_logger.log_node_event
+
                 logger_queue = self.telemetry.subscribe(max_queue=100)
                 self._tasks = [
                     asyncio.create_task(_event_logger_loop(self.event_logger, logger_queue)),

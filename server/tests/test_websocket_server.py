@@ -543,6 +543,8 @@ class TestServiceCall:
         }
         scanner.make_service_call = AsyncMock(return_value="protocol_version: 1.0")
         session.scanner = scanner
+        session.event_logger = MagicMock()
+        session.event_logger.log_node_event = AsyncMock()
         resp = await client.post("/api/services/42/100/call", json={"attributes": {}})
         assert resp.status == 200
         data = await resp.json()
@@ -559,6 +561,8 @@ class TestServiceCall:
         }
         scanner.make_service_call = AsyncMock(side_effect=asyncio.TimeoutError())
         session.scanner = scanner
+        session.event_logger = MagicMock()
+        session.event_logger.log_node_event = AsyncMock()
         resp = await client.post("/api/services/42/100/call", json={"attributes": {}})
         assert resp.status == 200
         data = await resp.json()

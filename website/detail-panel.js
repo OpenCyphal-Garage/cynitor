@@ -237,7 +237,7 @@ const renderSelectedNodeContent = () => {
     if (!isOffline) startPlotAnim();
   };
 
-  if (state.selectedDetailTab !== 'servers' && state.selectedDetailTab !== 'clients' && state.selectedDetailTab !== 'registers') {
+  if (state.selectedDetailTab !== 'servers' && state.selectedDetailTab !== 'clients' && state.selectedDetailTab !== 'registers' && state.selectedDetailTab !== 'history') {
     delete content.dataset.svcTab;
   }
 
@@ -277,6 +277,16 @@ const renderSelectedNodeContent = () => {
       content.dataset.svcTab = 'registers';
       content.dataset.svcNodeId = String(state.selectedNodeId);
       renderRegistersTab();
+    }
+    return;
+  }
+
+  if (state.selectedDetailTab === 'history') {
+    stopPlotAnim();
+    if (content.dataset.svcTab !== 'history' || content.dataset.svcNodeId !== String(state.selectedNodeId)) {
+      content.dataset.svcTab = 'history';
+      content.dataset.svcNodeId = String(state.selectedNodeId);
+      renderHistoryTab();
     }
     return;
   }

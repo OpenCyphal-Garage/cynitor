@@ -45,6 +45,8 @@ const state = {
   serviceCallHistory: [],
   expandedServiceId: null,
   nodeAliases: {},
+  historyTimeRange: '1h',
+  historyChangesOnly: true,
 };
 
 // Derived accessors for CAN connection state — keeps existing code readable
@@ -309,7 +311,7 @@ const loadSettings = () => {
     state.tableSort = settings.tableSort;
   }
   if (typeof settings.selectedDetailTab === 'string') {
-    const validTabs = ['publishers', 'subscribers', 'servers', 'clients', 'registers'];
+    const validTabs = ['publishers', 'subscribers', 'servers', 'clients', 'registers', 'history'];
     const tab = settings.selectedDetailTab === 'services' ? 'servers' : settings.selectedDetailTab;
     state.selectedDetailTab = validTabs.includes(tab) ? tab : 'publishers';
   }

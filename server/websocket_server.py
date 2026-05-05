@@ -76,6 +76,8 @@ class WebSocketServer:
         self.app.router.add_get('/api/registers/{node_id}', self._get_registers)
         self.app.router.add_post('/api/registers/{node_id}/set', self._set_register)
         self.app.router.add_post('/api/services/{node_id}/{service_id}/call', self._call_service)
+        self.app.router.add_get('/api/nodes/{node_id}/history', self._get_node_history)
+        self.app.router.add_get('/api/nodes/{node_id}/history/subjects', self._get_node_subject_summary)
         self.app.router.add_post('/api/can/connect', self._can_connect)
         self.app.router.add_post('/api/can/disconnect', self._can_disconnect)
 
@@ -282,6 +284,11 @@ class WebSocketServer:
                 node_id, service_id, service_type, attributes
             )
             latency_ms = round((time.monotonic() - t0) * 1000)
+            if self.session.event_logger:
+                await self.session.event_logger.log_node_event(node_id, "service_call", {
+                    "service_id": service_id, "service_type": service_type,
+                    "status": "ok", "latency_ms": latency_ms,
+                })
             return web.json_response({
                 "status": "ok",
                 "latency_ms": latency_ms,
@@ -289,6 +296,11 @@ class WebSocketServer:
             })
         except asyncio.TimeoutError:
             latency_ms = round((time.monotonic() - t0) * 1000)
+            if self.session.event_logger:
+                await self.session.event_logger.log_node_event(node_id, "service_call", {
+                    "service_id": service_id, "service_type": service_type,
+                    "status": "timeout", "latency_ms": latency_ms,
+                })
             return web.json_response({
                 "status": "timeout",
                 "latency_ms": latency_ms,
@@ -298,12 +310,58 @@ class WebSocketServer:
             return web.json_response({"status": "error", "error": str(e)}, status=400)
         except Exception as e:
             latency_ms = round((time.monotonic() - t0) * 1000)
+            if self.session.event_logger:
+                await self.session.event_logger.log_node_event(node_id, "service_call", {
+                    "service_id": service_id, "service_type": service_type,
+                    "status": "error", "latency_ms": latency_ms,
+                })
             logger.error(f"Service call failed: {e}", exc_info=True)
             return web.json_response({
                 "status": "error",
                 "latency_ms": latency_ms,
                 "error": str(e),
             })
+
+    # ------------------------------------------------------------------
+    # Node history endpoints
+    # ------------------------------------------------------------------
+
+    _TIME_RANGE_MAP = {"5m": 300, "15m": 900, "1h": 3600, "6h": 21600, "24h": 86400, "7d": 604800}
+
+    async def _get_node_history(self, request: web.Request) -> web.Response:
+        try:
+            node_id = int(request.match_info['node_id'])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid node_id"}, status=400)
+
+        if not self.session.event_logger:
+            return web.json_response({"error": "Event logger not available"}, status=503)
+
+        range_str = request.query.get("range", "1h")
+        offset = self._TIME_RANGE_MAP.get(range_str)
+        since_unix = time.time() - offset if offset else time.time() - 3600
+
+        types_str = request.query.get("types")
+        event_types = types_str.split(",") if types_str else None
+
+        limit = min(int(request.query.get("limit", "500")), 2000)
+
+        events = await self.session.event_logger.get_node_history(
+            node_id, since_unix=since_unix, event_types=event_types, limit=limit,
+        )
+        return web.json_response({"node_id": node_id, "events": events})
+
+    async def _get_node_subject_summary(self, request: web.Request) -> web.Response:
+        try:
+            node_id = int(request.match_info['node_id'])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid node_id"}, status=400)
+
+        if not self.session.event_logger:
+            return web.json_response({"error": "Event logger not available"}, status=503)
+
+        subjects = await self.session.event_logger.get_subject_summary(node_id)
+        return web.json_response({"node_id": node_id, "subjects": subjects})
 
     # ------------------------------------------------------------------
     # WebSocket handler
