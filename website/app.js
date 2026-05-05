@@ -14,6 +14,14 @@ const bindTabs = () => {
 };
 
 const bind = () => {
+  el('brandName').addEventListener('click', () => {
+    const ov = el('easterEggOverlay');
+    ov.classList.remove('hidden');
+  });
+  el('easterEggOverlay').addEventListener('click', () => {
+    el('easterEggOverlay').classList.add('hidden');
+  });
+
   el('connectDashboardBtn').addEventListener('click', connectDashboard);
   el('connectCanBtn').addEventListener('click', connectCan);
   el('interfacesSelect').addEventListener('change', () => {

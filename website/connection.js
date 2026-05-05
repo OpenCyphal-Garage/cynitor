@@ -52,22 +52,39 @@ const drawBusLoadSparkline = () => {
   ctx.lineJoin = 'round';
   ctx.stroke();
 
-  // Label local peaks that are at least 15% above their neighbors
+  // Collect local peaks, keep only the tallest per cluster, skip duplicate values
+  const peaks = [];
+  for (let i = 1; i < history.length - 1; i++) {
+    if (history[i] > history[i - 1] && history[i] >= history[i + 1]) {
+      peaks.push(i);
+    }
+  }
+
+  const minLabelGap = 28 * dpr;
+  const labels = [];
+  let cluster = [];
+  for (const p of peaks) {
+    if (cluster.length && toX(p) - toX(cluster[cluster.length - 1]) < minLabelGap) {
+      cluster.push(p);
+    } else {
+      if (cluster.length) labels.push(cluster.reduce((a, b) => history[a] >= history[b] ? a : b));
+      cluster = [p];
+    }
+  }
+  if (cluster.length) labels.push(cluster.reduce((a, b) => history[a] >= history[b] ? a : b));
+
   ctx.font = `${fontSize}px sans-serif`;
   ctx.fillStyle = muted;
   ctx.textAlign = 'center';
-  let lastLabelX = -Infinity;
-  const minLabelGap = 28 * dpr;
-  for (let i = 1; i < history.length - 1; i++) {
-    if (history[i] > history[i - 1] && history[i] >= history[i + 1]) {
-      const x = toX(i);
-      const pct = history[i] % 1 === 0 ? `${history[i]}%` : `${history[i].toFixed(1)}%`;
-      const textW = ctx.measureText(pct).width;
-      if (x - textW / 2 < 0) continue;
-      if (x - lastLabelX < minLabelGap) continue;
-      ctx.fillText(pct, x, padTop - 3 * dpr);
-      lastLabelX = x;
-    }
+  const shownValues = new Set();
+  for (const i of labels) {
+    const pct = history[i] % 1 === 0 ? `${history[i]}%` : `${history[i].toFixed(1)}%`;
+    if (shownValues.has(pct)) continue;
+    const x = toX(i);
+    const textW = ctx.measureText(pct).width;
+    if (x - textW / 2 < 0) continue;
+    ctx.fillText(pct, x, padTop - 3 * dpr);
+    shownValues.add(pct);
   }
 };
 
@@ -120,8 +137,13 @@ const updateSemaphores = () => {
       const utilStr = util != null ? ` · ${util}% load` : '';
       canInfo.textContent = `${rate.toFixed(1)} msg/s${utilStr}`;
       canInfo.classList.remove('hidden');
+      canInfo.classList.remove('load-ok', 'load-warn', 'load-err', 'load-crit');
+      if (util != null) {
+        canInfo.classList.add(util > 100 ? 'load-crit' : util >= 80 ? 'load-err' : util >= 50 ? 'load-warn' : 'load-ok');
+      }
     } else {
       canInfo.classList.add('hidden');
+      canInfo.classList.remove('load-ok', 'load-warn', 'load-err', 'load-crit');
     }
   }
 };
@@ -219,6 +241,15 @@ const connectWs = () => {
             state.busLoadHistory.shift();
           }
           drawBusLoadSparkline();
+          if (state.busUtilization >= 90 && state._busFullArmed) {
+            state._busFullArmed = false;
+            const ov = el('busFullEaster');
+            ov.classList.remove('hidden');
+            setTimeout(() => ov.classList.add('hidden'), 5000);
+          }
+          if (state.busUtilization < 50) {
+            state._busFullArmed = true;
+          }
         }
         return;
       }

@@ -34,6 +34,7 @@ const state = {
   wsThroughput: 0,
   busUtilization: null,
   busLoadHistory: [],
+  _busFullArmed: true,
   tableSort: { key: 'id', dir: 'asc' },
   sidebarCollapsed: false,
   detailPanelHeight: null,
