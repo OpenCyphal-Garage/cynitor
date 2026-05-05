@@ -395,3 +395,50 @@ class EventLogger:
         except Exception as e:
             logger.error(f"Failed to query subject summary: {e}", exc_info=True)
             return []
+
+    def _get_service_call_history_sync(
+        self,
+        service_id: int,
+        since_unix: Optional[float] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            query = "SELECT * FROM node_history WHERE event_type = 'service_call'"
+            params: list[Any] = []
+            if since_unix is not None:
+                query += " AND timestamp_unix >= ?"
+                params.append(since_unix)
+            query += " ORDER BY timestamp_unix DESC LIMIT ?"
+            params.append(limit)
+            rows = conn.execute(query, params).fetchall()
+
+        results = []
+        for row in rows:
+            detail = json.loads(row["detail"]) if row["detail"] else {}
+            if detail.get("service_id") != service_id:
+                continue
+            results.append({
+                "node_id": row["node_id"],
+                "timestamp_unix": row["timestamp_unix"],
+                "service_id": detail.get("service_id"),
+                "service_type": detail.get("service_type"),
+                "status": detail.get("status"),
+                "latency_ms": detail.get("latency_ms"),
+                "response": detail.get("response"),
+            })
+        return results
+
+    async def get_service_call_history(
+        self,
+        service_id: int,
+        since_unix: Optional[float] = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        try:
+            return await asyncio.to_thread(
+                self._get_service_call_history_sync, service_id, since_unix, limit
+            )
+        except Exception as e:
+            logger.error(f"Failed to query service call history: {e}", exc_info=True)
+            return []

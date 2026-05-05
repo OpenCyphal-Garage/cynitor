@@ -142,6 +142,11 @@ const bind = () => {
       && !popover.contains(e.target) && e.target !== el('hiddenNodesChip')) {
       popover.classList.add('hidden');
     }
+    const subPop = el('hiddenSubjectsPopover');
+    if (subPop && !subPop.classList.contains('hidden')
+      && !subPop.contains(e.target) && e.target !== el('hiddenSubjectsChip')) {
+      subPop.classList.add('hidden');
+    }
   });
 
   const selectSubjectCard = (card) => {
@@ -167,12 +172,21 @@ const bind = () => {
     selectSubjectCard(card);
   });
 
+  document.querySelectorAll('.sidebar-view-tab').forEach((btn) => {
+    btn.addEventListener('click', () => switchView(btn.dataset.view));
+  });
+
   bindTabs();
   initNodesTable();
 };
 
 loadSettings();
 bind();
+if (state.activeView !== 'nodes') {
+  const saved = state.activeView;
+  state.activeView = 'nodes';
+  switchView(saved);
+}
 updateDashboardConnectButton();
 updateCanConnectButton();
 renderSelectedNodeContent();

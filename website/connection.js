@@ -355,6 +355,8 @@ const disconnectAll = ({ persist = true } = {}) => {
   state.subjectHistory.clear();
   state.serviceSchemas.clear();
   state.serviceCallState = null;
+  state._subjectServiceCallState = null;
+  state._subjectExpandedServiceId = null;
   state.serviceCallHistory.length = 0;
   REG_CACHE.clear();
   stopStatusPolling();

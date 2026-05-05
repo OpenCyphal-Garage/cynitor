@@ -78,6 +78,7 @@ class WebSocketServer:
         self.app.router.add_post('/api/services/{node_id}/{service_id}/call', self._call_service)
         self.app.router.add_get('/api/nodes/{node_id}/history', self._get_node_history)
         self.app.router.add_get('/api/nodes/{node_id}/history/subjects', self._get_node_subject_summary)
+        self.app.router.add_get('/api/services/{service_id}/history', self._get_service_call_history)
         self.app.router.add_post('/api/can/connect', self._can_connect)
         self.app.router.add_post('/api/can/disconnect', self._can_disconnect)
 
@@ -288,6 +289,7 @@ class WebSocketServer:
                 await self.session.event_logger.log_node_event(node_id, "service_call", {
                     "service_id": service_id, "service_type": service_type,
                     "status": "ok", "latency_ms": latency_ms,
+                    "response": response_str,
                 })
             return web.json_response({
                 "status": "ok",
@@ -362,6 +364,38 @@ class WebSocketServer:
 
         subjects = await self.session.event_logger.get_subject_summary(node_id)
         return web.json_response({"node_id": node_id, "subjects": subjects})
+
+    async def _get_service_call_history(self, request: web.Request) -> web.Response:
+        try:
+            service_id = int(request.match_info['service_id'])
+        except (ValueError, KeyError):
+            return web.json_response({"error": "Invalid service_id"}, status=400)
+
+        if not self.session.event_logger:
+            return web.json_response({"error": "Event logger not available"}, status=503)
+
+        range_str = request.query.get("range", "7d")
+        offset = self._TIME_RANGE_MAP.get(range_str)
+        since_unix = time.time() - offset if offset else time.time() - 604800
+
+        limit = min(int(request.query.get("limit", "50")), 200)
+
+        # Get history and enrich with node info
+        history = await self.session.event_logger.get_service_call_history(
+            service_id, since_unix=since_unix, limit=limit,
+        )
+
+        telemetry = self.session.telemetry
+        for entry in history:
+            nid = entry.get("node_id")
+            if telemetry and nid is not None:
+                nodes_info = telemetry.get_all_nodes_info().get("nodes", {})
+                node_info = nodes_info.get(str(nid))
+                if node_info:
+                    entry["node_name"] = node_info.get("name")
+                    entry["node_unique_id"] = node_info.get("unique_id")
+
+        return web.json_response({"service_id": service_id, "history": history})
 
     # ------------------------------------------------------------------
     # WebSocket handler

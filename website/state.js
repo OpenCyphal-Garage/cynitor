@@ -42,11 +42,17 @@ const state = {
   splitRatio: 0.6,
   serviceSchemas: new Map(),
   serviceCallState: null,
+  _subjectServiceCallState: null,
   serviceCallHistory: [],
   expandedServiceId: null,
+  _subjectExpandedServiceId: null,
   nodeAliases: {},
   historyTimeRange: '1h',
   historyChangesOnly: true,
+  activeView: 'nodes',
+  favouriteSubjectIds: new Set(),
+  hiddenSubjectIds: new Set(),
+  subjectsTableSort: { key: 'id', dir: 'asc' },
 };
 
 // Derived accessors for CAN connection state — keeps existing code readable
@@ -276,6 +282,11 @@ const _writeSettingsNow = () => {
     favouriteNodeIds: [...state.favouriteNodeIds],
     hiddenNodeIds: [...state.hiddenNodeIds],
     nodeAliases: state.nodeAliases,
+    activeView: state.activeView,
+    favouriteSubjectIds: [...state.favouriteSubjectIds],
+    hiddenSubjectIds: [...state.hiddenSubjectIds],
+    subjectsTableSort: state.subjectsTableSort,
+    subjectsHeaderFilters: typeof getSubjectsHeaderFilters === 'function' ? getSubjectsHeaderFilters() : null,
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
 };
@@ -350,5 +361,17 @@ const loadSettings = () => {
   }
   if (settings.nodeAliases && typeof settings.nodeAliases === 'object') {
     state.nodeAliases = settings.nodeAliases;
+  }
+  if (settings.activeView === 'subjects') {
+    state.activeView = 'subjects';
+  }
+  if (Array.isArray(settings.favouriteSubjectIds)) {
+    state.favouriteSubjectIds = new Set(settings.favouriteSubjectIds);
+  }
+  if (Array.isArray(settings.hiddenSubjectIds)) {
+    state.hiddenSubjectIds = new Set(settings.hiddenSubjectIds);
+  }
+  if (settings.subjectsTableSort?.key) {
+    state.subjectsTableSort = settings.subjectsTableSort;
   }
 };

@@ -55,40 +55,83 @@ const renderServiceField = (field) => {
   </div>`;
 };
 
-const renderServiceHistory = (nodeId, serviceId) => {
-  const entries = state.serviceCallHistory.filter(
-    (h) => h.nodeId === nodeId && h.serviceId === serviceId
-  );
-  if (!entries.length) return '';
-  const rows = entries.map((h) => {
-    const time = new Date(h.timestamp).toLocaleTimeString();
-    if (h.status === 'done') {
-      return `<div class="svc-history-row svc-history-ok">
-        <span class="svc-history-time">${escapeHtml(time)}</span>
-        <span class="svc-status-badge svc-badge-ok">&#10003; ${h.latencyMs}ms</span>
-        <pre class="svc-history-body">${escapeHtml(h.response)}</pre>
-      </div>`;
-    }
-    if (h.status === 'timeout') {
-      return `<div class="svc-history-row svc-history-timeout">
-        <span class="svc-history-time">${escapeHtml(time)}</span>
-        <span class="svc-status-badge svc-badge-timeout">&#10007; timeout ${h.latencyMs}ms</span>
-      </div>`;
-    }
-    return `<div class="svc-history-row svc-history-error">
-      <span class="svc-history-time">${escapeHtml(time)}</span>
-      <span class="svc-status-badge svc-badge-error">&#10007; ${escapeHtml(h.status)}</span>
-    </div>`;
-  }).join('');
-  return `<details class="svc-history">
-    <summary class="svc-history-toggle">History (${entries.length})</summary>
-    <div class="svc-history-list">${rows}</div>
-  </details>`;
+const renderServiceHistory = (_nodeId, serviceId) => {
+  return `<div class="svc-history-container" data-service-id="${serviceId}"></div>`;
 };
 
-const renderServiceCard = (svc) => {
+const _loadPersistentHistory = async (parentEl) => {
+  const containers = parentEl.querySelectorAll('.svc-history-container');
+  for (const container of containers) {
+    const serviceId = Number(container.dataset.serviceId);
+    if (!serviceId) continue;
+    try {
+      const data = await requestJson(`/api/services/${serviceId}/history?range=7d&limit=50`);
+      const entries = data.history || [];
+      if (!entries.length) {
+        container.innerHTML = '';
+        continue;
+      }
+      const isOpen = state._svcHistoryOpen ? ' open' : '';
+      let html = `<details class="svc-history"${isOpen}><summary class="svc-history-toggle">History (${entries.length})</summary><div class="svc-history-list">`;
+      for (const entry of entries) {
+        const time = new Date(entry.timestamp_unix * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+        const date = new Date(entry.timestamp_unix * 1000).toLocaleDateString([], { day: '2-digit', month: '2-digit' });
+        const nodeName = entry.node_name || '';
+        const nodeLabel = `Node ${entry.node_id}${nodeName ? ' (' + escapeHtml(nodeName) + ')' : ''}`;
+        const uid = entry.node_unique_id ? entry.node_unique_id.map((b) => b.toString(16).padStart(2, '0')).join('') : '';
+        const uidHtml = uid ? `<span class="svc-history-uid" title="${escapeHtml(uid)}">${escapeHtml(uid.slice(0, 8))}…</span>` : '';
+
+        const responseHtml = entry.response
+          ? `<pre class="svc-history-body">${escapeHtml(entry.response)}</pre>`
+          : '';
+
+        if (entry.status === 'ok') {
+          if (entry.response) {
+            html += `<details class="svc-history-entry svc-history-ok">
+              <summary class="svc-history-row">
+                <span class="svc-history-time">${escapeHtml(date)} ${escapeHtml(time)}</span>
+                <span class="svc-history-node">${escapeHtml(nodeLabel)}</span>${uidHtml}
+                <span class="svc-status-badge svc-badge-ok">&#10003; ${entry.latency_ms}ms</span>
+              </summary>
+              ${responseHtml}
+            </details>`;
+          } else {
+            html += `<div class="svc-history-entry svc-history-row svc-history-ok">
+              <span class="svc-history-time">${escapeHtml(date)} ${escapeHtml(time)}</span>
+              <span class="svc-history-node">${escapeHtml(nodeLabel)}</span>${uidHtml}
+              <span class="svc-status-badge svc-badge-ok">&#10003; ${entry.latency_ms}ms</span>
+            </div>`;
+          }
+        } else if (entry.status === 'timeout') {
+          html += `<div class="svc-history-entry svc-history-row svc-history-timeout">
+            <span class="svc-history-time">${escapeHtml(date)} ${escapeHtml(time)}</span>
+            <span class="svc-history-node">${escapeHtml(nodeLabel)}</span>${uidHtml}
+            <span class="svc-status-badge svc-badge-timeout">&#10007; timeout ${entry.latency_ms}ms</span>
+          </div>`;
+        } else {
+          html += `<div class="svc-history-entry svc-history-row svc-history-error">
+            <span class="svc-history-time">${escapeHtml(date)} ${escapeHtml(time)}</span>
+            <span class="svc-history-node">${escapeHtml(nodeLabel)}</span>${uidHtml}
+            <span class="svc-status-badge svc-badge-error">&#10007; ${escapeHtml(entry.status || 'error')}</span>
+          </div>`;
+        }
+      }
+      html += '</div></details>';
+      container.innerHTML = html;
+      const detailsEl = container.querySelector('details.svc-history');
+      if (detailsEl) {
+        detailsEl.addEventListener('toggle', () => { state._svcHistoryOpen = detailsEl.open; });
+      }
+    } catch {
+      container.innerHTML = '';
+    }
+  }
+};
+
+const renderServiceCard = (svc, forSubjects = false) => {
   const isCallable = svc.callable !== false;
-  const isExpanded = isCallable && state.expandedServiceId === svc.service_id;
+  const expandedId = forSubjects ? state._subjectExpandedServiceId : state.expandedServiceId;
+  const isExpanded = isCallable && expandedId === svc.service_id;
   const typeName = svc.full_type ? escapeHtml(svc.full_type) : `Service ${svc.service_id}`;
   const hasFields = svc.request_fields && svc.request_fields.length > 0;
   const schemaIncomplete = isCallable && !svc.request_fields;
@@ -104,8 +147,9 @@ const renderServiceCard = (svc) => {
       fieldsHtml = svc.request_fields.map(renderServiceField).join('');
     }
 
-    const callState = state.serviceCallState;
-    const isThisCall = callState && callState.serviceId === svc.service_id && callState.nodeId === state.selectedNodeId;
+    const callState = forSubjects ? state._subjectServiceCallState : state.serviceCallState;
+    const activeNodeId = forSubjects ? state._subjectServiceNodeId : state.selectedNodeId;
+    const isThisCall = callState && callState.serviceId === svc.service_id && callState.nodeId === activeNodeId;
     const isSending = isThisCall && callState.status === 'sending';
 
     let responseHtml = '';
@@ -152,7 +196,7 @@ const renderServiceCard = (svc) => {
       </div>`;
     }
 
-    const historyHtml = renderServiceHistory(state.selectedNodeId, svc.service_id);
+    const historyHtml = renderServiceHistory(activeNodeId, svc.service_id);
     formHtml = `<div class="svc-form">
       ${fieldsHtml}
       <div class="svc-actions">
@@ -208,8 +252,16 @@ const collectFormAttributes = (cardEl, schema) => {
   return attributes;
 };
 
+const _getServiceContainer = () => {
+  if (state.activeView === 'subjects') {
+    const inline = document.getElementById('subjectInlineDetail');
+    return inline?.querySelector('.svc-inline-form') || inline || el('selectedNodeContent');
+  }
+  return el('selectedNodeContent');
+};
+
 const saveFormState = () => {
-  const container = el('selectedNodeContent');
+  const container = _getServiceContainer();
   const values = {};
   container.querySelectorAll('.svc-field-input').forEach((input) => {
     if (input.value) values[input.id] = input.value;
@@ -223,7 +275,7 @@ const saveFormState = () => {
 };
 
 const restoreFormState = (saved) => {
-  const container = el('selectedNodeContent');
+  const container = _getServiceContainer();
   for (const [id, val] of Object.entries(saved.values)) {
     const input = container.querySelector(`#${CSS.escape(id)}`);
     if (input) input.value = val;
@@ -236,8 +288,18 @@ const restoreFormState = (saved) => {
   });
 };
 
+const _setCallState = (val, forSubjects = false) => {
+  if (forSubjects) state._subjectServiceCallState = val;
+  else state.serviceCallState = val;
+};
+
+const _getCallState = (forSubjects = false) => {
+  return forSubjects ? state._subjectServiceCallState : state.serviceCallState;
+};
+
 const sendServiceRequest = async (nodeId, serviceId) => {
-  const container = el('selectedNodeContent');
+  const inSubjectsView = state.activeView === 'subjects';
+  const container = _getServiceContainer();
   const card = container.querySelector(`.svc-card[data-service-id="${serviceId}"]`);
   if (!card) return;
 
@@ -249,8 +311,8 @@ const sendServiceRequest = async (nodeId, serviceId) => {
   const attributes = collectFormAttributes(card, schema);
   const saved = saveFormState();
 
-  state.serviceCallState = { nodeId, serviceId, status: 'sending', response: null, error: null, latencyMs: null };
-  renderServicesTab();
+  _setCallState({ nodeId, serviceId, status: 'sending', response: null, error: null, latencyMs: null }, inSubjectsView);
+  _rerenderServiceUI(inSubjectsView, schema, nodeId);
   restoreFormState(saved);
 
   try {
@@ -259,42 +321,59 @@ const sendServiceRequest = async (nodeId, serviceId) => {
       body: JSON.stringify({ attributes }),
     });
 
-    // Check if node disappeared while we were waiting
-    const nodeStillOnline = getSelectedNode();
-    if (!nodeStillOnline && state.serviceCallState?.status === 'sending') {
-      state.serviceCallState = { nodeId, serviceId, status: 'node-lost', response: null, error: 'Node went offline', latencyMs: null };
-      renderServicesTab();
+    const nodes = state.latestNodesPayload?.nodes;
+    const nodeInfo = nodes ? nodes[String(nodeId)] : null;
+    if ((!nodeInfo || nodeInfo.has_disappeared) && _getCallState(inSubjectsView)?.status === 'sending') {
+      _setCallState({ nodeId, serviceId, status: 'node-lost', response: null, error: 'Node went offline', latencyMs: null }, inSubjectsView);
+      _rerenderServiceUI(inSubjectsView, schema, nodeId);
       restoreFormState(saved);
       return;
     }
 
     if (data.status === 'ok') {
-      state.serviceCallState = { nodeId, serviceId, status: 'done', response: data.response, error: null, latencyMs: data.latency_ms };
+      _setCallState({ nodeId, serviceId, status: 'done', response: data.response, error: null, latencyMs: data.latency_ms }, inSubjectsView);
     } else if (data.status === 'timeout') {
-      state.serviceCallState = { nodeId, serviceId, status: 'timeout', response: null, error: data.error, latencyMs: data.latency_ms };
+      _setCallState({ nodeId, serviceId, status: 'timeout', response: null, error: data.error, latencyMs: data.latency_ms }, inSubjectsView);
     } else {
-      state.serviceCallState = { nodeId, serviceId, status: 'error', response: null, error: data.error || 'Unknown error', latencyMs: data.latency_ms };
+      _setCallState({ nodeId, serviceId, status: 'error', response: null, error: data.error || 'Unknown error', latencyMs: data.latency_ms }, inSubjectsView);
     }
   } catch (e) {
-    state.serviceCallState = { nodeId, serviceId, status: 'error', response: null, error: e.message || 'Request failed', latencyMs: null };
+    _setCallState({ nodeId, serviceId, status: 'error', response: null, error: e.message || 'Request failed', latencyMs: null }, inSubjectsView);
   }
 
-  if (state.serviceCallState && state.serviceCallState.status !== 'sending') {
-    state.serviceCallHistory.unshift({ ...state.serviceCallState, timestamp: Date.now() });
+  const finalState = _getCallState(inSubjectsView);
+  if (finalState && finalState.status !== 'sending') {
+    state.serviceCallHistory.unshift({ ...finalState, timestamp: Date.now() });
     if (state.serviceCallHistory.length > 20) state.serviceCallHistory.length = 20;
   }
 
-  renderServicesTab();
+  _rerenderServiceUI(inSubjectsView, schema, nodeId);
   restoreFormState(saved);
 };
 
-const bindServiceCardEvents = (content, nodeId) => {
+const _rerenderServiceUI = (inSubjectsView, schema, nodeId) => {
+  if (inSubjectsView && typeof renderSubjectServiceCard === 'function' && schema) {
+    renderSubjectServiceCard(schema, nodeId);
+  } else if (!inSubjectsView) {
+    renderServicesTab();
+  }
+};
+
+const bindServiceCardEvents = (content, nodeId, forSubjects = false) => {
   content.querySelectorAll('.svc-card-header:not(.svc-card-header-static)').forEach((header) => {
     header.addEventListener('click', () => {
       const sid = Number(header.dataset.serviceId);
-      state.expandedServiceId = state.expandedServiceId === sid ? null : sid;
-      state.serviceCallState = null;
-      renderServicesTab();
+      if (forSubjects) {
+        state._subjectExpandedServiceId = state._subjectExpandedServiceId === sid ? null : sid;
+        state._subjectServiceCallState = null;
+        const schemas = state.serviceSchemas.get(nodeId) || [];
+        const svc = Array.isArray(schemas) && schemas.find((s) => s.service_id === sid);
+        if (svc) renderSubjectServiceCard(svc, nodeId);
+      } else {
+        state.expandedServiceId = state.expandedServiceId === sid ? null : sid;
+        state.serviceCallState = null;
+        renderServicesTab();
+      }
     });
   });
 
@@ -307,8 +386,9 @@ const bindServiceCardEvents = (content, nodeId) => {
 
   content.querySelectorAll('.svc-copy-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
-      if (state.serviceCallState?.response) {
-        navigator.clipboard.writeText(state.serviceCallState.response);
+      const cs = _getCallState(forSubjects);
+      if (cs?.response) {
+        navigator.clipboard.writeText(cs.response);
         showToast('Copied to clipboard', 'info', 2000);
       }
     });
@@ -316,8 +396,9 @@ const bindServiceCardEvents = (content, nodeId) => {
 
   content.querySelectorAll('.svc-repeat-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
-      if (state.serviceCallState) {
-        sendServiceRequest(state.serviceCallState.nodeId, state.serviceCallState.serviceId);
+      const cs = _getCallState(forSubjects);
+      if (cs) {
+        sendServiceRequest(cs.nodeId, cs.serviceId);
       }
     });
   });
@@ -384,7 +465,7 @@ const renderServicesTab = async () => {
       const services = state.serviceSchemas.get(nodeId) || [];
       if (services.length) {
         state.expandedServiceId = null;
-        const cards = services.map(renderServiceCard).join('');
+        const cards = services.map(svc => renderServiceCard(svc)).join('');
         content.innerHTML = `
           <div class="svc-stale-banner" role="alert">
             <span class="svc-stale-icon">⚠</span>
@@ -439,6 +520,7 @@ const renderServicesTab = async () => {
   }
 
   // State 9+: render service cards
-  content.innerHTML = `<section class="svc-panel">${services.map(renderServiceCard).join('')}</section>`;
+  content.innerHTML = `<section class="svc-panel">${services.map(svc => renderServiceCard(svc)).join('')}</section>`;
   bindServiceCardEvents(content, nodeId);
+  _loadPersistentHistory(content);
 };

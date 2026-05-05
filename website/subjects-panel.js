@@ -1,0 +1,538 @@
+// Subjects view — shows all active subjects/services on the bus.
+// Derives data from state.latestNodesPayload (port lists) and state.latestBySubject (telemetry).
+
+let subjectsTabulator = null;
+let _subjectsTableReady = false;
+
+const _fmt24H = (unix) => {
+  const d = new Date(unix * 1000);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+};
+
+const _fmtDate = (unix) => {
+  const d = new Date(unix * 1000);
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  return `${dd}.${mo}.${d.getFullYear()}`;
+};
+
+const subjectsPlaceholder = () => {
+  if (!state.dashboardConnected) {
+    if (state.pendingReconnect) {
+      return svcStateMsg('<span class="svc-spinner"></span>', 'Reconnecting to backend…', 'Restoring previous session.');
+    }
+    return svcStateMsg('⏻', 'Not connected to backend', 'Connect to the backend server to browse subjects and services.');
+  }
+  if (state.canState === CONN.CONNECTING) {
+    return svcStateMsg('<span class="svc-spinner"></span>', 'Connecting to CAN interface…', 'Establishing CAN bus connection.');
+  }
+  if (state.canState !== CONN.CONNECTED) {
+    return svcStateMsg('⛓', 'CAN bus not connected', 'Connect a CAN interface to discover subjects and services.');
+  }
+  return svcStateMsg('<span class="svc-spinner"></span>', 'Waiting for traffic…', 'Listening on the CAN bus. Subjects and services will appear as nodes communicate.');
+};
+
+const _lookupServiceType = (serviceId) => {
+  for (const schemas of state.serviceSchemas.values()) {
+    if (!Array.isArray(schemas)) continue;
+    for (const svc of schemas) {
+      if (svc.service_id === serviceId && svc.full_type) return svc.full_type;
+    }
+  }
+  return '-';
+};
+
+const _fetchMissingServiceSchemas = () => {
+  const nodes = state.latestNodesPayload?.nodes;
+  if (!nodes) return;
+  for (const node of Object.values(nodes)) {
+    if (node.has_disappeared) continue;
+    if (!(node.servers?.length || node.clients?.length)) continue;
+    if (state.serviceSchemas.has(node.node_id)) continue;
+    fetchServiceSchema(node.node_id);
+  }
+};
+
+const buildSubjectsRows = () => {
+  const nodes = state.latestNodesPayload?.nodes;
+  if (!nodes || typeof nodes !== 'object') return [];
+
+  const subjectMap = new Map();
+  const serviceMap = new Map();
+
+  for (const node of Object.values(nodes)) {
+    if (node.has_disappeared) continue;
+    const nid = node.node_id;
+
+    for (const sid of node.publishers || []) {
+      if (!subjectMap.has(sid)) subjectMap.set(sid, { publishers: [], subscribers: [] });
+      subjectMap.get(sid).publishers.push(nid);
+    }
+    for (const sid of node.subscribers || []) {
+      if (!subjectMap.has(sid)) subjectMap.set(sid, { publishers: [], subscribers: [] });
+      subjectMap.get(sid).subscribers.push(nid);
+    }
+    for (const sid of node.servers || []) {
+      if (!serviceMap.has(sid)) serviceMap.set(sid, { servers: [], clients: [] });
+      serviceMap.get(sid).servers.push(nid);
+    }
+    for (const sid of node.clients || []) {
+      if (!serviceMap.has(sid)) serviceMap.set(sid, { servers: [], clients: [] });
+      serviceMap.get(sid).clients.push(nid);
+    }
+  }
+
+  const rows = [];
+
+  for (const [sid, info] of subjectMap) {
+    if (state.hiddenSubjectIds.has(sid)) continue;
+    const event = state.latestBySubject.get(sid);
+    const pubNode = event?.publisher_node_id != null ? `Node ${event.publisher_node_id}` : '';
+    rows.push({
+      _rowId: `sub:${sid}`,
+      id: sid,
+      kind: 'Subject',
+      messageType: event?.message_type || '-',
+      publishers: info.publishers.sort((a, b) => a - b).join(', '),
+      subscribers: info.subscribers.sort((a, b) => a - b).join(', '),
+      rate: event?.rate ?? 0,
+      lastTime: event?.timestamp_unix ? `${_fmt24H(event.timestamp_unix)} ${pubNode}` : '-',
+      lastDate: event?.timestamp_unix ? _fmtDate(event.timestamp_unix) : '-',
+      _fav: state.favouriteSubjectIds.has(sid),
+    });
+  }
+
+  for (const [sid, info] of serviceMap) {
+    if (state.hiddenSubjectIds.has(`svc:${sid}`)) continue;
+    const lastCall = state.serviceCallHistory.find((h) => h.serviceId === sid);
+    const lastTs = lastCall ? lastCall.timestamp / 1000 : 0;
+    const calledNode = lastCall ? `Node ${lastCall.nodeId}` : '-';
+    rows.push({
+      _rowId: `svc:${sid}`,
+      id: sid,
+      kind: 'Service',
+      messageType: _lookupServiceType(sid),
+      publishers: info.servers.sort((a, b) => a - b).join(', '),
+      subscribers: info.clients.sort((a, b) => a - b).join(', '),
+      rate: 0,
+      lastTime: lastTs ? `${_fmt24H(lastTs)} ${calledNode}` : '-',
+      lastDate: lastTs ? _fmtDate(lastTs) : '-',
+      _fav: state.favouriteSubjectIds.has(`svc:${sid}`),
+    });
+  }
+
+  return rows;
+};
+
+const _subjectKey = (row) => row.kind === 'Service' ? `svc:${row.id}` : row.id;
+
+const subjectFavFormatter = (cell) => {
+  const isFav = cell.getValue();
+  return `<button type="button" class="fav-star ${isFav ? 'active' : ''}" aria-label="Toggle favourite">${isFav ? '★' : '☆'}</button>`;
+};
+
+const subjectActionsFormatter = () => {
+  return `<button type="button" class="action-hide" aria-label="Hide subject">${EYE_ICON}</button>`;
+};
+
+const toggleSubjectFavourite = (row) => {
+  const key = _subjectKey(row);
+  if (state.favouriteSubjectIds.has(key)) {
+    state.favouriteSubjectIds.delete(key);
+  } else {
+    state.favouriteSubjectIds.add(key);
+  }
+  saveSettings();
+  refreshSubjectsTable();
+  if (subjectsTabulator) {
+    const sorters = subjectsTabulator.getSorters();
+    if (sorters.length) {
+      subjectsTabulator.setSort(sorters.map((s) => ({ column: s.field, dir: s.dir })));
+    }
+  }
+};
+
+const hideSubject = (row) => {
+  const key = _subjectKey(row);
+  state.hiddenSubjectIds.add(key);
+  saveSettings();
+  refreshSubjectsTable();
+  updateHiddenSubjectsChip();
+};
+
+const unhideSubject = (key) => {
+  state.hiddenSubjectIds.delete(key);
+  saveSettings();
+  refreshSubjectsTable();
+  updateHiddenSubjectsChip();
+};
+
+const unhideAllSubjects = () => {
+  state.hiddenSubjectIds.clear();
+  saveSettings();
+  refreshSubjectsTable();
+  updateHiddenSubjectsChip();
+};
+
+const updateHiddenSubjectsChip = () => {
+  const chip = el('hiddenSubjectsChip');
+  if (!chip) return;
+  const count = state.hiddenSubjectIds.size;
+  if (count === 0) {
+    chip.classList.add('hidden');
+    const pop = el('hiddenSubjectsPopover');
+    if (pop) pop.classList.add('hidden');
+    return;
+  }
+  chip.classList.remove('hidden');
+  chip.innerHTML = EYE_OFF_ICON + `<span>${count}</span>`;
+};
+
+const populateHiddenSubjectsPopover = () => {
+  const popover = el('hiddenSubjectsPopover');
+  const chip = el('hiddenSubjectsChip');
+  if (!popover || !chip) return;
+
+  if (state.hiddenSubjectIds.size === 0) {
+    popover.classList.add('hidden');
+    return;
+  }
+
+  const rect = chip.getBoundingClientRect();
+  popover.style.top = (rect.bottom + 4) + 'px';
+  popover.style.right = (window.innerWidth - rect.right) + 'px';
+
+  let html = '<div class="hidden-popover-header"><span>Hidden subjects</span>'
+    + '<button type="button" class="hidden-unhide-all" aria-label="Unhide all">Unhide all</button></div>'
+    + '<div class="hidden-popover-list">';
+
+  for (const key of state.hiddenSubjectIds) {
+    const isSvc = String(key).startsWith('svc:');
+    const id = isSvc ? String(key).slice(4) : key;
+    const label = isSvc ? `Service ${id}` : `Subject ${id}`;
+    html += `<div class="hidden-popover-row" data-subject-key="${escapeHtml(String(key))}">`
+      + `<span class="hidden-popover-id">${escapeHtml(label)}</span>`
+      + `<button type="button" class="hidden-unhide-btn" aria-label="Unhide ${escapeHtml(label)}">Unhide</button>`
+      + `</div>`;
+  }
+  html += '</div>';
+  popover.innerHTML = html;
+
+  popover.querySelector('.hidden-unhide-all')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    unhideAllSubjects();
+  });
+  for (const btn of popover.querySelectorAll('.hidden-unhide-btn')) {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const k = btn.closest('.hidden-popover-row').dataset.subjectKey;
+      const parsed = k.startsWith('svc:') ? k : Number(k);
+      unhideSubject(parsed);
+      populateHiddenSubjectsPopover();
+    });
+  }
+};
+
+const toggleHiddenSubjectsPopover = () => {
+  const popover = el('hiddenSubjectsPopover');
+  if (!popover) return;
+  if (state.hiddenSubjectIds.size === 0) {
+    popover.classList.add('hidden');
+    return;
+  }
+  popover.classList.toggle('hidden');
+  if (!popover.classList.contains('hidden')) {
+    populateHiddenSubjectsPopover();
+  }
+};
+
+const subjectFavPinSorter = (baseSorter) => (a, b, aRow, bRow, column, dir, sorterParams) => {
+  const aFav = aRow.getData()._fav ? 1 : 0;
+  const bFav = bRow.getData()._fav ? 1 : 0;
+  if (aFav !== bFav) {
+    return dir === 'asc' ? bFav - aFav : aFav - bFav;
+  }
+  if (typeof baseSorter === 'function') return baseSorter(a, b, aRow, bRow, column, dir, sorterParams);
+  if (a == null && b == null) return 0;
+  if (a == null) return 1;
+  if (b == null) return -1;
+  if (baseSorter === 'number') return Number(a) - Number(b);
+  return String(a).localeCompare(String(b));
+};
+
+const initSubjectsTable = () => {
+  if (subjectsTabulator) return;
+
+  const settings = readSettings();
+  const savedSort = settings.subjectsTableSort;
+  const initialSort = savedSort?.key
+    ? [{ column: savedSort.key, dir: savedSort.dir }]
+    : [{ column: 'id', dir: 'asc' }];
+
+  const col = (title, field, opts = {}) => {
+    const def = { title, field, headerFilter: 'input', ...opts };
+    def.sorter = subjectFavPinSorter(opts.sorter || 'string');
+    return def;
+  };
+
+  subjectsTabulator = new Tabulator('#subjectsTable', {
+    data: buildSubjectsRows(),
+    index: '_rowId',
+    layout: 'fitColumns',
+    placeholder: subjectsPlaceholder(),
+    initialSort,
+    columns: [
+      { title: '', field: '_fav', formatter: subjectFavFormatter, width: 36, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-fav', cellClick: (_e, cell) => { toggleSubjectFavourite(cell.getRow().getData()); } },
+      col('ID', 'id', { sorter: 'number', minWidth: 50, widthGrow: 0.4, headerFilterPlaceholder: 'id' }),
+      col('Kind', 'kind', { minWidth: 60, widthGrow: 0.4, headerFilterPlaceholder: 'kind' }),
+      col('Message / Service Type', 'messageType', { minWidth: 140, widthGrow: 3, headerFilterPlaceholder: 'type', cssClass: 'cell-scroll' }),
+      col('Publishers / Servers', 'publishers', { minWidth: 80, widthGrow: 1, headerFilterPlaceholder: 'pub/srv', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
+      col('Subscribers / Clients', 'subscribers', { minWidth: 80, widthGrow: 1, headerFilterPlaceholder: 'sub/clt', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
+      col('Rate', 'rate', { sorter: 'number', minWidth: 60, widthGrow: 0.4, headerFilterPlaceholder: 'rate', formatter: (cell) => { const v = cell.getValue(); if (!v) return '<span class="text-muted">-</span>'; return v < 1 ? '&lt;1 Hz' : `${v.toFixed(1)} Hz`; } }),
+      col('Last seen/called', 'lastTime', { minWidth: 100, widthGrow: 0.8, headerFilterPlaceholder: 'time' }),
+      col('', 'lastDate', { minWidth: 75, widthGrow: 0.4, headerFilterPlaceholder: 'date' }),
+      { title: '', field: '_actions', formatter: subjectActionsFormatter, width: 56, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-actions', titleFormatter: () => { const btn = document.createElement('button'); btn.type = 'button'; btn.id = 'hiddenSubjectsChip'; btn.className = 'hidden-chip hidden'; btn.setAttribute('aria-label', 'Show hidden subjects'); btn.addEventListener('click', (e) => { e.stopPropagation(); toggleHiddenSubjectsPopover(); }); return btn; }, cellClick: (e, cell) => { e.stopPropagation(); hideSubject(cell.getRow().getData()); } },
+    ],
+  });
+
+  subjectsTabulator.on('rowClick', (_e, row) => {
+    if (_e.target.closest('.fav-star') || _e.target.closest('.action-hide')) return;
+    const data = row.getData();
+    if (data.kind !== 'Service') return;
+    openInlineServiceDetail(data);
+  });
+
+  subjectsTabulator.on('dataSorted', (sorters) => {
+    if (sorters.length > 0) {
+      state.subjectsTableSort = { key: sorters[0].field, dir: sorters[0].dir };
+      saveSettings();
+    }
+    _reattachInlineDetail();
+  });
+
+  subjectsTabulator.on('tableBuilt', () => {
+    _subjectsTableReady = true;
+    const savedFilters = settings.subjectsHeaderFilters || {};
+    for (const [field, value] of Object.entries(savedFilters)) {
+      if (value) subjectsTabulator.setHeaderFilterValue(field, value);
+    }
+    // Popover for hidden subjects
+    if (!document.getElementById('hiddenSubjectsPopover')) {
+      const popover = document.createElement('div');
+      popover.id = 'hiddenSubjectsPopover';
+      popover.className = 'hidden-popover hidden';
+      document.body.appendChild(popover);
+    }
+    updateHiddenSubjectsChip();
+  });
+
+  subjectsTabulator.on('dataFiltered', () => {
+    saveSettings();
+    _reattachInlineDetail();
+  });
+};
+
+const getSubjectsHeaderFilters = () => {
+  if (!subjectsTabulator) return null;
+  const filters = {};
+  for (const col of subjectsTabulator.getColumns()) {
+    const field = col.getField();
+    const headerEl = col.getElement().querySelector('.tabulator-header-filter input');
+    if (headerEl && headerEl.value) {
+      filters[field] = headerEl.value;
+    }
+  }
+  return filters;
+};
+
+const refreshSubjectsTable = () => {
+  if (!subjectsTabulator || !_subjectsTableReady) return;
+  _fetchMissingServiceSchemas();
+  const data = buildSubjectsRows();
+  if (!data.length) {
+    _removeInlineDetail();
+    subjectsTabulator.clearData();
+    const ph = document.querySelector('#subjectsTable .tabulator-placeholder');
+    if (ph) ph.innerHTML = subjectsPlaceholder();
+    return;
+  }
+  subjectsTabulator.updateOrAddData(data);
+  const validIds = new Set(data.map((d) => d._rowId));
+  for (const row of subjectsTabulator.getRows()) {
+    if (!validIds.has(row.getData()._rowId)) {
+      row.delete();
+    }
+  }
+  _reattachInlineDetail();
+};
+
+const _removeInlineDetail = () => {
+  const existing = document.getElementById('subjectInlineDetail');
+  if (existing) existing.remove();
+  state._expandedSubjectRowId = null;
+};
+
+const _reattachInlineDetail = () => {
+  if (!state._expandedSubjectRowId || !subjectsTabulator) return;
+  const row = subjectsTabulator.getRow(state._expandedSubjectRowId);
+  if (!row) {
+    _removeInlineDetail();
+    return;
+  }
+  const detail = document.getElementById('subjectInlineDetail');
+  if (!detail) {
+    const rowData = row.getData();
+    if (rowData.kind === 'Service') openInlineServiceDetail(rowData, true);
+    return;
+  }
+  const rowEl = row.getElement();
+  if (rowEl.nextElementSibling !== detail) {
+    rowEl.after(detail);
+  }
+};
+
+const openInlineServiceDetail = async (rowData, forceOpen = false) => {
+  const rowId = rowData._rowId;
+  if (!forceOpen && state._expandedSubjectRowId === rowId) {
+    _removeInlineDetail();
+    return;
+  }
+  _removeInlineDetail();
+
+  state._expandedSubjectRowId = rowId;
+  const serviceId = rowData.id;
+  const serverNodes = rowData.publishers
+    ? rowData.publishers.split(',').map((s) => Number(s.trim())).filter(Number.isFinite)
+    : [];
+
+  const row = subjectsTabulator.getRow(rowId);
+  if (!row) return;
+  const rowEl = row.getElement();
+
+  const detail = document.createElement('div');
+  detail.id = 'subjectInlineDetail';
+  detail.className = 'subject-inline-detail';
+  rowEl.after(detail);
+
+  if (!serverNodes.length) {
+    detail.innerHTML = svcStateMsg('○', 'No server nodes', 'No nodes advertise this service.');
+    return;
+  }
+
+  // Node selector
+  const targetNodeId = state._subjectServiceNodeId && serverNodes.includes(state._subjectServiceNodeId)
+    ? state._subjectServiceNodeId
+    : serverNodes[0];
+  state._subjectServiceNodeId = targetNodeId;
+
+  if (serverNodes.length > 1) {
+    const selector = document.createElement('div');
+    selector.className = 'svc-node-selector';
+    selector.innerHTML = '<span class="svc-node-selector-label">Target node:</span>' +
+      serverNodes.map((nid) =>
+        `<button type="button" class="svc-node-btn${nid === targetNodeId ? ' active' : ''}" data-node-id="${nid}">${nid}</button>`
+      ).join('');
+    detail.appendChild(selector);
+    selector.querySelectorAll('.svc-node-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const currentDetail = document.getElementById('subjectInlineDetail');
+        if (!currentDetail) return;
+        state._subjectServiceNodeId = Number(btn.dataset.nodeId);
+        state._subjectExpandedServiceId = serviceId;
+        state._subjectServiceCallState = null;
+        _renderInlineServiceForm(currentDetail, serviceId, state._subjectServiceNodeId, serverNodes);
+      });
+    });
+  }
+
+  state._subjectExpandedServiceId = serviceId;
+  state._subjectServiceCallState = null;
+
+  await _renderInlineServiceForm(detail, serviceId, targetNodeId, serverNodes);
+};
+
+const _renderInlineServiceForm = async (detail, serviceId, nodeId, serverNodes) => {
+  let formContainer = detail.querySelector('.svc-inline-form');
+  if (!formContainer) {
+    formContainer = document.createElement('div');
+    formContainer.className = 'svc-inline-form';
+    detail.appendChild(formContainer);
+  }
+
+  if (!state.serviceSchemas.has(nodeId)) {
+    formContainer.innerHTML = svcStateMsg('<span class="svc-spinner"></span>', `Loading schema from node ${nodeId}…`, '');
+    await fetchServiceSchema(nodeId);
+  }
+
+  const schemas = state.serviceSchemas.get(nodeId);
+  if (!Array.isArray(schemas)) {
+    formContainer.innerHTML = svcStateMsg('✕', 'Failed to load schema', 'Could not fetch schema from the server node.');
+    return;
+  }
+
+  const svc = schemas.find((s) => s.service_id === serviceId);
+  if (!svc) {
+    formContainer.innerHTML = svcStateMsg('○', 'Service not found', `Node ${nodeId} does not expose service ${serviceId}.`);
+    return;
+  }
+
+  formContainer.innerHTML = `<section class="svc-panel">${renderServiceCard(svc, true)}</section>`;
+  bindServiceCardEvents(formContainer, nodeId, true);
+  _loadPersistentHistory(formContainer);
+
+  // Update node selector active state
+  detail.querySelectorAll('.svc-node-btn').forEach((btn) => {
+    btn.classList.toggle('active', Number(btn.dataset.nodeId) === nodeId);
+  });
+};
+
+
+const renderSubjectServiceCard = (svc, nodeId) => {
+  const detail = document.getElementById('subjectInlineDetail');
+  if (!detail) return;
+  let formContainer = detail.querySelector('.svc-inline-form');
+  if (!formContainer) {
+    formContainer = document.createElement('div');
+    formContainer.className = 'svc-inline-form';
+    detail.appendChild(formContainer);
+  }
+  formContainer.innerHTML = `<section class="svc-panel">${renderServiceCard(svc, true)}</section>`;
+  bindServiceCardEvents(formContainer, nodeId, true);
+  _loadPersistentHistory(formContainer);
+};
+
+const switchView = (view) => {
+  if (state.activeView === view) return;
+  state.activeView = view;
+
+  const nodesEl = el('nodesTable');
+  const subjectsEl = el('subjectsTable');
+  const detailHandle = el('detailResizeHandle');
+  const detailPanel = el('detailPanel');
+
+  if (view === 'subjects') {
+    nodesEl.classList.add('hidden');
+    subjectsEl.classList.remove('hidden');
+    detailHandle.classList.add('hidden');
+    detailPanel.classList.add('hidden');
+    initSubjectsTable();
+    refreshSubjectsTable();
+  } else {
+    subjectsEl.classList.add('hidden');
+    nodesEl.classList.remove('hidden');
+    detailHandle.classList.remove('hidden');
+    detailPanel.classList.remove('hidden');
+  }
+
+  document.querySelectorAll('.sidebar-view-tab').forEach((btn) => {
+    const isActive = btn.dataset.view === view;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-selected', isActive);
+  });
+
+  saveSettings();
+};

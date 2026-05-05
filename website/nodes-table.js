@@ -384,6 +384,11 @@ const initNodesTable = () => {
 };
 
 const renderNodesTable = () => {
+  if (state.activeView === 'subjects') {
+    refreshSubjectsTable();
+    return;
+  }
+
   const data = buildTableData();
 
   if (!nodesTabulator) return;
