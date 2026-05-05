@@ -419,14 +419,7 @@ button:focus-visible,
 
 /* ── Hidden nodes chip (overlays table header) ── */
 .hidden-chip-wrap {
-  position: absolute;
-  top: 0;
-  right: 0;
-  z-index: 10;
-  height: 2.25rem;
-  display: flex;
-  align-items: center;
-  padding-right: 0.5rem;
+  display: none;
 }
 
 .hidden-chip {
@@ -454,10 +447,8 @@ button:focus-visible,
 }
 
 .hidden-popover {
-  position: absolute;
-  top: 2.25rem;
-  right: 0;
-  z-index: 100;
+  position: fixed;
+  z-index: 9999;
   min-width: 14rem;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1287,6 +1278,20 @@ button:focus-visible,
   padding: 0.5rem 0.25rem;
 }
 
+.tabulator .tabulator-header .tabulator-col.cell-actions {
+  overflow: visible;
+}
+
+.tabulator .tabulator-header .tabulator-col.cell-actions .tabulator-col-content {
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  height: 100%;
+  padding-left: 0.25rem;
+}
+
 .tabulator .tabulator-row .tabulator-cell.cell-name {
   cursor: default;
 }
@@ -1297,14 +1302,6 @@ button:focus-visible,
   min-width: 0;
 }
 .name-display {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.name-original {
-  color: var(--muted);
-  font-size: 0.75rem;
-  margin-left: 0.25rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

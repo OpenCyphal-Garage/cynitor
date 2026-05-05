@@ -64,11 +64,11 @@ const nameFormatter = (cell) => {
     return node?.name || null;
   })();
   const display = alias || original || '-';
-  const subtitle = alias && original ? `<span class="name-original">${escapeHtml(original)}</span>` : '';
+  const tooltip = alias && original ? ` title="${escapeHtml(original)}"` : '';
   const editIcon = row._uid?.length
     ? '<span class="name-edit-icon" aria-hidden="true">✎</span>'
     : '';
-  return `<span class="name-cell">${editIcon}<span class="name-display">${escapeHtml(display)}</span>${subtitle}</span>`;
+  return `<span class="name-cell">${editIcon}<span class="name-display"${tooltip}>${escapeHtml(display)}</span></span>`;
 };
 
 const startNameEdit = (cell) => {
@@ -92,18 +92,23 @@ const startNameEdit = (cell) => {
   input.focus();
   input.select();
 
-  let committed = false;
-  const commit = () => {
-    if (committed) return;
-    committed = true;
+  let done = false;
+  const save = () => {
+    if (done) return;
+    done = true;
     setNodeAlias(row._uid, input.value);
     renderNodesTable();
   };
+  const discard = () => {
+    if (done) return;
+    done = true;
+    cellEl.innerHTML = nameFormatter(cell);
+  };
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); commit(); }
-    if (e.key === 'Escape') { e.preventDefault(); committed = true; renderNodesTable(); }
+    if (e.key === 'Enter') { e.preventDefault(); save(); }
+    if (e.key === 'Escape') { e.preventDefault(); discard(); }
   });
-  input.addEventListener('blur', commit);
+  input.addEventListener('blur', discard);
 };
 
 const EYE_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
@@ -157,20 +162,13 @@ const unhideAllNodes = () => {
 };
 
 const injectHiddenChip = () => {
-  const tableEl = document.querySelector('#nodesTable');
-  if (!tableEl || tableEl.querySelector('.hidden-chip-wrap')) return;
+  if (document.getElementById('hiddenNodesPopover')) return;
 
-  tableEl.style.position = 'relative';
-  const wrap = document.createElement('div');
-  wrap.className = 'hidden-chip-wrap';
-  wrap.innerHTML = '<button type="button" id="hiddenNodesChip" class="hidden-chip hidden" aria-label="Show hidden nodes"></button>'
-    + '<div id="hiddenNodesPopover" class="hidden-popover hidden"></div>';
-  tableEl.appendChild(wrap);
-
-  wrap.querySelector('#hiddenNodesChip').addEventListener('click', (e) => {
-    e.stopPropagation();
-    renderHiddenPopover();
-  });
+  // Popover lives on document.body so Tabulator's overflow:hidden can't clip it
+  const popover = document.createElement('div');
+  popover.id = 'hiddenNodesPopover';
+  popover.className = 'hidden-popover hidden';
+  document.body.appendChild(popover);
 };
 
 const updateHiddenChip = () => {
@@ -187,15 +185,19 @@ const updateHiddenChip = () => {
   chip.innerHTML = EYE_OFF_ICON + `<span>${count}</span>`;
 };
 
-const renderHiddenPopover = () => {
+const populateHiddenPopover = () => {
   const popover = el('hiddenNodesPopover');
-  if (!popover) return;
+  const chip = el('hiddenNodesChip');
+  if (!popover || !chip) return;
+
   if (state.hiddenNodeIds.size === 0) {
     popover.classList.add('hidden');
     return;
   }
-  popover.classList.toggle('hidden');
-  if (popover.classList.contains('hidden')) return;
+
+  const rect = chip.getBoundingClientRect();
+  popover.style.top = (rect.bottom + 4) + 'px';
+  popover.style.right = (window.innerWidth - rect.right) + 'px';
 
   const nodes = state.latestNodesPayload?.nodes || {};
   let html = '<div class="hidden-popover-header"><span>Hidden nodes</span>'
@@ -227,8 +229,21 @@ const renderHiddenPopover = () => {
       e.stopPropagation();
       const nodeId = Number(btn.closest('.hidden-popover-row').dataset.nodeId);
       unhideNode(nodeId);
-      renderHiddenPopover();
+      populateHiddenPopover();
     });
+  }
+};
+
+const toggleHiddenPopover = () => {
+  const popover = el('hiddenNodesPopover');
+  if (!popover) return;
+  if (state.hiddenNodeIds.size === 0) {
+    popover.classList.add('hidden');
+    return;
+  }
+  popover.classList.toggle('hidden');
+  if (!popover.classList.contains('hidden')) {
+    populateHiddenPopover();
   }
 };
 
@@ -328,7 +343,7 @@ const initNodesTable = () => {
       colDef('Subscribers', 'subscribers', { minWidth: 80, widthGrow: 1, formatter: portsFormatter, headerFilterPlaceholder: 'sub', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
       colDef('Servers', 'servers', { minWidth: 80, widthGrow: 1, formatter: portsFormatter, headerFilterPlaceholder: 'srv', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
       colDef('Clients', 'clients', { minWidth: 80, widthGrow: 1, formatter: portsFormatter, headerFilterPlaceholder: 'clt', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
-      { title: '', field: '_actions', formatter: actionsFormatter, width: 36, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-actions', cellClick: (e, cell) => { e.stopPropagation(); hideNode(cell.getRow().getData().id); } },
+      { title: '', field: '_actions', formatter: actionsFormatter, width: 56, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-actions', titleFormatter: () => { const btn = document.createElement('button'); btn.type = 'button'; btn.id = 'hiddenNodesChip'; btn.className = 'hidden-chip hidden'; btn.setAttribute('aria-label', 'Show hidden nodes'); btn.addEventListener('click', (e) => { e.stopPropagation(); toggleHiddenPopover(); }); return btn; }, cellClick: (e, cell) => { e.stopPropagation(); hideNode(cell.getRow().getData().id); } },
     ],
   });
 

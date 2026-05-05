@@ -116,7 +116,8 @@ const renderClientsTab = async () => {
   }
 
   if (node.has_disappeared) {
-    content.innerHTML = `<div class="svc-stale-banner" role="alert"><span class="svc-stale-icon">⚠</span>Node ${nodeId} is offline — client data may be stale.</div>`
+    const clientStaleLabel = getNodeAlias(node.unique_id) || node.name || `Node ${nodeId}`;
+    content.innerHTML = `<div class="svc-stale-banner" role="alert"><span class="svc-stale-icon">⚠</span>${escapeHtml(clientStaleLabel)} is offline — client data may be stale.</div>`
       + `<div class="svc-panel-stale">${renderClientCards(clients, new Map())}</div>`;
     return;
   }
@@ -194,7 +195,9 @@ const renderSelectedNodeContent = () => {
     } else if (state.selectedNodeId == null) {
       content.innerHTML = svcStateMsg('◎', 'Select a node to inspect details', 'Choose a node from the table above.');
     } else {
-      content.innerHTML = svcStateMsg('⚠', `Node ${state.selectedNodeId} is offline`, 'This node disappeared from the CAN bus.');
+      const offlineNode = state.latestNodesPayload?.nodes?.[state.selectedNodeId];
+      const offlineLabel = getNodeAlias(offlineNode?.unique_id) || offlineNode?.name || `Node ${state.selectedNodeId}`;
+      content.innerHTML = svcStateMsg('⚠', `${offlineLabel} is offline`, 'This node disappeared from the CAN bus.');
     }
     return;
   }
@@ -207,8 +210,9 @@ const renderSelectedNodeContent = () => {
     delete content.dataset.svcTab;
   }
 
+  const staleLabel = getNodeAlias(node.unique_id) || node.name || `Node ${node.node_id}`;
   const staleBanner = isOffline
-    ? `<div class="svc-stale-banner" role="alert"><span class="svc-stale-icon">⚠</span>Node ${node.node_id} is offline — data may be stale.</div>`
+    ? `<div class="svc-stale-banner" role="alert"><span class="svc-stale-icon">⚠</span>${escapeHtml(staleLabel)} is offline — data may be stale.</div>`
     : '';
 
   const transitioned = wasOffline !== isOffline;
