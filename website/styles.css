@@ -386,7 +386,7 @@ button:focus-visible,
 
 /* Icon buttons sit in narrow cells — keep the outline inset to avoid clipping */
 .fav-star:focus-visible,
-.action-delete:focus-visible {
+.action-hide:focus-visible {
   outline-offset: 0;
 }
 
@@ -415,6 +415,126 @@ button:focus-visible,
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+/* ── Table toolbar (hidden chip) ── */
+.table-toolbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 0.25rem 0.5rem;
+  min-height: 0;
+}
+
+.table-toolbar:empty,
+.table-toolbar:not(:has(.hidden-chip:not(.hidden))) {
+  display: none;
+}
+
+.hidden-chip {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 0.125rem 0.625rem;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.hidden-chip:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.hidden-popover {
+  position: absolute;
+  top: 100%;
+  left: 0.5rem;
+  z-index: 20;
+  min-width: 14rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 0.25rem 1rem rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+}
+
+[data-theme="dark"] .hidden-popover {
+  box-shadow: 0 0.25rem 1rem rgba(0, 0, 0, 0.4);
+}
+
+.hidden-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.hidden-unhide-all {
+  font-size: 0.6875rem;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.hidden-unhide-all:hover {
+  text-decoration: underline;
+}
+
+.hidden-popover-list {
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.hidden-popover-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.hidden-popover-row:last-child {
+  border-bottom: none;
+}
+
+.hidden-popover-id {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--text-bright);
+  min-width: 2rem;
+}
+
+.hidden-popover-name {
+  flex: 1;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hidden-unhide-btn {
+  font-size: 0.6875rem;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.hidden-unhide-btn:hover {
+  text-decoration: underline;
 }
 
 /* ── Tabulator theme overrides ── */
@@ -1101,7 +1221,7 @@ button:focus-visible,
 
 /* ── Favourite star & actions column ── */
 .fav-star,
-.action-delete {
+.action-hide {
   background: none;
   border: none;
   padding: 0;
@@ -1127,29 +1247,66 @@ button:focus-visible,
   color: var(--warn);
 }
 
-.action-delete {
+.action-hide {
+  cursor: pointer;
+  color: var(--muted);
+  opacity: 0.4;
   transition: color 0.12s, opacity 0.12s;
 }
 
-.action-delete.enabled {
-  cursor: pointer;
-  color: var(--error);
-}
-
-.action-delete.enabled:hover {
+.action-hide:hover {
   background: none;
-  opacity: 0.8;
-}
-
-.action-delete.disabled {
-  color: var(--muted);
-  opacity: 0.25;
-  cursor: default;
+  color: var(--text);
+  opacity: 1;
 }
 
 .tabulator .tabulator-row .tabulator-cell.cell-fav,
 .tabulator .tabulator-row .tabulator-cell.cell-actions {
   padding: 0.5rem 0.25rem;
+}
+
+.tabulator .tabulator-row .tabulator-cell.cell-name {
+  cursor: default;
+}
+.name-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.name-display {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.name-original {
+  color: var(--muted);
+  font-size: 0.75rem;
+  margin-left: 0.25rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.name-edit-icon {
+  opacity: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+.tabulator-row:hover .name-edit-icon {
+  opacity: 0.6;
+}
+.name-input {
+  width: 100%;
+  font: inherit;
+  font-size: 0.8125rem;
+  padding: 0.125rem 0.25rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
 }
 
 .health-text {

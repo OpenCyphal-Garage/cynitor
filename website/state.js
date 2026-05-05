@@ -20,7 +20,7 @@ const state = {
   canState: CONN.IDLE,
   preferredCanInterface: '',
   favouriteNodeIds: new Set(),
-  deletedNodeIds: new Set(),
+  hiddenNodeIds: new Set(),
   latestNodesPayload: { node_count: 0, nodes: {} },
   latestBySubject: new Map(),
   latestByNode: new Map(),
@@ -43,6 +43,7 @@ const state = {
   serviceCallState: null,
   serviceCallHistory: [],
   expandedServiceId: null,
+  nodeAliases: {},
 };
 
 // Derived accessors for CAN connection state — keeps existing code readable
@@ -77,6 +78,28 @@ const PLOT_TICK_MS = 100;
 // ── Utility helpers ──
 
 const el = (id) => document.getElementById(id);
+
+const uniqueIdKey = (uid) => {
+  if (!Array.isArray(uid) || !uid.length) return null;
+  return uid.map((b) => b.toString(16).padStart(2, '0')).join('');
+};
+
+const getNodeAlias = (uid) => {
+  const key = uniqueIdKey(uid);
+  return key ? state.nodeAliases[key] || null : null;
+};
+
+const setNodeAlias = (uid, alias) => {
+  const key = uniqueIdKey(uid);
+  if (!key) return;
+  const trimmed = alias?.trim();
+  if (trimmed) {
+    state.nodeAliases[key] = trimmed;
+  } else {
+    delete state.nodeAliases[key];
+  }
+  saveSettings();
+};
 
 const escapeHtml = (value) =>
   String(value)
@@ -248,7 +271,8 @@ const _writeSettingsNow = () => {
     selectedNodeId: state.selectedNodeId,
     splitRatio: state.splitRatio,
     favouriteNodeIds: [...state.favouriteNodeIds],
-    deletedNodeIds: [...state.deletedNodeIds],
+    hiddenNodeIds: [...state.hiddenNodeIds],
+    nodeAliases: state.nodeAliases,
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
 };
@@ -311,13 +335,17 @@ const loadSettings = () => {
   if (Array.isArray(settings.favouriteNodeIds)) {
     state.favouriteNodeIds = new Set(settings.favouriteNodeIds);
   }
-  if (Array.isArray(settings.deletedNodeIds)) {
-    state.deletedNodeIds = new Set(settings.deletedNodeIds);
+  const savedHidden = settings.hiddenNodeIds || settings.deletedNodeIds;
+  if (Array.isArray(savedHidden)) {
+    state.hiddenNodeIds = new Set(savedHidden);
   }
   if (Number.isInteger(settings.selectedNodeId)) {
     state.selectedNodeId = settings.selectedNodeId;
   }
   if (typeof settings.splitRatio === 'number' && settings.splitRatio > 0.2 && settings.splitRatio < 0.9) {
     state.splitRatio = settings.splitRatio;
+  }
+  if (settings.nodeAliases && typeof settings.nodeAliases === 'object') {
+    state.nodeAliases = settings.nodeAliases;
   }
 };

@@ -128,6 +128,14 @@ const bind = () => {
     saveSettings();
   });
   el('apiBase').addEventListener('change', saveSettings);
+  el('hiddenNodesChip').addEventListener('click', renderHiddenPopover);
+  document.addEventListener('click', (e) => {
+    const popover = el('hiddenNodesPopover');
+    if (popover && !popover.classList.contains('hidden')
+      && !popover.contains(e.target) && e.target !== el('hiddenNodesChip')) {
+      popover.classList.add('hidden');
+    }
+  });
 
   const selectSubjectCard = (card) => {
     const sid = Number(card.dataset.subject);
@@ -162,6 +170,7 @@ updateDashboardConnectButton();
 updateCanConnectButton();
 renderSelectedNodeContent();
 updateSemaphores();
+updateHiddenChip();
 
 // Restore previous connection state
 (async () => {
