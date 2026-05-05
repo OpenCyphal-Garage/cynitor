@@ -57,11 +57,11 @@ EventLogger.start()        SQLite persistence
 | File | Role |
 |------|------|
 | `main.py` | Entry point, lifecycle orchestration, two startup modes (direct vs selection) |
-| `scanner_node.py` | CAN network discovery: heartbeat + port list subscriptions, dynamic per-subject subscribers, per-service clients |
+| `scanner_node.py` | CAN network discovery: heartbeat + port list subscriptions, dynamic per-subject subscribers, per-service clients, service schema introspection with STANDARD_SERVICES fallback |
 | `node_info.py` | Per-node lifecycle state: appearance, last-heartbeat timestamp, disappearance threshold (>1.1s), port lists, GetInfo response |
 | `telemetry_manager.py` | Event router: maintains `latest_by_subject` and `latest_by_node` caches, broadcasts to subscriber queues |
-| `websocket_server.py` | aiohttp HTTP+WS server, REST endpoints, per-client WebSocket filtering, periodic metrics broadcast |
-| `event_logger.py` | SQLite persistence with batch writes, `asyncio.to_thread` for non-blocking I/O, configurable retention |
+| `websocket_server.py` | aiohttp HTTP+WS server, REST endpoints, per-client WebSocket filtering, periodic metrics broadcast, node history and service call history endpoints |
+| `event_logger.py` | SQLite persistence with batch writes, `asyncio.to_thread` for non-blocking I/O, configurable retention, node lifecycle history (30-day), service call history with response bodies |
 | `allocator.py` | Node-ID allocator detection / fallback (CentralizedAllocator), 10s re-check |
 | `startup_setup.py` | DSDL compilation via `nnvg`, sets `UAVCAN__CAN__IFACE` / `UAVCAN__CAN__MTU`, calls `yakut accommodate` for node ID |
 | `log_store.py` | In-memory deque (max 5000) fed by a `logging.Handler`; exposed via `/api/logs` |
@@ -96,8 +96,10 @@ All frontend code lives in `website/`. Plain HTML/CSS/JS. No build step. D3 (CDN
 | `cache.js` | Telemetry cache and per-node accessors: `cacheEvent`, `getNodeRate`, `getNodeHealthValue`, `getNodeVisualState`, `pruneNodeCache`, `buildSubjectDetailData` |
 | `detail-panel.js` | Per-node subject cards, multi-panel D3 plot, hover crosshair + tooltip, toggle-pill legend, selection helpers |
 | `nodes-table.js` | Tabulator init, formatters, row build (port arrays joined to strings to avoid spurious cell re-renders), favourite + delete actions |
+| `services-panel.js` | Service interaction: schema fetch, request form rendering, send/repeat/copy, persistent call history from backend, view-isolated state (`forSubjects` parameter) |
+| `subjects-panel.js` | Subject browser: Tabulator-based table of all subjects and services, inline service expansion with node selector, integrated persistent history |
 | `connection.js` | WebSocket lifecycle, REST polling (status, nodes, interfaces), throughput meter, semaphores, `disconnectAll` shared teardown |
-| `app.js` | Boot file: DOM event wiring (`bind`), settings restore, frontend-server heartbeat |
+| `app.js` | Boot file: DOM event wiring (`bind`), settings restore, frontend-server heartbeat, sidebar view tab switching |
 
 Top-level `const`/`let` declarations are shared globals across script tags (no modules). Cross-file references resolve at function-call time, not at load time, so script order matters: any dependent file must come after the one declaring its symbols.
 
@@ -123,9 +125,15 @@ Page load → loadSettings() → bind() → updateSemaphores()
 
 The frontend never blocks on a single source. WebSocket is for live events; REST is for structural snapshots and connection metadata.
 
+Two views share the same WebSocket and REST data:
+- **Nodes view** — Tabulator table of nodes, detail panel below with tabs (Publishers, Subscribers, Servers, Clients, Registers, History).
+- **Subjects view** — Tabulator table of all subjects and services across the network. Services can be expanded inline with a node selector and request form. Both views use `services-panel.js` for service interaction but maintain isolated state via the `forSubjects` parameter pattern.
+
 ### State
 
 The global `state` object holds everything mutable: connection flags, timer IDs, latest-payloads, subject history (per `subject_id:attr_name` key), selection IDs, per-subject hidden plot series (`Map<sid, Set<attr>>`), and UI prefs. Mutations are direct; rendering reads `state` synchronously.
+
+Service interaction state is duplicated per view to prevent cross-contamination: `serviceCallState` / `_subjectServiceCallState`, `expandedServiceId` / `_subjectExpandedServiceId`, and `_subjectServiceNodeId`. Shared rendering functions in `services-panel.js` accept a `forSubjects` boolean to read/write the correct slot.
 
 `localStorage` persistence (key `pycyphal.dashboard.settings.v2`) is debounced 250ms and flushed on `beforeunload`. Heavy or transient data (telemetry payloads, full table rows) is *not* persisted — only layout/preferences.
 
@@ -183,9 +191,11 @@ cynitor/
     state.js                Global state, settings, API helpers
     cache.js                Telemetry cache + per-node accessors
     detail-panel.js         Detail panel + multi-panel plot
-    nodes-table.js          Tabulator
+    nodes-table.js          Tabulator (nodes view)
+    services-panel.js       Service interaction UI and persistent history
+    subjects-panel.js       Subject browser (subjects view) with inline service expansion
     connection.js           WS + polling + lifecycle
-    app.js                  Boot, bindings, heartbeat
+    app.js                  Boot, bindings, heartbeat, view switching
     styles.css              Theme and layout
   dsdl_messages/            DSDL type definitions (public_regulated_data_types submodule)
   python_compiled_messages/ nnvg output (gitignored)
