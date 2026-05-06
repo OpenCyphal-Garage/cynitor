@@ -63,13 +63,14 @@ const renderServiceHistory = (_nodeId, serviceId) => {
   return `<div class="svc-history-container" data-service-id="${serviceId}"></div>`;
 };
 
-const _loadPersistentHistory = async (parentEl) => {
+const _loadPersistentHistory = async (parentEl, nodeId) => {
   const containers = parentEl.querySelectorAll('.svc-history-container');
   for (const container of containers) {
     const serviceId = Number(container.dataset.serviceId);
     if (!serviceId) continue;
     try {
-      const data = await requestJson(`/api/services/${serviceId}/history?range=7d&limit=50`);
+      const nodeParam = nodeId != null ? `&node_id=${nodeId}` : '';
+      const data = await requestJson(`/api/services/${serviceId}/history?range=7d&limit=50${nodeParam}`);
       const entries = data.history || [];
       if (!entries.length) {
         container.innerHTML = '';
@@ -520,5 +521,5 @@ const renderServicesTab = async () => {
   // State 9+: render service cards
   content.innerHTML = `<section class="svc-panel">${services.map(svc => renderServiceCard(svc)).join('')}</section>`;
   bindServiceCardEvents(content, nodeId);
-  _loadPersistentHistory(content);
+  _loadPersistentHistory(content, nodeId);
 };

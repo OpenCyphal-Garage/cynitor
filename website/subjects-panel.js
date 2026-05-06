@@ -485,7 +485,7 @@ const _renderInlineServiceForm = async (detail, serviceId, nodeId, serverNodes) 
 
   formContainer.innerHTML = `<section class="svc-panel">${renderServiceCard(svc, true)}</section>`;
   bindServiceCardEvents(formContainer, nodeId, true);
-  _loadPersistentHistory(formContainer);
+  _loadPersistentHistory(formContainer, nodeId);
 
   // Update node selector active state
   detail.querySelectorAll('.svc-node-btn').forEach((btn) => {
@@ -505,7 +505,7 @@ const renderSubjectServiceCard = (svc, nodeId) => {
   }
   formContainer.innerHTML = `<section class="svc-panel">${renderServiceCard(svc, true)}</section>`;
   bindServiceCardEvents(formContainer, nodeId, true);
-  _loadPersistentHistory(formContainer);
+  _loadPersistentHistory(formContainer, nodeId);
 };
 
 const openSubjectPlot = (rowData) => {

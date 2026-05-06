@@ -346,8 +346,6 @@ body {
   border-color: var(--border);
 }
 
-.easter-trigger { cursor: pointer; }
-
 .sidebar-footer {
   margin-top: auto;
   display: flex;
@@ -373,10 +371,6 @@ body {
 .sidebar-built-by:visited {
   color: var(--fg);
 }
-
-.cordicor-dark { display: none; }
-[data-theme="dark"] .cordicor-light { display: none; }
-[data-theme="dark"] .cordicor-dark { display: block; }
 
 .cordicor-logo {
   height: 3.7rem;

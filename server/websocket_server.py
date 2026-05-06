@@ -279,6 +279,8 @@ class WebSocketServer:
 
         service_type = f"{meta['namespace']}.{meta['service_name']}"
 
+        uid = self.session.scanner._get_node_unique_id_hex(node_id) if self.session.scanner else None
+
         t0 = time.monotonic()
         try:
             response_str = await self.session.scanner.make_service_call(
@@ -290,7 +292,7 @@ class WebSocketServer:
                     "service_id": service_id, "service_type": service_type,
                     "status": "ok", "latency_ms": latency_ms,
                     "response": response_str,
-                })
+                }, unique_id=uid)
             return web.json_response({
                 "status": "ok",
                 "latency_ms": latency_ms,
@@ -302,7 +304,7 @@ class WebSocketServer:
                 await self.session.event_logger.log_node_event(node_id, "service_call", {
                     "service_id": service_id, "service_type": service_type,
                     "status": "timeout", "latency_ms": latency_ms,
-                })
+                }, unique_id=uid)
             return web.json_response({
                 "status": "timeout",
                 "latency_ms": latency_ms,
@@ -316,7 +318,7 @@ class WebSocketServer:
                 await self.session.event_logger.log_node_event(node_id, "service_call", {
                     "service_id": service_id, "service_type": service_type,
                     "status": "error", "latency_ms": latency_ms,
-                })
+                }, unique_id=uid)
             logger.error(f"Service call failed: {e}", exc_info=True)
             return web.json_response({
                 "status": "error",
@@ -339,6 +341,8 @@ class WebSocketServer:
         if not self.session.event_logger:
             return web.json_response({"error": "Event logger not available"}, status=503)
 
+        unique_id = request.query.get("unique_id")
+
         range_str = request.query.get("range", "1h")
         offset = self._TIME_RANGE_MAP.get(range_str)
         since_unix = time.time() - offset if offset else time.time() - 3600
@@ -352,7 +356,7 @@ class WebSocketServer:
             return web.json_response({"error": "Invalid limit parameter"}, status=400)
 
         events = await self.session.event_logger.get_node_history(
-            node_id, since_unix=since_unix, event_types=event_types, limit=limit,
+            node_id, since_unix=since_unix, event_types=event_types, limit=limit, unique_id=unique_id,
         )
         return web.json_response({"node_id": node_id, "events": events})
 
@@ -365,7 +369,8 @@ class WebSocketServer:
         if not self.session.event_logger:
             return web.json_response({"error": "Event logger not available"}, status=503)
 
-        subjects = await self.session.event_logger.get_subject_summary(node_id)
+        unique_id = request.query.get("unique_id")
+        subjects = await self.session.event_logger.get_subject_summary(node_id, unique_id=unique_id)
         return web.json_response({"node_id": node_id, "subjects": subjects})
 
     async def _get_service_call_history(self, request: web.Request) -> web.Response:
@@ -386,8 +391,12 @@ class WebSocketServer:
         except (ValueError, TypeError):
             return web.json_response({"error": "Invalid limit parameter"}, status=400)
 
+        node_id_str = request.query.get("node_id")
+        node_id = int(node_id_str) if node_id_str else None
+        unique_id = request.query.get("unique_id")
+
         history = await self.session.event_logger.get_service_call_history(
-            service_id, since_unix=since_unix, limit=limit,
+            service_id, since_unix=since_unix, limit=limit, node_id=node_id, unique_id=unique_id,
         )
 
         telemetry = self.session.telemetry

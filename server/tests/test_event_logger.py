@@ -7,7 +7,7 @@ import pytest
 from event_logger import EventLogger
 
 
-def _sample_event(subject_id=100, node_id=42, msg_type="Heartbeat_1_0"):
+def _sample_event(subject_id=100, node_id=42, msg_type="Heartbeat_1_0", unique_id=None):
     return {
         "subject_id": subject_id,
         "timestamp": "2026-03-19T10:00:00",
@@ -15,6 +15,7 @@ def _sample_event(subject_id=100, node_id=42, msg_type="Heartbeat_1_0"):
         "rate": 1,
         "message_type": msg_type,
         "publisher_node_id": node_id,
+        "unique_id": unique_id,
         "attributes": [{"attribute": "uptime", "value": 999, "unit": "s"}],
     }
 
@@ -115,3 +116,64 @@ class TestEventLogger:
         await logger.stop()
         count = await logger.get_event_count()
         assert count == 1
+
+    @pytest.mark.asyncio
+    async def test_unique_id_stored_in_events(self, logger):
+        uid = "aabbccdd" * 4
+        logger._write_events_sync([_sample_event(unique_id=uid)])
+        events = logger._get_events_sync()
+        assert events[0]["unique_id"] == uid
+
+    @pytest.mark.asyncio
+    async def test_query_events_by_unique_id(self, logger):
+        uid = "aabbccdd" * 4
+        logger._write_events_sync([
+            _sample_event(node_id=1, unique_id=uid),
+            _sample_event(node_id=2, unique_id=uid),
+            _sample_event(node_id=3, unique_id="other_uid"),
+        ])
+        events = logger._get_events_sync(unique_id=uid)
+        assert len(events) == 2
+        assert all(e["unique_id"] == uid for e in events)
+
+    @pytest.mark.asyncio
+    async def test_unique_id_prefers_over_node_id(self, logger):
+        """When unique_id is provided, node_id filter is ignored."""
+        uid = "aabbccdd" * 4
+        logger._write_events_sync([
+            _sample_event(node_id=1, unique_id=uid),
+            _sample_event(node_id=2, unique_id=uid),
+            _sample_event(node_id=1, unique_id="other_uid"),
+        ])
+        events = logger._get_events_sync(node_id=1, unique_id=uid)
+        assert len(events) == 2
+
+    @pytest.mark.asyncio
+    async def test_node_history_with_unique_id(self, logger):
+        uid = "aabbccdd" * 4
+        logger._log_node_event_sync(node_id=10, event_type="first_seen", unique_id=uid)
+        logger._log_node_event_sync(node_id=20, event_type="reappeared", unique_id=uid)
+        logger._log_node_event_sync(node_id=10, event_type="health_change", unique_id="other")
+        history = logger._get_node_history_sync(node_id=10, unique_id=uid)
+        assert len(history) == 2
+        assert all(h["unique_id"] == uid for h in history)
+
+    @pytest.mark.asyncio
+    async def test_node_history_fallback_to_node_id(self, logger):
+        logger._log_node_event_sync(node_id=10, event_type="first_seen")
+        logger._log_node_event_sync(node_id=10, event_type="reappeared")
+        history = logger._get_node_history_sync(node_id=10)
+        assert len(history) == 2
+
+    @pytest.mark.asyncio
+    async def test_subject_summary_by_unique_id(self, logger):
+        uid = "aabbccdd" * 4
+        logger._write_events_sync([
+            _sample_event(subject_id=100, node_id=1, unique_id=uid),
+            _sample_event(subject_id=100, node_id=2, unique_id=uid),
+            _sample_event(subject_id=200, node_id=1, unique_id="other"),
+        ])
+        summary = logger._get_subject_summary_sync(node_id=1, unique_id=uid)
+        assert len(summary) == 1
+        assert summary[0]["subject_id"] == 100
+        assert summary[0]["total_events"] == 2

@@ -947,6 +947,7 @@ class ScannerNode:
             "message_type": message_type,
             "attributes": attributes,
             "publisher_node_id": publisher_node_id,
+            "unique_id": self._get_node_unique_id_hex(publisher_node_id),
         }
         try:
             self.message_queue.put_nowait(event)
@@ -1145,9 +1146,18 @@ class ScannerNode:
     HEALTH_NAMES = {0: "NOMINAL", 1: "ADVISORY", 2: "CAUTION", 3: "WARNING"}
     MODE_NAMES = {0: "OPERATIONAL", 1: "INITIALIZATION", 2: "MAINTENANCE", 3: "SOFTWARE_UPDATE"}
 
+    def _get_node_unique_id_hex(self, node_id: int) -> Optional[str]:
+        node = self.all_nodes.get(node_id)
+        if node and node.has_responded_to_getInfo and node.unique_id.size > 0:
+            uid = ''.join(f'{byte:02x}' for byte in node.unique_id)
+            if any(c != '0' for c in uid):
+                return uid
+        return None
+
     def _emit_node_event(self, node_id: int, event_type: str, detail: Optional[dict] = None) -> None:
         if self.on_node_event:
-            asyncio.ensure_future(self.on_node_event(node_id, event_type, detail))
+            uid = self._get_node_unique_id_hex(node_id)
+            asyncio.ensure_future(self.on_node_event(node_id, event_type, detail, unique_id=uid))
 
     async def port_callback(self, msg: uavcan.node.port.List_1_0, transfer: pycyphal.transport.TransferFrom):
         node_id: int = transfer.source_node_id
