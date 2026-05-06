@@ -301,8 +301,11 @@ const initSubjectsTable = () => {
   subjectsTabulator.on('rowClick', (_e, row) => {
     if (_e.target.closest('.fav-star') || _e.target.closest('.action-hide')) return;
     const data = row.getData();
-    if (data.kind !== 'Service') return;
-    openInlineServiceDetail(data);
+    if (data.kind === 'Service') {
+      openInlineServiceDetail(data);
+      return;
+    }
+    openSubjectPlot(data);
   });
 
   subjectsTabulator.on('dataSorted', (sorters) => {
@@ -505,6 +508,54 @@ const renderSubjectServiceCard = (svc, nodeId) => {
   _loadPersistentHistory(formContainer);
 };
 
+const openSubjectPlot = (rowData) => {
+  const sid = rowData.id;
+  const detailPanel = el('detailPanel');
+  const detailHandle = el('detailResizeHandle');
+  const content = el('selectedNodeContent');
+  const tabs = detailPanel.querySelector('.detail-tabs');
+
+  if (state.selectedPlotSubject === sid) {
+    state.selectedPlotSubject = null;
+    stopPlotAnim();
+    detailHandle.classList.add('hidden');
+    detailPanel.classList.add('hidden');
+    tabs.classList.remove('hidden');
+    _clearSubjectRowSelection();
+    return;
+  }
+
+  state.selectedPlotSubject = sid;
+  tabs.classList.add('hidden');
+  detailHandle.classList.remove('hidden');
+  detailPanel.classList.remove('hidden');
+
+  const event = state.latestBySubject.get(sid);
+  const typeName = event?.message_type || `Subject ${sid}`;
+  content.innerHTML = `<div class="detail-split">
+    <div class="detail-plot-area"></div>
+  </div>`;
+
+  _highlightSubjectRow(sid);
+  startPlotAnim();
+};
+
+const _highlightSubjectRow = (sid) => {
+  if (!subjectsTabulator) return;
+  for (const row of subjectsTabulator.getRows()) {
+    const d = row.getData();
+    const isSel = d.kind === 'Subject' && d.id === sid;
+    row.getElement().classList.toggle('selected-row', isSel);
+  }
+};
+
+const _clearSubjectRowSelection = () => {
+  if (!subjectsTabulator) return;
+  for (const row of subjectsTabulator.getRows()) {
+    row.getElement().classList.remove('selected-row');
+  }
+};
+
 const switchView = (view) => {
   if (state.activeView === view) return;
   state.activeView = view;
@@ -517,15 +568,31 @@ const switchView = (view) => {
   if (view === 'subjects') {
     nodesEl.classList.add('hidden');
     subjectsEl.classList.remove('hidden');
-    detailHandle.classList.add('hidden');
-    detailPanel.classList.add('hidden');
+    stopPlotAnim();
+    const hasPlot = state.selectedPlotSubject != null;
+    detailHandle.classList.toggle('hidden', !hasPlot);
+    detailPanel.classList.toggle('hidden', !hasPlot);
+    const tabs = detailPanel.querySelector('.detail-tabs');
+    if (tabs) tabs.classList.toggle('hidden', hasPlot);
     initSubjectsTable();
     refreshSubjectsTable();
+    if (hasPlot) {
+      const content = el('selectedNodeContent');
+      content.innerHTML = `<div class="detail-split">
+        <div class="detail-plot-area"></div>
+      </div>`;
+      _highlightSubjectRow(state.selectedPlotSubject);
+      startPlotAnim();
+    }
   } else {
+    stopPlotAnim();
     subjectsEl.classList.add('hidden');
     nodesEl.classList.remove('hidden');
     detailHandle.classList.remove('hidden');
     detailPanel.classList.remove('hidden');
+    const tabs = detailPanel.querySelector('.detail-tabs');
+    if (tabs) tabs.classList.remove('hidden');
+    renderSelectedNodeContent();
   }
 
   document.querySelectorAll('.sidebar-view-tab').forEach((btn) => {

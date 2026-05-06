@@ -255,9 +255,15 @@ const renderPlot = (container) => {
 
   const titleEl = plotArea.querySelector('.plot-title');
   if (titleEl) {
-    const ctx = state.selectedDetailTab === 'subscribers'
-      ? 'network broadcast'
-      : `published by node ${state.selectedNodeId ?? '?'}`;
+    let ctx;
+    if (state.activeView === 'subjects') {
+      const event = state.latestBySubject.get(sid);
+      ctx = event?.message_type || 'network';
+    } else if (state.selectedDetailTab === 'subscribers') {
+      ctx = 'network broadcast';
+    } else {
+      ctx = `published by node ${state.selectedNodeId ?? '?'}`;
+    }
     const next = `Subject ${sid} · ${ctx}`;
     if (titleEl.textContent !== next) titleEl.textContent = next;
   }
@@ -283,8 +289,10 @@ const startPlotAnim = () => {
   const container = el('selectedNodeContent');
   const tick = () => {
     if (state.detailPanelCollapsed) { state.plotTimer = null; return; }
-    const node = getSelectedNode();
-    if (node?.has_disappeared) { state.plotTimer = null; return; }
+    if (state.activeView !== 'subjects') {
+      const node = getSelectedNode();
+      if (node?.has_disappeared) { state.plotTimer = null; return; }
+    }
     const isLive = renderPlot(container);
     if (isLive) {
       state.plotTimer = window.setTimeout(tick, PLOT_TICK_MS);

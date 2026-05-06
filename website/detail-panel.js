@@ -152,6 +152,7 @@ const renderListTab = (title, items) => `
 `;
 
 const renderSelectedNodeContent = () => {
+  if (state.activeView === 'subjects') return;
   const content = el('selectedNodeContent');
   const node = getSelectedNode();
 
