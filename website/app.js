@@ -14,7 +14,7 @@ const bindTabs = () => {
 };
 
 const bind = () => {
-  el('brandName').addEventListener('click', () => {
+  el('canLabel').addEventListener('click', () => {
     const ov = el('easterEggOverlay');
     ov.classList.remove('hidden');
   });
