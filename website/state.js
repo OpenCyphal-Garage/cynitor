@@ -82,7 +82,6 @@ const PLOT_COLORS = (() => {
     return root.getPropertyValue(`--plot-${i}`).trim() || fallback[i - 1];
   });
 })();
-const PLOT_STALE_THRESHOLD = 3;
 const PLOT_TICK_MS = 100;
 
 // ── Utility helpers ──

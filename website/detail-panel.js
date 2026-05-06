@@ -18,7 +18,7 @@ const renderSubjectTable = (title, subjects) => {
     return `<div class="subject-cards"><div class="detail-empty">No ${title.toLowerCase()} discovered.</div></div>`;
   }
   const cards = subjects.map((s) => {
-    const rateStr = s.rate != null ? (s.rate > 0 && s.rate < 1 ? '<1 Hz' : `${s.rate} Hz`) : '';
+    const rateStr = s.rate != null ? (s.rate < 1 ? '<1 Hz' : `${s.rate} Hz`) : '';
     const liveDot = s.rate != null && s.rate > 0
       ? '<span class="live-dot"></span>' : '';
     const metrics = s.attributes.length
