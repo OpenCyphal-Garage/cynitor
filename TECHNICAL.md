@@ -97,7 +97,7 @@ All frontend code lives in `website/`. Plain HTML/CSS/JS. No build step. D3 (CDN
 | `detail-panel.js` | Per-node subject cards, multi-panel D3 plot, hover crosshair + tooltip, toggle-pill legend, selection helpers |
 | `nodes-table.js` | Tabulator init, formatters, row build (port arrays joined to strings to avoid spurious cell re-renders), favourite + delete actions |
 | `services-panel.js` | Service interaction: schema fetch, request form rendering, send/repeat/copy, persistent call history from backend, view-isolated state (`forSubjects` parameter) |
-| `subjects-panel.js` | Subject browser: Tabulator-based table of all subjects and services, inline service expansion with node selector, integrated persistent history |
+| `subjects-panel.js` | Subject browser: Tabulator-based table of all subjects and services, inline service expansion with node selector, integrated persistent history. Uses a stash/unstash pattern to protect the inline service detail DOM node from Tabulator's virtual re-renders |
 | `connection.js` | WebSocket lifecycle, REST polling (status, nodes, interfaces), throughput meter, semaphores, `disconnectAll` shared teardown |
 | `app.js` | Boot file: DOM event wiring (`bind`), settings restore, frontend-server heartbeat, sidebar view tab switching |
 
@@ -133,7 +133,7 @@ Two views share the same WebSocket and REST data:
 
 The global `state` object holds everything mutable: connection flags, timer IDs, latest-payloads, subject history (per `subject_id:attr_name` key), selection IDs, per-subject hidden plot series (`Map<sid, Set<attr>>`), and UI prefs. Mutations are direct; rendering reads `state` synchronously.
 
-Service interaction state is duplicated per view to prevent cross-contamination: `serviceCallState` / `_subjectServiceCallState`, `expandedServiceId` / `_subjectExpandedServiceId`, and `_subjectServiceNodeId`. Shared rendering functions in `services-panel.js` accept a `forSubjects` boolean to read/write the correct slot.
+Service interaction state is duplicated per view to prevent cross-contamination: `serviceCallState` / `_subjectServiceCallState`, `expandedServiceId` / `_subjectExpandedServiceId`, and `_subjectServiceNodeId`. Shared rendering functions in `services-panel.js` accept a `forSubjects` boolean to read/write the correct slot. Plot subject selection is similarly isolated: `_nodesPlotSubject` and `_subjectsPlotSubject` are saved/restored on view switch so closing a plot in one view doesn't affect the other. Detail panel height and collapsed state are stored per-view (`_nodesDetailHeight`/`_nodesDetailCollapsed`, `_subjectsDetailHeight`/`_subjectsDetailCollapsed`) and swapped on view switch.
 
 `localStorage` persistence (key `pycyphal.dashboard.settings.v2`) is debounced 250ms and flushed on `beforeunload`. Heavy or transient data (telemetry payloads, full table rows) is *not* persisted — only layout/preferences.
 

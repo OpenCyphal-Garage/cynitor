@@ -1,3 +1,33 @@
+## Cynitor v0.2.1
+
+### Improvements
+
+- **Sidebar branding** — footer with Cynitor version, Cordicor logo, and Cyphal logo
+- **Collapse bar on inline service detail** — collapsible header for expanded service rows in the subjects table
+- **Row selection highlighting** — blue border highlight on selected rows in both nodes and subjects tables, with independent subject + service selection
+- **Node history uses unique_id** — history and subject summary queries now filter by hardware unique ID instead of ephemeral node ID, so data follows the physical device across reboots
+
+### API Changes
+
+- `GET /api/nodes/{node_id}/history` accepts optional `unique_id` query parameter
+- `GET /api/nodes/{node_id}/history/subjects` accepts optional `unique_id` query parameter
+- `GET /api/services/{service_id}/history` accepts optional `node_id` and `unique_id` query parameters
+- SQLite `events` and `node_history` tables gain a `unique_id TEXT` column (auto-migrated)
+
+### Bug Fixes
+
+- Fix view switching layout flash and detail panel height leaking between nodes and subjects views
+- Fix plot state leaking between views (opening/closing a subject plot in one view no longer affects the other)
+- Fix inline service detail blinking during 1s table refresh, plot open, and view switch (stash/unstash pattern)
+- Fix plot time axis freezing when data stream pauses
+- Fix rate display showing "0 Hz" instead of "<1 Hz" for slow-rate subjects
+- Fix DSDL schema error permanently cached per-node, poisoning all services — now expires after 5 seconds
+- Fix subject and service row selections being interdependent (unclicking one no longer clears the other)
+- Fix nodes table dense layout issues with Tabulator virtual DOM
+- Fix node history persistence to use unique_id for stable identity across node ID reassignments
+
+---
+
 ## Cynitor v0.2.0
 
 ### New Features

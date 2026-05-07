@@ -445,6 +445,7 @@ curl "http://localhost:8080/api/nodes/37/history?range=1h&limit=500"
 Query params:
 - `range` — time window: `5m`, `15m`, `1h`, `6h`, `24h`, `7d` (default `1h`)
 - `types` — comma-separated event types to filter, e.g. `service_call,health_change`
+- `unique_id` — filter by hardware unique ID hex string (preferred over node_id for stable identity)
 - `limit` — max entries, 1–2000 (default `500`)
 
 Response:
@@ -469,6 +470,9 @@ Returns `400` for invalid node_id or limit, `503` if the event logger is not ava
 ```bash
 curl http://localhost:8080/api/nodes/37/history/subjects
 ```
+
+Query params:
+- `unique_id` — filter by hardware unique ID hex string (preferred over node_id for stable identity)
 
 Response:
 ```json
@@ -496,6 +500,8 @@ curl "http://localhost:8080/api/services/430/history?range=7d&limit=50"
 
 Query params:
 - `range` — time window: `5m`, `15m`, `1h`, `6h`, `24h`, `7d` (default `7d`)
+- `node_id` — filter history to a specific node
+- `unique_id` — filter by hardware unique ID hex string (preferred over node_id for stable identity)
 - `limit` — max entries, 1–200 (default `50`)
 
 Response:
