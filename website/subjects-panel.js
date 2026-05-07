@@ -408,6 +408,10 @@ const refreshSubjectsTable = () => {
 };
 
 const _removeInlineDetail = () => {
+  if (state._expandedSubjectRowId && subjectsTabulator) {
+    const row = subjectsTabulator.getRow(state._expandedSubjectRowId);
+    if (row) row.getElement().classList.remove('selected-row');
+  }
   const existing = document.getElementById('subjectInlineDetail');
   if (existing) existing.remove();
   state._expandedSubjectRowId = null;
@@ -429,7 +433,9 @@ const _unstashInlineDetail = () => {
   state._stashedInlineDetail = null;
   const row = subjectsTabulator.getRow(state._expandedSubjectRowId);
   if (row) {
-    row.getElement().after(detail);
+    const rowEl = row.getElement();
+    rowEl.after(detail);
+    rowEl.classList.add('selected-row');
   } else {
     state._expandedSubjectRowId = null;
   }
@@ -476,6 +482,7 @@ const openInlineServiceDetail = async (rowData, forceOpen = false) => {
   const row = subjectsTabulator.getRow(rowId);
   if (!row) return;
   const rowEl = row.getElement();
+  rowEl.classList.add('selected-row');
 
   const detail = document.createElement('div');
   detail.id = 'subjectInlineDetail';
@@ -620,8 +627,10 @@ const openSubjectPlot = (rowData) => {
 
 const _highlightSubjectRow = (sid) => {
   if (!subjectsTabulator) return;
+  const keepId = state._expandedSubjectRowId;
   for (const row of subjectsTabulator.getRows()) {
     const d = row.getData();
+    if (keepId && d._rowId === keepId) continue;
     const isSel = d.kind === 'Subject' && d.id === sid;
     row.getElement().classList.toggle('selected-row', isSel);
   }
@@ -629,7 +638,9 @@ const _highlightSubjectRow = (sid) => {
 
 const _clearSubjectRowSelection = () => {
   if (!subjectsTabulator) return;
+  const keepId = state._expandedSubjectRowId;
   for (const row of subjectsTabulator.getRows()) {
+    if (keepId && row.getData()._rowId === keepId) continue;
     row.getElement().classList.remove('selected-row');
   }
 };
