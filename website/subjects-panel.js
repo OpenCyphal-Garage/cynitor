@@ -676,6 +676,7 @@ const switchView = (view) => {
 
   if (view === 'subjects') {
     _suppressReattach = false;
+    state._nodesPlotSubject = state.selectedPlotSubject;
     state.selectedPlotSubject = state._subjectsPlotSubject ?? null;
     nodesEl.classList.add('hidden');
     subjectsEl.classList.remove('hidden');
@@ -698,6 +699,7 @@ const switchView = (view) => {
     }
   } else {
     state._subjectsPlotSubject = state.selectedPlotSubject;
+    state.selectedPlotSubject = state._nodesPlotSubject ?? null;
     stopPlotAnim();
     const inlineDetail = document.getElementById('subjectInlineDetail');
     if (inlineDetail) {

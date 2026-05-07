@@ -27,6 +27,7 @@ const state = {
   selectedNodeId: null,
   selectedDetailTab: 'publishers',
   selectedPlotSubject: null,
+  _nodesPlotSubject: null,
   subjectHistory: new Map(),
   hiddenPlotSeries: new Map(),
   plotTimer: null,
