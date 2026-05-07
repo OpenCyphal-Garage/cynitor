@@ -445,6 +445,10 @@ const openInlineServiceDetail = async (rowData, forceOpen = false) => {
     return;
   }
 
+  const header = document.createElement('div');
+  header.className = 'svc-detail-header';
+  detail.appendChild(header);
+
   // Node selector
   const targetNodeId = state._subjectServiceNodeId && serverNodes.includes(state._subjectServiceNodeId)
     ? state._subjectServiceNodeId
@@ -458,7 +462,7 @@ const openInlineServiceDetail = async (rowData, forceOpen = false) => {
       serverNodes.map((nid) =>
         `<button type="button" class="svc-node-btn${nid === targetNodeId ? ' active' : ''}" data-node-id="${nid}">${nid}</button>`
       ).join('');
-    detail.appendChild(selector);
+    header.appendChild(selector);
     selector.querySelectorAll('.svc-node-btn').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -471,6 +475,14 @@ const openInlineServiceDetail = async (rowData, forceOpen = false) => {
       });
     });
   }
+
+  const collapseBar = document.createElement('button');
+  collapseBar.type = 'button';
+  collapseBar.className = 'svc-collapse-bar';
+  collapseBar.setAttribute('aria-label', 'Collapse service detail');
+  collapseBar.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>';
+  collapseBar.addEventListener('click', () => _removeInlineDetail());
+  header.appendChild(collapseBar);
 
   state._subjectExpandedServiceId = serviceId;
   state._subjectServiceCallState = null;

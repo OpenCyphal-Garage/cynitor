@@ -727,6 +727,43 @@ button:focus-visible,
   background: var(--surface-2);
 }
 
+.svc-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.625rem;
+}
+
+.svc-detail-header > .svc-node-selector {
+  margin-bottom: 0;
+}
+
+.svc-collapse-bar {
+  flex: 1;
+  min-width: 2rem;
+  height: 1.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.svc-detail-header:hover .svc-collapse-bar {
+  opacity: 0.5;
+}
+
+.svc-collapse-bar:hover {
+  opacity: 1 !important;
+  border-color: var(--muted);
+  color: var(--text);
+}
+
 .svc-node-selector {
   display: flex;
   align-items: center;
