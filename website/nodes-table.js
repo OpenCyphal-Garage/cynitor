@@ -298,7 +298,6 @@ const initNodesTable = () => {
     : [{ column: 'id', dir: 'asc' }];
 
   const settings = readSettings();
-  const savedWidths = settings.columnWidths || {};
 
   // Wrap sorters to always pin favourites to top
   const favPinSorter = (baseSorter) => (a, b, aRow, bRow, column, dir, sorterParams) => {
@@ -319,9 +318,6 @@ const initNodesTable = () => {
   const colDef = (title, field, opts = {}) => {
     const def = { title, field, headerFilter: 'input', ...opts };
     def.sorter = favPinSorter(opts.sorter || 'string');
-    if (savedWidths[field]) {
-      def.width = savedWidths[field];
-    }
     return def;
   };
 
@@ -362,9 +358,6 @@ const initNodesTable = () => {
       state.tableSort = { key: sorters[0].field, dir: sorters[0].dir };
       saveSettings();
     }
-  });
-  nodesTabulator.on('columnResized', () => {
-    saveSettings();
   });
   nodesTabulator.on('dataFiltered', () => {
     saveSettings();

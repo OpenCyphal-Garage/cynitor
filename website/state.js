@@ -241,15 +241,6 @@ const readSettings = () => {
   }
 };
 
-const getColumnWidths = () => {
-  if (!nodesTabulator) return null;
-  const widths = {};
-  for (const col of nodesTabulator.getColumns()) {
-    widths[col.getField()] = col.getWidth();
-  }
-  return widths;
-};
-
 const getHeaderFilters = () => {
   if (!nodesTabulator) return null;
   const filters = {};
@@ -275,7 +266,6 @@ const _writeSettingsNow = () => {
     detailPanelHeight: state.detailPanelHeight,
     detailPanelCollapsed: state.detailPanelCollapsed,
     theme: document.documentElement.getAttribute('data-theme') || 'light',
-    columnWidths: getColumnWidths(),
     headerFilters: getHeaderFilters(),
     selectedNodeId: state.selectedNodeId,
     splitRatio: state.splitRatio,

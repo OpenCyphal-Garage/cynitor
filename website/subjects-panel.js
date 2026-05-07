@@ -3,6 +3,7 @@
 
 let subjectsTabulator = null;
 let _subjectsTableReady = false;
+let _suppressReattach = false;
 
 const _fmt24H = (unix) => {
   const d = new Date(unix * 1000);
@@ -362,11 +363,24 @@ const refreshSubjectsTable = () => {
     if (ph) ph.innerHTML = subjectsPlaceholder();
     return;
   }
+  const detachedDetail = document.getElementById('subjectInlineDetail');
+  if (detachedDetail) detachedDetail.remove();
+  _suppressReattach = true;
   subjectsTabulator.updateOrAddData(data);
   const validIds = new Set(data.map((d) => d._rowId));
   for (const row of subjectsTabulator.getRows()) {
     if (!validIds.has(row.getData()._rowId)) {
       row.delete();
+    }
+  }
+  _suppressReattach = false;
+  const toReattach = detachedDetail || state._stashedInlineDetail;
+  if (toReattach && state._expandedSubjectRowId) {
+    state._stashedInlineDetail = null;
+    const row = subjectsTabulator.getRow(state._expandedSubjectRowId);
+    if (row) {
+      row.getElement().after(toReattach);
+      return;
     }
   }
   _reattachInlineDetail();
@@ -376,16 +390,22 @@ const _removeInlineDetail = () => {
   const existing = document.getElementById('subjectInlineDetail');
   if (existing) existing.remove();
   state._expandedSubjectRowId = null;
+  state._stashedInlineDetail = null;
 };
 
 const _reattachInlineDetail = () => {
+  if (_suppressReattach) return;
   if (!state._expandedSubjectRowId || !subjectsTabulator) return;
   const row = subjectsTabulator.getRow(state._expandedSubjectRowId);
   if (!row) {
     _removeInlineDetail();
     return;
   }
-  const detail = document.getElementById('subjectInlineDetail');
+  let detail = document.getElementById('subjectInlineDetail');
+  if (!detail && state._stashedInlineDetail) {
+    detail = state._stashedInlineDetail;
+    state._stashedInlineDetail = null;
+  }
   if (!detail) {
     const rowData = row.getData();
     if (rowData.kind === 'Service') openInlineServiceDetail(rowData, true);
@@ -517,6 +537,7 @@ const openSubjectPlot = (rowData) => {
 
   if (state.selectedPlotSubject === sid) {
     state.selectedPlotSubject = null;
+    state._subjectsPlotSubject = null;
     stopPlotAnim();
     detailHandle.classList.add('hidden');
     detailPanel.classList.add('hidden');
@@ -526,6 +547,7 @@ const openSubjectPlot = (rowData) => {
   }
 
   state.selectedPlotSubject = sid;
+  state._subjectsPlotSubject = sid;
   tabs.classList.add('hidden');
   detailHandle.classList.remove('hidden');
   detailPanel.classList.remove('hidden');
@@ -566,6 +588,7 @@ const switchView = (view) => {
   const detailPanel = el('detailPanel');
 
   if (view === 'subjects') {
+    state.selectedPlotSubject = state._subjectsPlotSubject ?? null;
     nodesEl.classList.add('hidden');
     subjectsEl.classList.remove('hidden');
     stopPlotAnim();
@@ -576,6 +599,9 @@ const switchView = (view) => {
     if (tabs) tabs.classList.toggle('hidden', hasPlot);
     initSubjectsTable();
     refreshSubjectsTable();
+    if (state._expandedSubjectRowId) {
+      requestAnimationFrame(() => requestAnimationFrame(() => _reattachInlineDetail()));
+    }
     if (hasPlot) {
       const content = el('selectedNodeContent');
       content.innerHTML = `<div class="detail-split">
@@ -585,13 +611,24 @@ const switchView = (view) => {
       startPlotAnim();
     }
   } else {
+    state._subjectsPlotSubject = state.selectedPlotSubject;
     stopPlotAnim();
+    const inlineDetail = document.getElementById('subjectInlineDetail');
+    if (inlineDetail) {
+      state._stashedInlineDetail = inlineDetail;
+      inlineDetail.remove();
+    }
+    _suppressReattach = true;
     subjectsEl.classList.add('hidden');
     nodesEl.classList.remove('hidden');
     detailHandle.classList.remove('hidden');
     detailPanel.classList.remove('hidden');
     const tabs = detailPanel.querySelector('.detail-tabs');
     if (tabs) tabs.classList.remove('hidden');
+    const content = el('selectedNodeContent');
+    delete content.dataset.svcTab;
+    delete content.dataset.svcNodeId;
+    delete content.dataset.nodeOffline;
     renderSelectedNodeContent();
   }
 
