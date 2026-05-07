@@ -39,6 +39,10 @@ const state = {
   sidebarCollapsed: false,
   detailPanelHeight: null,
   detailPanelCollapsed: false,
+  _nodesDetailHeight: null,
+  _nodesDetailCollapsed: false,
+  _subjectsDetailHeight: null,
+  _subjectsDetailCollapsed: false,
   splitRatio: 0.6,
   serviceSchemas: new Map(),
   serviceCallState: null,
@@ -265,6 +269,10 @@ const _writeSettingsNow = () => {
     sidebarCollapsed: state.sidebarCollapsed,
     detailPanelHeight: state.detailPanelHeight,
     detailPanelCollapsed: state.detailPanelCollapsed,
+    nodesDetailHeight: state._nodesDetailHeight,
+    nodesDetailCollapsed: state._nodesDetailCollapsed,
+    subjectsDetailHeight: state._subjectsDetailHeight,
+    subjectsDetailCollapsed: state._subjectsDetailCollapsed,
     theme: document.documentElement.getAttribute('data-theme') || 'light',
     headerFilters: getHeaderFilters(),
     selectedNodeId: state.selectedNodeId,
@@ -325,6 +333,18 @@ const loadSettings = () => {
   }
   if (settings.detailPanelCollapsed) {
     state.detailPanelCollapsed = true;
+  }
+  if (typeof settings.nodesDetailHeight === 'number') {
+    state._nodesDetailHeight = settings.nodesDetailHeight;
+  }
+  if (settings.nodesDetailCollapsed) {
+    state._nodesDetailCollapsed = true;
+  }
+  if (typeof settings.subjectsDetailHeight === 'number') {
+    state._subjectsDetailHeight = settings.subjectsDetailHeight;
+  }
+  if (settings.subjectsDetailCollapsed) {
+    state._subjectsDetailCollapsed = true;
   }
   if (settings.theme === 'dark') {
     document.documentElement.setAttribute('data-theme', 'dark');

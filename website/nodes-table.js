@@ -377,10 +377,7 @@ const initNodesTable = () => {
 };
 
 const renderNodesTable = () => {
-  if (state.activeView === 'subjects') {
-    refreshSubjectsTable();
-    return;
-  }
+  if (state.activeView !== 'nodes') return;
 
   const data = buildTableData();
 
@@ -395,16 +392,30 @@ const renderNodesTable = () => {
     return;
   }
 
-  nodesTabulator.updateOrAddData(data);
-
-  // Remove rows that no longer exist
-  const validIds = new Set(data.map((d) => d.id));
-  const currentRows = nodesTabulator.getRows();
-  for (const row of currentRows) {
-    if (!validIds.has(row.getData().id)) {
-      row.delete();
-    }
+  const currentRowMap = new Map();
+  for (const row of nodesTabulator.getRows()) {
+    currentRowMap.set(row.getData().id, row);
   }
+
+  const newRows = [];
+  const newIds = new Set();
+  for (const d of data) {
+    newIds.add(d.id);
+    const existing = currentRowMap.get(d.id);
+    if (!existing) { newRows.push(d); continue; }
+    const cur = existing.getData();
+    const diff = {};
+    for (const k of Object.keys(d)) {
+      if (d[k] !== cur[k]) diff[k] = d[k];
+    }
+    if (Object.keys(diff).length) existing.update(diff);
+  }
+
+  for (const [id, row] of currentRowMap) {
+    if (!newIds.has(id)) row.delete();
+  }
+
+  if (newRows.length) nodesTabulator.addData(newRows);
 
   // Highlight selected row
   for (const row of nodesTabulator.getRows()) {
@@ -422,5 +433,6 @@ const scheduleTableRefresh = () => {
   _tableRefreshPending = window.setTimeout(() => {
     _tableRefreshPending = null;
     renderNodesTable();
+    refreshSubjectsTable();
   }, 1000);
 };

@@ -4,6 +4,7 @@
 let subjectsTabulator = null;
 let _subjectsTableReady = false;
 let _suppressReattach = false;
+const _serviceTypeCache = new Map();
 
 const _fmt24H = (unix) => {
   const d = new Date(unix * 1000);
@@ -40,10 +41,13 @@ const _lookupServiceType = (serviceId) => {
   for (const schemas of state.serviceSchemas.values()) {
     if (!Array.isArray(schemas)) continue;
     for (const svc of schemas) {
-      if (svc.service_id === serviceId && svc.full_type) return svc.full_type;
+      if (svc.service_id === serviceId && svc.full_type) {
+        _serviceTypeCache.set(serviceId, svc.full_type);
+        return svc.full_type;
+      }
     }
   }
-  return '-';
+  return _serviceTypeCache.get(serviceId) || '-';
 };
 
 const _fetchMissingServiceSchemas = () => {
@@ -337,6 +341,14 @@ const initSubjectsTable = () => {
     saveSettings();
     _reattachInlineDetail();
   });
+
+  subjectsTabulator.on('renderStarted', () => {
+    _stashInlineDetail();
+  });
+
+  subjectsTabulator.on('renderComplete', () => {
+    if (!_suppressReattach) _reattachInlineDetail();
+  });
 };
 
 const getSubjectsHeaderFilters = () => {
@@ -353,7 +365,7 @@ const getSubjectsHeaderFilters = () => {
 };
 
 const refreshSubjectsTable = () => {
-  if (!subjectsTabulator || !_subjectsTableReady) return;
+  if (!subjectsTabulator || !_subjectsTableReady || state.activeView !== 'subjects') return;
   _fetchMissingServiceSchemas();
   const data = buildSubjectsRows();
   if (!data.length) {
@@ -363,27 +375,36 @@ const refreshSubjectsTable = () => {
     if (ph) ph.innerHTML = subjectsPlaceholder();
     return;
   }
-  const detachedDetail = document.getElementById('subjectInlineDetail');
-  if (detachedDetail) detachedDetail.remove();
+
   _suppressReattach = true;
-  subjectsTabulator.updateOrAddData(data);
-  const validIds = new Set(data.map((d) => d._rowId));
+
+  const currentRowMap = new Map();
   for (const row of subjectsTabulator.getRows()) {
-    if (!validIds.has(row.getData()._rowId)) {
-      row.delete();
-    }
+    currentRowMap.set(row.getData()._rowId, row);
   }
+
+  const newRows = [];
+  const newIds = new Set();
+  for (const d of data) {
+    newIds.add(d._rowId);
+    const existing = currentRowMap.get(d._rowId);
+    if (!existing) { newRows.push(d); continue; }
+    const cur = existing.getData();
+    const diff = {};
+    for (const k of Object.keys(d)) {
+      if (d[k] !== cur[k]) diff[k] = d[k];
+    }
+    if (Object.keys(diff).length) existing.update(diff);
+  }
+
+  for (const [id, row] of currentRowMap) {
+    if (!newIds.has(id)) row.delete();
+  }
+
+  if (newRows.length) subjectsTabulator.addData(newRows);
+
   _suppressReattach = false;
-  const toReattach = detachedDetail || state._stashedInlineDetail;
-  if (toReattach && state._expandedSubjectRowId) {
-    state._stashedInlineDetail = null;
-    const row = subjectsTabulator.getRow(state._expandedSubjectRowId);
-    if (row) {
-      row.getElement().after(toReattach);
-      return;
-    }
-  }
-  _reattachInlineDetail();
+  _unstashInlineDetail();
 };
 
 const _removeInlineDetail = () => {
@@ -391,6 +412,27 @@ const _removeInlineDetail = () => {
   if (existing) existing.remove();
   state._expandedSubjectRowId = null;
   state._stashedInlineDetail = null;
+};
+
+const _stashInlineDetail = () => {
+  if (state._stashedInlineDetail) return;
+  const detail = document.getElementById('subjectInlineDetail');
+  if (detail) {
+    detail.remove();
+    state._stashedInlineDetail = detail;
+  }
+};
+
+const _unstashInlineDetail = () => {
+  const detail = state._stashedInlineDetail;
+  if (!detail || !state._expandedSubjectRowId || !subjectsTabulator) return;
+  state._stashedInlineDetail = null;
+  const row = subjectsTabulator.getRow(state._expandedSubjectRowId);
+  if (row) {
+    row.getElement().after(detail);
+  } else {
+    state._expandedSubjectRowId = null;
+  }
 };
 
 const _reattachInlineDetail = () => {
@@ -590,8 +632,39 @@ const _clearSubjectRowSelection = () => {
   }
 };
 
+const _saveDetailPanelState = (viewKey) => {
+  const detailPanel = el('detailPanel');
+  const h = detailPanel.getBoundingClientRect().height;
+  if (viewKey === 'nodes') {
+    state._nodesDetailHeight = state.detailPanelCollapsed ? state._nodesDetailHeight : h;
+    state._nodesDetailCollapsed = state.detailPanelCollapsed;
+  } else {
+    state._subjectsDetailHeight = state.detailPanelCollapsed ? state._subjectsDetailHeight : h;
+    state._subjectsDetailCollapsed = state.detailPanelCollapsed;
+  }
+};
+
+const _restoreDetailPanelState = (viewKey) => {
+  const detailPanel = el('detailPanel');
+  const height = viewKey === 'nodes' ? state._nodesDetailHeight : state._subjectsDetailHeight;
+  const collapsed = viewKey === 'nodes' ? state._nodesDetailCollapsed : state._subjectsDetailCollapsed;
+
+  state.detailPanelCollapsed = collapsed;
+  if (collapsed) {
+    detailPanel.classList.add('collapsed');
+    detailPanel.style.height = '';
+  } else {
+    detailPanel.classList.remove('collapsed');
+    detailPanel.style.height = height ? height + 'px' : '';
+  }
+  state.detailPanelHeight = height;
+  const collapseBtn = el('detailCollapseBtn');
+  if (collapseBtn) collapseBtn.classList.toggle('pointing-up', collapsed);
+};
+
 const switchView = (view) => {
   if (state.activeView === view) return;
+  const prevView = state.activeView;
   state.activeView = view;
 
   const nodesEl = el('nodesTable');
@@ -599,7 +672,10 @@ const switchView = (view) => {
   const detailHandle = el('detailResizeHandle');
   const detailPanel = el('detailPanel');
 
+  _saveDetailPanelState(prevView);
+
   if (view === 'subjects') {
+    _suppressReattach = false;
     state.selectedPlotSubject = state._subjectsPlotSubject ?? null;
     nodesEl.classList.add('hidden');
     subjectsEl.classList.remove('hidden');
@@ -609,11 +685,9 @@ const switchView = (view) => {
     detailPanel.classList.toggle('hidden', !hasPlot);
     const tabs = detailPanel.querySelector('.detail-tabs');
     if (tabs) tabs.classList.toggle('hidden', hasPlot);
+    if (hasPlot) _restoreDetailPanelState('subjects');
     initSubjectsTable();
     refreshSubjectsTable();
-    if (state._expandedSubjectRowId) {
-      requestAnimationFrame(() => requestAnimationFrame(() => _reattachInlineDetail()));
-    }
     if (hasPlot) {
       const content = el('selectedNodeContent');
       content.innerHTML = `<div class="detail-split">
@@ -637,6 +711,7 @@ const switchView = (view) => {
     detailPanel.classList.remove('hidden');
     const tabs = detailPanel.querySelector('.detail-tabs');
     if (tabs) tabs.classList.remove('hidden');
+    _restoreDetailPanelState('nodes');
     const content = el('selectedNodeContent');
     delete content.dataset.svcTab;
     delete content.dataset.svcNodeId;

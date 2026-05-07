@@ -750,18 +750,6 @@ button:focus-visible,
   background: none;
   color: var(--muted);
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s, border-color 0.15s, color 0.15s;
-}
-
-.svc-detail-header:hover .svc-collapse-bar {
-  opacity: 0.5;
-}
-
-.svc-collapse-bar:hover {
-  opacity: 1 !important;
-  border-color: var(--muted);
-  color: var(--text);
 }
 
 .svc-node-selector {
