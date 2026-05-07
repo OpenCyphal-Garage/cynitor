@@ -14,6 +14,14 @@ const bindTabs = () => {
 };
 
 const bind = () => {
+  el('canLabel').addEventListener('click', () => {
+    const ov = el('easterEggOverlay');
+    ov.classList.remove('hidden');
+  });
+  el('easterEggOverlay').addEventListener('click', () => {
+    el('easterEggOverlay').classList.add('hidden');
+  });
+
   el('connectDashboardBtn').addEventListener('click', connectDashboard);
   el('connectCanBtn').addEventListener('click', connectCan);
   el('interfacesSelect').addEventListener('change', () => {
@@ -57,6 +65,11 @@ const bind = () => {
     } else {
       detailPanel.classList.remove('collapsed');
       detailPanel.style.height = state.detailPanelHeight ? state.detailPanelHeight + 'px' : '33.3%';
+    }
+    if (state.activeView === 'nodes') {
+      state._nodesDetailCollapsed = state.detailPanelCollapsed;
+    } else {
+      state._subjectsDetailCollapsed = state.detailPanelCollapsed;
     }
     updateCollapseChevron();
     saveSettings();
@@ -102,6 +115,13 @@ const bind = () => {
         state.detailPanelHeight = currentH;
         detailPanel.style.height = currentH + 'px';
       }
+      if (state.activeView === 'nodes') {
+        state._nodesDetailHeight = state.detailPanelHeight;
+        state._nodesDetailCollapsed = state.detailPanelCollapsed;
+      } else {
+        state._subjectsDetailHeight = state.detailPanelHeight;
+        state._subjectsDetailCollapsed = state.detailPanelCollapsed;
+      }
       updateCollapseChevron();
       saveSettings();
     };
@@ -112,6 +132,13 @@ const bind = () => {
     state.detailPanelHeight = null;
     detailPanel.classList.remove('collapsed');
     detailPanel.style.height = '33.3%';
+    if (state.activeView === 'nodes') {
+      state._nodesDetailHeight = null;
+      state._nodesDetailCollapsed = false;
+    } else {
+      state._subjectsDetailHeight = null;
+      state._subjectsDetailCollapsed = false;
+    }
     updateCollapseChevron();
     saveSettings();
   });
@@ -128,6 +155,18 @@ const bind = () => {
     saveSettings();
   });
   el('apiBase').addEventListener('change', saveSettings);
+  document.addEventListener('click', (e) => {
+    const popover = el('hiddenNodesPopover');
+    if (popover && !popover.classList.contains('hidden')
+      && !popover.contains(e.target) && e.target !== el('hiddenNodesChip')) {
+      popover.classList.add('hidden');
+    }
+    const subPop = el('hiddenSubjectsPopover');
+    if (subPop && !subPop.classList.contains('hidden')
+      && !subPop.contains(e.target) && e.target !== el('hiddenSubjectsChip')) {
+      subPop.classList.add('hidden');
+    }
+  });
 
   const selectSubjectCard = (card) => {
     const sid = Number(card.dataset.subject);
@@ -152,12 +191,21 @@ const bind = () => {
     selectSubjectCard(card);
   });
 
+  document.querySelectorAll('.sidebar-view-tab').forEach((btn) => {
+    btn.addEventListener('click', () => switchView(btn.dataset.view));
+  });
+
   bindTabs();
   initNodesTable();
 };
 
 loadSettings();
 bind();
+if (state.activeView !== 'nodes') {
+  const saved = state.activeView;
+  state.activeView = 'nodes';
+  switchView(saved);
+}
 updateDashboardConnectButton();
 updateCanConnectButton();
 renderSelectedNodeContent();

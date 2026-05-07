@@ -31,6 +31,8 @@ TelemetryManager (pub-sub router)
 ✅ **Bus Load Monitoring** - Real-time CAN bus utilization via `canbusload` subprocess, streamed to clients via WebSocket  
 ✅ **Register Access** - Read and write Cyphal node registers via REST API  
 ✅ **Offline Node Detection** - Tracks node disappearance with `last_seen` timestamps and stale state handling  
+✅ **Node History** - Lifecycle event tracking (health changes, mode changes, service calls) with 30-day retention  
+✅ **Service Call History** - Persistent service call log with response bodies, queryable by service ID  
 
 ## Setup
 
@@ -339,6 +341,7 @@ Response:
             "name": "GetInfo_1_0",
             "namespace": "uavcan.node",
             "full_type": "uavcan.node.GetInfo_1_0",
+            "callable": true,
             "request_fields": []
         },
         {
@@ -346,6 +349,7 @@ Response:
             "name": "Access_1_0",
             "namespace": "uavcan.register",
             "full_type": "uavcan.register.Access_1_0",
+            "callable": true,
             "request_fields": [
                 {"name": "name", "type": "uavcan.register.Name_1_0", "kind": "composite", "fields": [...]},
                 {"name": "value", "type": "uavcan.register.Value_1_0", "kind": "composite", "fields": [...]}
@@ -432,6 +436,97 @@ Response:
 ```
 
 Returns `503` if CAN is not connected.
+
+**Get node lifecycle history:**
+```bash
+curl "http://localhost:8080/api/nodes/37/history?range=1h&limit=500"
+```
+
+Query params:
+- `range` — time window: `5m`, `15m`, `1h`, `6h`, `24h`, `7d` (default `1h`)
+- `types` — comma-separated event types to filter, e.g. `service_call,health_change`
+- `unique_id` — filter by hardware unique ID hex string (preferred over node_id for stable identity)
+- `limit` — max entries, 1–2000 (default `500`)
+
+Response:
+```json
+{
+    "node_id": 37,
+    "events": [
+        {
+            "id": 12,
+            "node_id": 37,
+            "timestamp_unix": 1741949445.123,
+            "event_type": "health_change",
+            "detail": {"old_health": 0, "new_health": 2}
+        }
+    ]
+}
+```
+
+Returns `400` for invalid node_id or limit, `503` if the event logger is not available.
+
+**Get node subject summary (aggregated telemetry stats per subject):**
+```bash
+curl http://localhost:8080/api/nodes/37/history/subjects
+```
+
+Query params:
+- `unique_id` — filter by hardware unique ID hex string (preferred over node_id for stable identity)
+
+Response:
+```json
+{
+    "node_id": 37,
+    "subjects": [
+        {
+            "subject_id": 1235,
+            "message_type": "Temperature_1_0",
+            "total_events": 4200,
+            "avg_rate": 10.0,
+            "first_seen_unix": 1741940000.0,
+            "last_seen_unix": 1741949445.0
+        }
+    ]
+}
+```
+
+Returns `400` for invalid node_id, `503` if the event logger is not available.
+
+**Get service call history:**
+```bash
+curl "http://localhost:8080/api/services/430/history?range=7d&limit=50"
+```
+
+Query params:
+- `range` — time window: `5m`, `15m`, `1h`, `6h`, `24h`, `7d` (default `7d`)
+- `node_id` — filter history to a specific node
+- `unique_id` — filter by hardware unique ID hex string (preferred over node_id for stable identity)
+- `limit` — max entries, 1–200 (default `50`)
+
+Response:
+```json
+{
+    "service_id": 430,
+    "history": [
+        {
+            "node_id": 37,
+            "timestamp_unix": 1741949445.123,
+            "service_id": 430,
+            "service_type": "uavcan.node.GetInfo_1_0",
+            "status": "ok",
+            "latency_ms": 23,
+            "response": "GetInfo_1_0.Response(...)",
+            "node_name": "org.example.my_node",
+            "node_unique_id": [215, 79, 139, ...]
+        }
+    ]
+}
+```
+
+`status` is one of `"ok"`, `"timeout"`, or `"error"`. The `response` field is present only for successful calls. `node_name` and `node_unique_id` are enriched from live telemetry when available.
+
+Returns `400` for invalid service_id or limit, `503` if the event logger is not available.
 
 **Set a register value on a node:**
 ```bash
@@ -536,6 +631,8 @@ queue = telemetry.subscribe(max_queue=200)  # Increase from 100
 - Async batch writing for efficiency
 - Flushes queued events during shutdown
 - Query API for historical analysis
+- Node lifecycle history (health/mode changes, service calls) with 30-day retention
+- Service call history with response body storage
 - Configurable retention limits
 
 ## Performance Considerations

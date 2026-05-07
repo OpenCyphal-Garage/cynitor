@@ -18,7 +18,7 @@ const renderSubjectTable = (title, subjects) => {
     return `<div class="subject-cards"><div class="detail-empty">No ${title.toLowerCase()} discovered.</div></div>`;
   }
   const cards = subjects.map((s) => {
-    const rateStr = s.rate != null ? `${s.rate} Hz` : '';
+    const rateStr = s.rate != null ? (s.rate < 1 ? '<1 Hz' : `${s.rate} Hz`) : '';
     const liveDot = s.rate != null && s.rate > 0
       ? '<span class="live-dot"></span>' : '';
     const metrics = s.attributes.length
@@ -116,7 +116,8 @@ const renderClientsTab = async () => {
   }
 
   if (node.has_disappeared) {
-    content.innerHTML = `<div class="svc-stale-banner" role="alert"><span class="svc-stale-icon">⚠</span>Node ${nodeId} is offline — client data may be stale.</div>`
+    const clientStaleLabel = getNodeAlias(node.unique_id) || node.name || `Node ${nodeId}`;
+    content.innerHTML = `<div class="svc-stale-banner" role="alert"><span class="svc-stale-icon">⚠</span>${escapeHtml(clientStaleLabel)} is offline — client data may be stale.</div>`
       + `<div class="svc-panel-stale">${renderClientCards(clients, new Map())}</div>`;
     return;
   }
@@ -151,6 +152,7 @@ const renderListTab = (title, items) => `
 `;
 
 const renderSelectedNodeContent = () => {
+  if (state.activeView === 'subjects') return;
   const content = el('selectedNodeContent');
   const node = getSelectedNode();
 
@@ -194,7 +196,9 @@ const renderSelectedNodeContent = () => {
     } else if (state.selectedNodeId == null) {
       content.innerHTML = svcStateMsg('◎', 'Select a node to inspect details', 'Choose a node from the table above.');
     } else {
-      content.innerHTML = svcStateMsg('⚠', `Node ${state.selectedNodeId} is offline`, 'This node disappeared from the CAN bus.');
+      const offlineNode = state.latestNodesPayload?.nodes?.[state.selectedNodeId];
+      const offlineLabel = getNodeAlias(offlineNode?.unique_id) || offlineNode?.name || `Node ${state.selectedNodeId}`;
+      content.innerHTML = svcStateMsg('⚠', `${offlineLabel} is offline`, 'This node disappeared from the CAN bus.');
     }
     return;
   }
@@ -207,8 +211,9 @@ const renderSelectedNodeContent = () => {
     delete content.dataset.svcTab;
   }
 
+  const staleLabel = getNodeAlias(node.unique_id) || node.name || `Node ${node.node_id}`;
   const staleBanner = isOffline
-    ? `<div class="svc-stale-banner" role="alert"><span class="svc-stale-icon">⚠</span>Node ${node.node_id} is offline — data may be stale.</div>`
+    ? `<div class="svc-stale-banner" role="alert"><span class="svc-stale-icon">⚠</span>${escapeHtml(staleLabel)} is offline — data may be stale.</div>`
     : '';
 
   const transitioned = wasOffline !== isOffline;
@@ -233,7 +238,7 @@ const renderSelectedNodeContent = () => {
     if (!isOffline) startPlotAnim();
   };
 
-  if (state.selectedDetailTab !== 'servers' && state.selectedDetailTab !== 'clients' && state.selectedDetailTab !== 'registers') {
+  if (state.selectedDetailTab !== 'servers' && state.selectedDetailTab !== 'clients' && state.selectedDetailTab !== 'registers' && state.selectedDetailTab !== 'history') {
     delete content.dataset.svcTab;
   }
 
@@ -273,6 +278,16 @@ const renderSelectedNodeContent = () => {
       content.dataset.svcTab = 'registers';
       content.dataset.svcNodeId = String(state.selectedNodeId);
       renderRegistersTab();
+    }
+    return;
+  }
+
+  if (state.selectedDetailTab === 'history') {
+    stopPlotAnim();
+    if (content.dataset.svcTab !== 'history' || content.dataset.svcNodeId !== String(state.selectedNodeId)) {
+      content.dataset.svcTab = 'history';
+      content.dataset.svcNodeId = String(state.selectedNodeId);
+      renderHistoryTab();
     }
     return;
   }

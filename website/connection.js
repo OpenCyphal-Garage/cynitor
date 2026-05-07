@@ -3,6 +3,91 @@
 // shared disconnectAll teardown used by pollStatus, connectDashboard, and
 // the heartbeat in app.js.
 
+const BUS_LOAD_MAX_SAMPLES = 60;
+
+const drawBusLoadSparkline = () => {
+  const canvas = el('busLoadSparkline');
+  if (!canvas) return;
+
+  const history = state.busLoadHistory;
+  if (!state.canConnected || history.length < 2) {
+    canvas.classList.add('hidden');
+    return;
+  }
+  canvas.classList.remove('hidden');
+
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth * dpr;
+  const h = canvas.clientHeight * dpr;
+  canvas.width = w;
+  canvas.height = h;
+
+  ctx.clearRect(0, 0, w, h);
+
+  const max = Math.max(10, ...history);
+  const fontSize = 9 * dpr;
+  const padTop = fontSize + 2 * dpr;
+  const padBottom = 2 * dpr;
+  const plotH = h - padTop - padBottom;
+  const step = w / (BUS_LOAD_MAX_SAMPLES - 1);
+  const xOffset = (BUS_LOAD_MAX_SAMPLES - history.length) * step;
+
+  const toX = (i) => xOffset + i * step;
+  const toY = (v) => padTop + plotH - (v / max) * plotH;
+
+  const style = getComputedStyle(canvas);
+  const accent = style.getPropertyValue('--accent').trim() || '#58a6ff';
+  const muted = style.getPropertyValue('--muted').trim() || '#656d76';
+
+  ctx.beginPath();
+  for (let i = 0; i < history.length; i++) {
+    const x = toX(i);
+    const y = toY(history[i]);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = 1.5 * dpr;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+
+  // Collect local peaks, keep only the tallest per cluster, skip duplicate values
+  const peaks = [];
+  for (let i = 1; i < history.length - 1; i++) {
+    if (history[i] > history[i - 1] && history[i] >= history[i + 1]) {
+      peaks.push(i);
+    }
+  }
+
+  const minLabelGap = 28 * dpr;
+  const labels = [];
+  let cluster = [];
+  for (const p of peaks) {
+    if (cluster.length && toX(p) - toX(cluster[cluster.length - 1]) < minLabelGap) {
+      cluster.push(p);
+    } else {
+      if (cluster.length) labels.push(cluster.reduce((a, b) => history[a] >= history[b] ? a : b));
+      cluster = [p];
+    }
+  }
+  if (cluster.length) labels.push(cluster.reduce((a, b) => history[a] >= history[b] ? a : b));
+
+  ctx.font = `${fontSize}px sans-serif`;
+  ctx.fillStyle = muted;
+  ctx.textAlign = 'center';
+  const shownValues = new Set();
+  for (const i of labels) {
+    const pct = history[i] % 1 === 0 ? `${history[i]}%` : `${history[i].toFixed(1)}%`;
+    if (shownValues.has(pct)) continue;
+    const x = toX(i);
+    const textW = ctx.measureText(pct).width;
+    if (x - textW / 2 < 0) continue;
+    ctx.fillText(pct, x, padTop - 3 * dpr);
+    shownValues.add(pct);
+  }
+};
+
 const updateSemaphores = () => {
   const serverDot = el('serverSemaphore');
   const canDot = el('canSemaphore');
@@ -52,8 +137,13 @@ const updateSemaphores = () => {
       const utilStr = util != null ? ` · ${util}% load` : '';
       canInfo.textContent = `${rate.toFixed(1)} msg/s${utilStr}`;
       canInfo.classList.remove('hidden');
+      canInfo.classList.remove('load-ok', 'load-warn', 'load-err', 'load-crit');
+      if (util != null) {
+        canInfo.classList.add(util > 100 ? 'load-crit' : util >= 80 ? 'load-err' : util >= 50 ? 'load-warn' : 'load-ok');
+      }
     } else {
       canInfo.classList.add('hidden');
+      canInfo.classList.remove('load-ok', 'load-warn', 'load-err', 'load-crit');
     }
   }
 };
@@ -145,6 +235,22 @@ const connectWs = () => {
       }
       if (event.type === 'metrics') {
         state.busUtilization = event.bus_utilization ?? null;
+        if (state.busUtilization != null) {
+          state.busLoadHistory.push(state.busUtilization);
+          if (state.busLoadHistory.length > BUS_LOAD_MAX_SAMPLES) {
+            state.busLoadHistory.shift();
+          }
+          drawBusLoadSparkline();
+          if (state.busUtilization >= 90 && state._busFullArmed) {
+            state._busFullArmed = false;
+            const ov = el('busFullEaster');
+            ov.classList.remove('hidden');
+            setTimeout(() => ov.classList.add('hidden'), 5000);
+          }
+          if (state.busUtilization < 50) {
+            state._busFullArmed = true;
+          }
+        }
         return;
       }
       cacheEvent(event);
@@ -242,11 +348,16 @@ const disconnectAll = ({ persist = true } = {}) => {
   state.dashboardConnected = false;
   state.canConnected = false;
   state.busUtilization = null;
+  state.busLoadHistory.length = 0;
+  drawBusLoadSparkline();
   state.latestBySubject.clear();
   state.latestByNode.clear();
   state.subjectHistory.clear();
   state.serviceSchemas.clear();
   state.serviceCallState = null;
+  state._subjectServiceCallState = null;
+  state._subjectExpandedServiceId = null;
+  state._subjectServiceNodeId = null;
   state.serviceCallHistory.length = 0;
   REG_CACHE.clear();
   stopStatusPolling();

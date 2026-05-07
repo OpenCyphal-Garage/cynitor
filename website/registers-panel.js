@@ -10,10 +10,11 @@ const regAccessBadge = (access) =>
 const regTypeBadge = (type) =>
   `<span class="reg-badge reg-badge-type">${escapeHtml(type)}</span>`;
 
-const renderRegisterRow = (reg) => {
+const renderRegisterRow = (reg, index) => {
   const isEditable = reg.access === 'read-write';
   const valueId = `reg-val-${CSS.escape(reg.register_name)}`;
   return `<div class="reg-row" data-reg-name="${escapeHtml(reg.register_name)}">
+    <div class="reg-index">${index}</div>
     <div class="reg-name" title="${escapeHtml(reg.register_name)}">${escapeHtml(reg.register_name)}</div>
     <div class="reg-cell-type">${regTypeBadge(reg.type)}</div>
     <div class="reg-cell-access">${regAccessBadge(reg.access)}</div>
@@ -268,7 +269,7 @@ const renderRegisterList = (content, registers, nodeId) => {
     return;
   }
 
-  const rows = registers.map(renderRegisterRow).join('');
+  const rows = registers.map((reg, i) => renderRegisterRow(reg, i)).join('');
   content.innerHTML = `<section class="svc-panel reg-panel">
     <div class="reg-sticky">
       <div class="reg-toolbar">
@@ -276,6 +277,7 @@ const renderRegisterList = (content, registers, nodeId) => {
         <button class="svc-btn svc-btn-small reg-refresh-btn" aria-label="Refresh registers">Refresh</button>
       </div>
       <div class="reg-header">
+        <div class="reg-index">#</div>
         <div>Name</div>
         <div>Type</div>
         <div>Access</div>

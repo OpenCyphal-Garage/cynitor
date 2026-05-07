@@ -2,7 +2,7 @@
 
 A standalone dashboard for monitoring [Cyphal](https://opencyphal.org/) (UAVCAN) networks over CAN bus.
 
-Cynitor watches the bus in real time, lists every node it discovers, and lets you drill into individual subjects to inspect message attributes and plot numeric values over time. It's intended for embedded developers debugging Cyphal networks who want a quick, no-install GUI alternative to `yakut monitor`.
+Cynitor watches the bus in real time, lists every node it discovers, and lets you drill into individual subjects to inspect message attributes and plot numeric values over time. GUI alternative to [yakut monitor](https://github.com/OpenCyphal/yakut).
 
 ![Cynitor dashboard](cynitor.png)
 
@@ -34,7 +34,10 @@ Open `http://localhost:5500` and click **Connect** in the sidebar.
 ## Features
 
 - **Live node table** — sortable, filterable, with health, message rate, uptime, and per-row publisher/subscriber/server/client port lists. Pin favourites to the top with a star, hide offline nodes you don't care about.
+- **Subject browser** — a second view (toggle via sidebar tabs) that lists every subject and service on the network. Expand any service inline to send requests to specific nodes without leaving the subject-centric view.
 - **Per-subject inspection** — click a node, then a subject card in the detail panel, to see live message attributes and a 60-second history.
+- **Service interaction** — invoke services on remote nodes with auto-discovered request schemas, expandable composite fields, and a persistent call history (stored in SQLite, survives restarts).
+- **Node history** — lifecycle tracking with health/mode changes, service calls, and per-subject telemetry summaries. Retained for 30 days.
 - **Multi-attribute plots** — each numeric attribute gets its own panel with its own y-axis, so a fast-growing uptime doesn't squash a small voltage reading. Toggle pills at the top of the plot show/hide individual attributes.
 - **Hover crosshair + tooltip** with timestamp and per-series values at the cursor.
 - **Dark / light theme**, sidebar collapse, resizable detail panel.

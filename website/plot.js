@@ -25,8 +25,7 @@ const computePlotScales = (visible, w, totalPanelsH) => {
   if (!isFinite(tDataMax)) tDataMax = Date.now() / 1000;
 
   const now = Date.now() / 1000;
-  const dataIsLive = (now - tDataMax) < PLOT_STALE_THRESHOLD;
-  const tRight = dataIsLive ? now : tDataMax;
+  const tRight = now;
   const xScale = d3.scaleLinear()
     .domain([tRight - PLOT_WINDOW_SECS, tRight + PLOT_WINDOW_SECS * 0.5])
     .range([0, w]);
@@ -44,7 +43,7 @@ const computePlotScales = (visible, w, totalPanelsH) => {
     return d3.scaleLinear().domain([min - pad, max + pad]).range([panelH, 0]);
   });
 
-  return { xScale, yScales, panelH, dataIsLive };
+  return { xScale, yScales, panelH };
 };
 
 const setupPlotSvg = (plotArea, margin) => {
@@ -243,7 +242,7 @@ const renderPlot = (container) => {
   const totalPanelsH = rect.height - PLOT_MARGIN.top - PLOT_MARGIN.bottom - HEADER_H;
   if (w < 40 || totalPanelsH < 40) return;
 
-  const { xScale, yScales, panelH, dataIsLive } = computePlotScales(visible, w, totalPanelsH);
+  const { xScale, yScales, panelH } = computePlotScales(visible, w, totalPanelsH);
 
   let gNode = plotArea.querySelector('.plot-root');
   if (!gNode || !gNode.querySelector('.plot-panels') || !plotArea.querySelector('.plot-header')) {
@@ -255,9 +254,15 @@ const renderPlot = (container) => {
 
   const titleEl = plotArea.querySelector('.plot-title');
   if (titleEl) {
-    const ctx = state.selectedDetailTab === 'subscribers'
-      ? 'network broadcast'
-      : `published by node ${state.selectedNodeId ?? '?'}`;
+    let ctx;
+    if (state.activeView === 'subjects') {
+      const event = state.latestBySubject.get(sid);
+      ctx = event?.message_type || 'network';
+    } else if (state.selectedDetailTab === 'subscribers') {
+      ctx = 'network broadcast';
+    } else {
+      ctx = `published by node ${state.selectedNodeId ?? '?'}`;
+    }
     const next = `Subject ${sid} · ${ctx}`;
     if (titleEl.textContent !== next) titleEl.textContent = next;
   }
@@ -266,8 +271,6 @@ const renderPlot = (container) => {
   renderPanelLines(g, sid, visible, xScale, yScales, panelH, w, totalPanelsH);
   bindPlotTooltip(g, plotArea, visible, xScale, w, HEADER_H, rect);
   updatePlotLegend(plotArea, allSeries, hidden);
-
-  return dataIsLive;
 };
 
 const stopPlotAnim = () => {
@@ -283,14 +286,12 @@ const startPlotAnim = () => {
   const container = el('selectedNodeContent');
   const tick = () => {
     if (state.detailPanelCollapsed) { state.plotTimer = null; return; }
-    const node = getSelectedNode();
-    if (node?.has_disappeared) { state.plotTimer = null; return; }
-    const isLive = renderPlot(container);
-    if (isLive) {
-      state.plotTimer = window.setTimeout(tick, PLOT_TICK_MS);
-    } else {
-      state.plotTimer = null;
+    if (state.activeView !== 'subjects') {
+      const node = getSelectedNode();
+      if (node?.has_disappeared) { state.plotTimer = null; return; }
     }
+    renderPlot(container);
+    state.plotTimer = window.setTimeout(tick, PLOT_TICK_MS);
   };
   state.plotTimer = window.setTimeout(tick, PLOT_TICK_MS);
 };

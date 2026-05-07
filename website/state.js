@@ -20,28 +20,45 @@ const state = {
   canState: CONN.IDLE,
   preferredCanInterface: '',
   favouriteNodeIds: new Set(),
-  deletedNodeIds: new Set(),
+  hiddenNodeIds: new Set(),
   latestNodesPayload: { node_count: 0, nodes: {} },
   latestBySubject: new Map(),
   latestByNode: new Map(),
   selectedNodeId: null,
   selectedDetailTab: 'publishers',
   selectedPlotSubject: null,
+  _nodesPlotSubject: null,
   subjectHistory: new Map(),
   hiddenPlotSeries: new Map(),
   plotTimer: null,
   wsBytesAccum: 0,
   wsThroughput: 0,
   busUtilization: null,
+  busLoadHistory: [],
+  _busFullArmed: true,
   tableSort: { key: 'id', dir: 'asc' },
   sidebarCollapsed: false,
   detailPanelHeight: null,
   detailPanelCollapsed: false,
+  _nodesDetailHeight: null,
+  _nodesDetailCollapsed: false,
+  _subjectsDetailHeight: null,
+  _subjectsDetailCollapsed: false,
   splitRatio: 0.6,
   serviceSchemas: new Map(),
   serviceCallState: null,
+  _subjectServiceCallState: null,
+  _subjectServiceNodeId: null,
   serviceCallHistory: [],
   expandedServiceId: null,
+  _subjectExpandedServiceId: null,
+  nodeAliases: {},
+  historyTimeRange: '1h',
+  historyChangesOnly: true,
+  activeView: 'nodes',
+  favouriteSubjectIds: new Set(),
+  hiddenSubjectIds: new Set(),
+  subjectsTableSort: { key: 'id', dir: 'asc' },
 };
 
 // Derived accessors for CAN connection state — keeps existing code readable
@@ -70,12 +87,33 @@ const PLOT_COLORS = (() => {
     return root.getPropertyValue(`--plot-${i}`).trim() || fallback[i - 1];
   });
 })();
-const PLOT_STALE_THRESHOLD = 3;
 const PLOT_TICK_MS = 100;
 
 // ── Utility helpers ──
 
 const el = (id) => document.getElementById(id);
+
+const uniqueIdKey = (uid) => {
+  if (!Array.isArray(uid) || !uid.length) return null;
+  return uid.map((b) => b.toString(16).padStart(2, '0')).join('');
+};
+
+const getNodeAlias = (uid) => {
+  const key = uniqueIdKey(uid);
+  return key ? state.nodeAliases[key] || null : null;
+};
+
+const setNodeAlias = (uid, alias) => {
+  const key = uniqueIdKey(uid);
+  if (!key) return;
+  const trimmed = alias?.trim();
+  if (trimmed) {
+    state.nodeAliases[key] = trimmed;
+  } else {
+    delete state.nodeAliases[key];
+  }
+  saveSettings();
+};
 
 const escapeHtml = (value) =>
   String(value)
@@ -208,15 +246,6 @@ const readSettings = () => {
   }
 };
 
-const getColumnWidths = () => {
-  if (!nodesTabulator) return null;
-  const widths = {};
-  for (const col of nodesTabulator.getColumns()) {
-    widths[col.getField()] = col.getWidth();
-  }
-  return widths;
-};
-
 const getHeaderFilters = () => {
   if (!nodesTabulator) return null;
   const filters = {};
@@ -241,13 +270,22 @@ const _writeSettingsNow = () => {
     sidebarCollapsed: state.sidebarCollapsed,
     detailPanelHeight: state.detailPanelHeight,
     detailPanelCollapsed: state.detailPanelCollapsed,
+    nodesDetailHeight: state._nodesDetailHeight,
+    nodesDetailCollapsed: state._nodesDetailCollapsed,
+    subjectsDetailHeight: state._subjectsDetailHeight,
+    subjectsDetailCollapsed: state._subjectsDetailCollapsed,
     theme: document.documentElement.getAttribute('data-theme') || 'light',
-    columnWidths: getColumnWidths(),
     headerFilters: getHeaderFilters(),
     selectedNodeId: state.selectedNodeId,
     splitRatio: state.splitRatio,
     favouriteNodeIds: [...state.favouriteNodeIds],
-    deletedNodeIds: [...state.deletedNodeIds],
+    hiddenNodeIds: [...state.hiddenNodeIds],
+    nodeAliases: state.nodeAliases,
+    activeView: state.activeView,
+    favouriteSubjectIds: [...state.favouriteSubjectIds],
+    hiddenSubjectIds: [...state.hiddenSubjectIds],
+    subjectsTableSort: state.subjectsTableSort,
+    subjectsHeaderFilters: typeof getSubjectsHeaderFilters === 'function' ? getSubjectsHeaderFilters() : null,
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
 };
@@ -283,7 +321,7 @@ const loadSettings = () => {
     state.tableSort = settings.tableSort;
   }
   if (typeof settings.selectedDetailTab === 'string') {
-    const validTabs = ['publishers', 'subscribers', 'servers', 'clients', 'registers'];
+    const validTabs = ['publishers', 'subscribers', 'servers', 'clients', 'registers', 'history'];
     const tab = settings.selectedDetailTab === 'services' ? 'servers' : settings.selectedDetailTab;
     state.selectedDetailTab = validTabs.includes(tab) ? tab : 'publishers';
   }
@@ -296,6 +334,18 @@ const loadSettings = () => {
   }
   if (settings.detailPanelCollapsed) {
     state.detailPanelCollapsed = true;
+  }
+  if (typeof settings.nodesDetailHeight === 'number') {
+    state._nodesDetailHeight = settings.nodesDetailHeight;
+  }
+  if (settings.nodesDetailCollapsed) {
+    state._nodesDetailCollapsed = true;
+  }
+  if (typeof settings.subjectsDetailHeight === 'number') {
+    state._subjectsDetailHeight = settings.subjectsDetailHeight;
+  }
+  if (settings.subjectsDetailCollapsed) {
+    state._subjectsDetailCollapsed = true;
   }
   if (settings.theme === 'dark') {
     document.documentElement.setAttribute('data-theme', 'dark');
@@ -310,13 +360,29 @@ const loadSettings = () => {
   if (Array.isArray(settings.favouriteNodeIds)) {
     state.favouriteNodeIds = new Set(settings.favouriteNodeIds);
   }
-  if (Array.isArray(settings.deletedNodeIds)) {
-    state.deletedNodeIds = new Set(settings.deletedNodeIds);
+  const savedHidden = settings.hiddenNodeIds || settings.deletedNodeIds;
+  if (Array.isArray(savedHidden)) {
+    state.hiddenNodeIds = new Set(savedHidden);
   }
   if (Number.isInteger(settings.selectedNodeId)) {
     state.selectedNodeId = settings.selectedNodeId;
   }
   if (typeof settings.splitRatio === 'number' && settings.splitRatio > 0.2 && settings.splitRatio < 0.9) {
     state.splitRatio = settings.splitRatio;
+  }
+  if (settings.nodeAliases && typeof settings.nodeAliases === 'object') {
+    state.nodeAliases = settings.nodeAliases;
+  }
+  if (settings.activeView === 'subjects') {
+    state.activeView = 'subjects';
+  }
+  if (Array.isArray(settings.favouriteSubjectIds)) {
+    state.favouriteSubjectIds = new Set(settings.favouriteSubjectIds);
+  }
+  if (Array.isArray(settings.hiddenSubjectIds)) {
+    state.hiddenSubjectIds = new Set(settings.hiddenSubjectIds);
+  }
+  if (settings.subjectsTableSort?.key) {
+    state.subjectsTableSort = settings.subjectsTableSort;
   }
 };
