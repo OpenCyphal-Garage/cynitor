@@ -547,13 +547,13 @@ const _renderInlineServiceForm = async (detail, serviceId, nodeId, serverNodes) 
 
   const schemas = state.serviceSchemas.get(nodeId);
   if (!Array.isArray(schemas)) {
-    formContainer.innerHTML = svcStateMsg('✕', 'Failed to load schema', 'Could not fetch schema from the server node.');
+    formContainer.innerHTML = svcStateMsg('○', 'DSDL not available', 'Service schema could not be loaded for this node.');
     return;
   }
 
   const svc = schemas.find((s) => s.service_id === serviceId);
   if (!svc) {
-    formContainer.innerHTML = svcStateMsg('○', 'Service not found', `Node ${nodeId} does not expose service ${serviceId}.`);
+    formContainer.innerHTML = svcStateMsg('○', 'DSDL not available', `No schema found for service ${serviceId} on node ${nodeId}.`);
     return;
   }
 
@@ -593,6 +593,7 @@ const openSubjectPlot = (rowData) => {
     state.selectedPlotSubject = null;
     state._subjectsPlotSubject = null;
     stopPlotAnim();
+    _saveDetailPanelState('subjects');
     detailHandle.classList.add('hidden');
     detailPanel.classList.add('hidden');
     tabs.classList.remove('hidden');
@@ -605,6 +606,7 @@ const openSubjectPlot = (rowData) => {
   tabs.classList.add('hidden');
   detailHandle.classList.remove('hidden');
   detailPanel.classList.remove('hidden');
+  _restoreDetailPanelState('subjects');
 
   const event = state.latestBySubject.get(sid);
   const typeName = event?.message_type || `Subject ${sid}`;

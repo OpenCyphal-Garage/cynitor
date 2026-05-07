@@ -28,6 +28,7 @@ const fetchServiceSchema = async (nodeId) => {
     }
   } catch {
     state.serviceSchemas.set(nodeId, SVC_SCHEMA_ERROR);
+    setTimeout(() => state.serviceSchemas.delete(nodeId), 5000);
   }
 };
 

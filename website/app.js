@@ -66,6 +66,11 @@ const bind = () => {
       detailPanel.classList.remove('collapsed');
       detailPanel.style.height = state.detailPanelHeight ? state.detailPanelHeight + 'px' : '33.3%';
     }
+    if (state.activeView === 'nodes') {
+      state._nodesDetailCollapsed = state.detailPanelCollapsed;
+    } else {
+      state._subjectsDetailCollapsed = state.detailPanelCollapsed;
+    }
     updateCollapseChevron();
     saveSettings();
   });
@@ -110,6 +115,13 @@ const bind = () => {
         state.detailPanelHeight = currentH;
         detailPanel.style.height = currentH + 'px';
       }
+      if (state.activeView === 'nodes') {
+        state._nodesDetailHeight = state.detailPanelHeight;
+        state._nodesDetailCollapsed = state.detailPanelCollapsed;
+      } else {
+        state._subjectsDetailHeight = state.detailPanelHeight;
+        state._subjectsDetailCollapsed = state.detailPanelCollapsed;
+      }
       updateCollapseChevron();
       saveSettings();
     };
@@ -120,6 +132,13 @@ const bind = () => {
     state.detailPanelHeight = null;
     detailPanel.classList.remove('collapsed');
     detailPanel.style.height = '33.3%';
+    if (state.activeView === 'nodes') {
+      state._nodesDetailHeight = null;
+      state._nodesDetailCollapsed = false;
+    } else {
+      state._subjectsDetailHeight = null;
+      state._subjectsDetailCollapsed = false;
+    }
     updateCollapseChevron();
     saveSettings();
   });
