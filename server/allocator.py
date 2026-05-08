@@ -40,7 +40,7 @@ class AllocatorApp:
     def __init__(self, iface_name: Optional[str] = None) -> None:
         node_info = uavcan.node.GetInfo_1_0.Response(
             software_version=uavcan.node.Version_1(major=1, minor=0),
-            name="org.dontpanic.pycyphal.examples.allocator_app",
+            name="cynitor.allocator",
         )
 
         can_interface = _normalize_pythoncan_iface(iface_name or _iface_from_env())
