@@ -10,10 +10,14 @@ The current UI is network-centric: it emphasizes topology, live traffic, and sel
 - `styles.css` – theme and component styling
 - `state.js` – global state, settings persistence, API helpers
 - `cache.js` – telemetry cache and per-node accessors
-- `detail-panel.js` – per-node detail panel with subject cards and D3 plot
-- `nodes-table.js` – Tabulator-based nodes table
+- `plot.js` – multi-panel D3 time-series plot with crosshair and legend
+- `detail-panel.js` – per-node detail panel with subject cards and tab rendering
+- `nodes-table.js` – Tabulator-based nodes table with ghost row support
 - `services-panel.js` – service interaction UI, schema fetch, persistent history
+- `registers-panel.js` – register read/write UI with type validation
+- `history-panel.js` – node lifecycle history timeline with time-range filtering
 - `subjects-panel.js` – subject browser with inline service expansion
+- `graph-view.js` – D3 force-directed network topology with drag-to-pin
 - `connection.js` – WebSocket lifecycle, REST polling, reconnect
 - `app.js` – boot, DOM bindings, view switching
 
@@ -64,8 +68,9 @@ Open in browser:
   - Health indicators: NOMINAL, ADVISORY, CAUTION, WARNING
   - Responsive — hides less-important columns on narrow screens
 - View tabs (bottom of sidebar):
-  - **Nodes** — node-centric table with per-node detail panel
+  - **Nodes** — node-centric table with per-node detail panel; ghost rows for displaced identities pinned to bottom
   - **Subjects** — subject-centric table listing all subjects and services across the network, with inline service expansion
+  - **Graph** — D3 force-directed bipartite topology showing device and subject nodes with directional pub/sub links
 - Detail panel (below nodes table, nodes view):
   - Tabbed view: Publishers, Subscribers, Servers, Clients, Registers, History (with count badges)
   - Subject cards: each subject displayed as an individual card with subject ID, message type, rate, live dot indicator, and key-value metrics
@@ -104,6 +109,8 @@ Open in browser:
   - `GET /api/nodes/{node_id}/history` — node lifecycle events
   - `GET /api/nodes/{node_id}/history/subjects` — per-subject telemetry summary
   - `GET /api/services/{service_id}/history` — service call history
+  - `GET /api/identity-map` — unique_id to node_id mappings
+  - `DELETE /api/identity/{unique_id}` — remove a ghost identity
 - CAN error handling:
   - Auto-disconnect on bus faults (BUS-OFF, ERROR-PASSIVE, interface disappearance)
   - Alert shown to user with error details

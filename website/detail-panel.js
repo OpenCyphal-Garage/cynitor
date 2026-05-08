@@ -304,20 +304,19 @@ const scheduleDetailRefresh = () => {
 };
 
 const setSelectedNode = (nodeId) => {
-  const numericNodeId = Number.parseInt(String(nodeId), 10);
-  if (!Number.isInteger(numericNodeId)) {
-    return;
+  if (nodeId == null) return;
+  const isGhost = typeof nodeId === 'string' && nodeId.startsWith('uid:');
+  const newId = isGhost ? nodeId : Number.parseInt(String(nodeId), 10);
+  if (!isGhost && !Number.isInteger(newId)) return;
+  if (state.selectedNodeId !== newId) {
+    stopPlotAnim();
+    state.selectedPlotSubject = null;
   }
-  state.selectedNodeId = numericNodeId;
-  // Immediately highlight the selected row in the table
+  state.selectedNodeId = newId;
   if (nodesTabulator) {
     for (const row of nodesTabulator.getRows()) {
       const rowEl = row.getElement();
-      if (row.getData().id === numericNodeId) {
-        rowEl.classList.add('selected-row');
-      } else {
-        rowEl.classList.remove('selected-row');
-      }
+      rowEl.classList.toggle('selected-row', row.getData().id === state.selectedNodeId);
     }
   }
   renderSelectedNodeContent();

@@ -13,6 +13,8 @@ const HISTORY_EVENT_LABELS = {
   mode_change: 'Mode',
   port_change: 'Ports changed',
   service_call: 'Service call',
+  got_node_id: 'Got node ID',
+  lost_node_id: 'Lost node ID',
 };
 
 const HISTORY_EVENT_CLS = {
@@ -25,6 +27,8 @@ const HISTORY_EVENT_CLS = {
   mode_change: 'hist-warn',
   port_change: 'hist-info',
   service_call: 'hist-muted',
+  got_node_id: 'hist-ok',
+  lost_node_id: 'hist-err',
 };
 
 const formatHistoryTime = (unix) => {
@@ -53,6 +57,9 @@ const formatEventDetail = (evt) => {
       return `uptime ${d.old_uptime}s → ${d.new_uptime}s`;
     case 'service_call':
       return `svc ${d.service_id} · ${d.status} · ${d.latency_ms}ms`;
+    case 'got_node_id':
+    case 'lost_node_id':
+      return `#${d.node_id}`;
     case 'port_change': {
       const parts = [];
       for (const kind of ['publishers', 'subscribers', 'servers', 'clients']) {
@@ -145,9 +152,12 @@ const renderHistoryTab = async () => {
   });
 
   try {
+    const node = getSelectedNode();
+    const apiNodeId = node?.node_id ?? 0;
+    const uidParam = node?.unique_id_hex ? `&unique_id=${node.unique_id_hex}` : '';
     const [histData, subjData] = await Promise.all([
-      requestJson(`/api/nodes/${nodeId}/history?range=${state.historyTimeRange}`),
-      requestJson(`/api/nodes/${nodeId}/history/subjects`),
+      requestJson(`/api/nodes/${apiNodeId}/history?range=${state.historyTimeRange}${uidParam}`),
+      requestJson(`/api/nodes/${apiNodeId}/history/subjects${uidParam ? '?unique_id=' + node.unique_id_hex : ''}`),
     ]);
 
     if (state.selectedNodeId !== nodeId || state.selectedDetailTab !== 'history') return;

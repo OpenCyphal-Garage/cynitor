@@ -39,7 +39,7 @@ const cacheEvent = (event) => {
 
 const getSelectedNode = () => {
   const nodes = state.latestNodesPayload?.nodes;
-  if (!nodes || state.selectedNodeId === null) {
+  if (!nodes || state.selectedNodeId == null) {
     return null;
   }
   return nodes[String(state.selectedNodeId)] || null;

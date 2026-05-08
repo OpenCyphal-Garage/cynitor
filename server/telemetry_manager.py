@@ -133,9 +133,12 @@ class TelemetryManager:
                 clients = self._as_int_list(getattr(node, "client_ServiceIDs", []))
                 servers = self._as_int_list(getattr(node, "server_ServiceIDs", []))
                 
+                unique_id_hex = self.scanner.identity_map.get_uid(node_id)
+
                 nodes_info[node_id] = {
                     "node_id": node_id,
                     "unique_id": unique_id,
+                    "unique_id_hex": unique_id_hex,
                     "uptime": self._to_builtin_int(getattr(node, "uptime", None)),
                     "has_disappeared": node.has_disappeared,
                     "has_responded_to_getinfo": node.has_responded_to_getInfo,
@@ -151,6 +154,30 @@ class TelemetryManager:
                     "last_seen": self._serialize_timestamps(getattr(node, "last_seen", None))
                 }
         
+        live_node_ids = set(nodes_info.keys())
+        for ghost in self.scanner.identity_map.detached_identities(live_node_ids):
+            uid = ghost["unique_id_hex"]
+            key = f"uid:{uid}"
+            snap = ghost.get("snapshot") or {}
+            prev_ids = ghost.get("previous_node_ids", [])
+            nodes_info[key] = {
+                "node_id": None,
+                "last_node_id": prev_ids[-1] if prev_ids else None,
+                "unique_id": snap.get("unique_id"),
+                "unique_id_hex": uid,
+                "uptime": snap.get("uptime"),
+                "has_disappeared": True,
+                "has_responded_to_getinfo": bool(snap),
+                "name": snap.get("name") or ghost["name"],
+                "software_version": snap.get("software_version"),
+                "publishers": snap.get("publishers", []),
+                "subscribers": snap.get("subscribers", []),
+                "clients": snap.get("clients", []),
+                "servers": snap.get("servers", []),
+                "last_seen": [snap["last_seen"]] if snap.get("last_seen") else None,
+                "_ghost": True,
+            }
+
         return {
             "node_count": len(nodes_info),
             "nodes": nodes_info

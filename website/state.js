@@ -98,6 +98,31 @@ const uniqueIdKey = (uid) => {
   return uid.map((b) => b.toString(16).padStart(2, '0')).join('');
 };
 
+const nodeStableKey = (node) => node?.unique_id_hex || `nid:${node?.node_id}`;
+
+const upgradeStableKeys = () => {
+  const nodes = state.latestNodesPayload?.nodes;
+  if (!nodes) return;
+  let changed = false;
+  for (const keySet of [state.favouriteNodeIds, state.hiddenNodeIds]) {
+    const upgrades = [];
+    for (const key of keySet) {
+      if (typeof key !== 'string' || !key.startsWith('nid:')) continue;
+      const nid = parseInt(key.slice(4), 10);
+      const node = nodes[String(nid)];
+      if (node?.unique_id_hex) {
+        upgrades.push({ old: key, hex: node.unique_id_hex });
+      }
+    }
+    for (const { old, hex } of upgrades) {
+      keySet.delete(old);
+      keySet.add(hex);
+      changed = true;
+    }
+  }
+  if (changed) saveSettings();
+};
+
 const getNodeAlias = (uid) => {
   const key = uniqueIdKey(uid);
   return key ? state.nodeAliases[key] || null : null;
@@ -358,11 +383,15 @@ const loadSettings = () => {
     state.pendingReconnect = true;
   }
   if (Array.isArray(settings.favouriteNodeIds)) {
-    state.favouriteNodeIds = new Set(settings.favouriteNodeIds);
+    state.favouriteNodeIds = new Set(settings.favouriteNodeIds.map(
+      (v) => typeof v === 'number' ? `nid:${v}` : v
+    ));
   }
   const savedHidden = settings.hiddenNodeIds || settings.deletedNodeIds;
   if (Array.isArray(savedHidden)) {
-    state.hiddenNodeIds = new Set(savedHidden);
+    state.hiddenNodeIds = new Set(savedHidden.map(
+      (v) => typeof v === 'number' ? `nid:${v}` : v
+    ));
   }
   if (Number.isInteger(settings.selectedNodeId)) {
     state.selectedNodeId = settings.selectedNodeId;
@@ -373,8 +402,8 @@ const loadSettings = () => {
   if (settings.nodeAliases && typeof settings.nodeAliases === 'object') {
     state.nodeAliases = settings.nodeAliases;
   }
-  if (settings.activeView === 'subjects') {
-    state.activeView = 'subjects';
+  if (settings.activeView === 'subjects' || settings.activeView === 'graph') {
+    state.activeView = settings.activeView;
   }
   if (Array.isArray(settings.favouriteSubjectIds)) {
     state.favouriteSubjectIds = new Set(settings.favouriteSubjectIds);

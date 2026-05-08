@@ -33,6 +33,7 @@ TelemetryManager (pub-sub router)
 ✅ **Offline Node Detection** - Tracks node disappearance with `last_seen` timestamps and stale state handling  
 ✅ **Node History** - Lifecycle event tracking (health changes, mode changes, service calls) with 30-day retention  
 ✅ **Service Call History** - Persistent service call log with response bodies, queryable by service ID  
+✅ **Node Identity Map** - Tracks stable hardware identity (unique_id) across node_id re-allocations, with state migration  
 
 ## Setup
 
@@ -89,11 +90,11 @@ python3 main.py
 Output:
 ```
 ============================================================
-SYSTEM RUNNING
+SERVER RUNNING
 ============================================================
-WebSocket:   ws://localhost:8080/ws
 REST API:    http://localhost:8080/api/
 Health:      http://localhost:8080/api/health
+Status:      http://localhost:8080/api/status
 ============================================================
 ```
 
@@ -258,6 +259,7 @@ Response:
         "37": {
             "node_id": 37,
             "unique_id": [215, 79, 139, 105, 174, 196, 24, 37, 77, 69, 95, 193, 150, 10, 89, 50],
+            "unique_id_hex": "d74f8b69aec418254d455fc1960a5932",
             "uptime": 8285,
             "has_disappeared": false,
             "has_responded_to_getinfo": true,
@@ -274,10 +276,68 @@ Response:
         },
         "74": {
             ...
+        },
+        "uid:ab12cd34ef56789000000000deadbeef": {
+            "node_id": null,
+            "last_node_id": 37,
+            "unique_id": [171, 18, 205, 52, 239, 86, 120, 144, 0, 0, 0, 0, 222, 173, 190, 239],
+            "unique_id_hex": "ab12cd34ef56789000000000deadbeef",
+            "uptime": 1200,
+            "has_disappeared": true,
+            "has_responded_to_getinfo": true,
+            "name": "org.example.displaced_node",
+            "software_version": {"major": 1, "minor": 0},
+            "publishers": [1235],
+            "subscribers": [],
+            "clients": [],
+            "servers": [384, 430],
+            "last_seen": ["2026-05-04T11:00:00.000000"],
+            "_ghost": true
         }
     }
 }
 ```
+
+Ghost entries (key `uid:<hex>`) represent devices whose `unique_id` is known but whose node_id slot was taken by another device. `last_node_id` is the most recent node_id the device held. Ghost data comes from the last snapshot before displacement.
+
+**Get identity map (unique_id to node_id mappings):**
+```bash
+curl http://localhost:8080/api/identity-map
+```
+
+Response:
+```json
+{
+    "mappings": {
+        "d74f8b69aec418254d455fc1960a5932": {
+            "current_node_id": 37,
+            "previous_node_ids": [42, 99],
+            "last_seen": 1741949445.123,
+            "name": "org.example.my_node"
+        },
+        "ab12cd34ef56789000000000deadbeef": {
+            "current_node_id": null,
+            "previous_node_ids": [5, 10],
+            "last_seen": 1741940000.0,
+            "name": null
+        }
+    }
+}
+```
+
+Each key is a hardware `unique_id` hex string. `current_node_id` is `null` if the device is offline and its slot was taken by another device. `previous_node_ids` lists all past node_id assignments. `last_seen` is a Unix timestamp of the last identity registration. `name` is the node name from GetInfo (if available). The identity map is persisted to SQLite and restored across server restarts.
+
+**Delete a ghost identity (remove detached node data):**
+```bash
+curl -X DELETE http://localhost:8080/api/identity/d74f8b69aec418254d455fc1960a5932
+```
+
+Response:
+```json
+{"status": "ok"}
+```
+
+Removes the identity from the in-memory map and deletes its persisted snapshot from SQLite. Returns `503` if CAN is not connected.
 
 **Health check:**
 ```bash
@@ -288,6 +348,8 @@ Response:
 ```json
 {
     "status": "healthy",
+    "can_status": "running",
+    "can_interface": "vcan0",
     "connected_clients": 3,
     "server": {
         "host": "0.0.0.0",
@@ -689,10 +751,12 @@ asyncio.run(main())
 | `scanner_node.py` | UAVCAN network scanner |
 | `telemetry_manager.py` | Event pub-sub router |
 | `node_info.py` | Per-node state (lifecycle, ports, getInfo) |
+| `node_identity_map.py` | Bidirectional unique_id ↔ node_id mapping with migration detection |
 | `websocket_server.py` | WebSocket/REST server |
 | `log_store.py` | In-memory API log buffer + log handler |
 | `event_logger.py` | SQLite persistence |
 | `allocator.py` | Allocator detection + fallback allocator manager |
+| `startup_setup.py` | DSDL compilation via nnvg, env setup |
 | `main.py` | System orchestration |
 
 ## License

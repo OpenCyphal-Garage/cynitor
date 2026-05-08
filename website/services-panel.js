@@ -70,8 +70,9 @@ const _loadPersistentHistory = async (parentEl, nodeId) => {
     const serviceId = Number(container.dataset.serviceId);
     if (!serviceId) continue;
     try {
-      const nodeParam = nodeId != null ? `&node_id=${nodeId}` : '';
-      const data = await requestJson(`/api/services/${serviceId}/history?range=7d&limit=50${nodeParam}`);
+      const node = getSelectedNode();
+      const uidParam = node?.unique_id_hex ? `&unique_id=${node.unique_id_hex}` : (nodeId != null ? `&node_id=${nodeId}` : '');
+      const data = await requestJson(`/api/services/${serviceId}/history?range=7d&limit=50${uidParam}`);
       const entries = data.history || [];
       if (!entries.length) {
         container.innerHTML = '';
@@ -459,6 +460,7 @@ const renderServicesTab = async () => {
 
   // State 5: node disappeared
   const node = getSelectedNode();
+  const offlineLabel = getNodeAlias(node?.unique_id) || node?.name || `Node ${nodeId}`;
   const hasStaleSchema = state.serviceSchemas.has(nodeId);
   if (!node || node.has_disappeared) {
     if (hasStaleSchema && state.serviceSchemas.get(nodeId) !== SVC_SCHEMA_ERROR) {
@@ -469,14 +471,30 @@ const renderServicesTab = async () => {
         content.innerHTML = `
           <div class="svc-stale-banner" role="alert">
             <span class="svc-stale-icon">⚠</span>
-            Node ${nodeId} is offline — services are unavailable.
+            ${escapeHtml(offlineLabel)} is offline — services are unavailable.
           </div>
           <section class="svc-panel svc-panel-stale">${cards}</section>`;
         return;
       }
     }
+    const serverIds = node?.servers || [];
+    if (serverIds.length) {
+      const cards = serverIds.map((sid) => `<div class="svc-card svc-card-unavailable">
+        <div class="svc-card-header svc-card-header-static">
+          <span class="svc-service-id">${sid}</span>
+          <span class="svc-service-type">Service ${sid}</span>
+        </div>
+      </div>`).join('');
+      content.innerHTML = `
+        <div class="svc-stale-banner" role="alert">
+          <span class="svc-stale-icon">⚠</span>
+          ${escapeHtml(offlineLabel)} is offline — services are unavailable.
+        </div>
+        <section class="svc-panel svc-panel-stale">${cards}</section>`;
+      return;
+    }
     content.innerHTML = svcStateMsg(
-      '⚠', `Node ${nodeId} is offline`,
+      '⚠', `${escapeHtml(offlineLabel)} is offline`,
       'This node disappeared from the CAN bus. Its services are unavailable until it returns.'
     );
     return;
