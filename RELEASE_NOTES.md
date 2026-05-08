@@ -1,3 +1,35 @@
+## Cynitor v0.2.2
+
+### New Features
+
+- **Network topology graph** — new Graph tab with D3 force-directed bipartite view showing device nodes (circles) and subject nodes (diamonds) with directional pub/sub links. Supports drag-to-pin with persistent positions, zoom/pan, adjacency highlighting, and a toggle to collapse subjects into direct device-to-device edges. Selection shows an info panel overlay with publishers, subscribers, and services.
+- **Stable node identity** — nodes are tracked by hardware `unique_id` (16-byte ID) instead of ephemeral `node_id`. When a device loses its node_id slot (displaced by another device), it appears as a ghost entry showing last-known data. Ghost nodes are pinned to the bottom of the table with a delete button.
+- **Node data persistence** — node snapshots (name, version, ports) are stored in SQLite and restored across server restarts, so ghost nodes retain their data.
+- **Identity lifecycle events** — node history shows "Got node ID #X" and "Lost node ID #X" events when devices are assigned or displaced from a node_id slot.
+- **Offline service data** — servers and clients tabs show last-known port data for offline and ghost nodes with a stale banner, instead of showing an empty "offline" message.
+
+### UI Changes
+
+- **Segmented view tabs** — Nodes/Subjects use a segmented control with sliding indicator; Graph is a separate outlined button below.
+- **Ghost node display** — ghost rows show "last seen" time instead of blank uptime, and the ID column shows a delete button instead of a dash.
+
+### API Changes
+
+- `GET /api/nodes` response now includes ghost entries keyed as `uid:<hex>` with `node_id: null`, `last_node_id`, and `_ghost: true`
+- `DELETE /api/identity/{unique_id}` — remove a ghost identity and its persisted data
+
+### Bug Fixes
+
+- Fix plot state leaking between nodes when switching selected node
+- Fix servers tab showing nothing for offline nodes that had no cached schema
+- Fix spurious "Ports changed" history events when a new device takes an existing node_id
+- Fix node snapshots silently failing due to `deque.isoformat()` call on a deque instead of its last element
+- Fix empty snapshots overwriting good data during identity displacement
+- Fix ghost rows swapping positions with live nodes during table sort
+- Fix ghost delete button color using nonexistent CSS variable
+
+---
+
 ## Cynitor v0.2.1
 
 ### Improvements

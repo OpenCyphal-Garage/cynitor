@@ -477,6 +477,22 @@ const renderServicesTab = async () => {
         return;
       }
     }
+    const serverIds = node?.servers || [];
+    if (serverIds.length) {
+      const cards = serverIds.map((sid) => `<div class="svc-card svc-card-unavailable">
+        <div class="svc-card-header svc-card-header-static">
+          <span class="svc-service-id">${sid}</span>
+          <span class="svc-service-type">Service ${sid}</span>
+        </div>
+      </div>`).join('');
+      content.innerHTML = `
+        <div class="svc-stale-banner" role="alert">
+          <span class="svc-stale-icon">⚠</span>
+          ${escapeHtml(offlineLabel)} is offline — services are unavailable.
+        </div>
+        <section class="svc-panel svc-panel-stale">${cards}</section>`;
+      return;
+    }
     content.innerHTML = svcStateMsg(
       '⚠', `${escapeHtml(offlineLabel)} is offline`,
       'This node disappeared from the CAN bus. Its services are unavailable until it returns.'

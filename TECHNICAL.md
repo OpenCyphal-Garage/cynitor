@@ -64,6 +64,7 @@ EventLogger.start()        SQLite persistence
 | `event_logger.py` | SQLite persistence with batch writes, `asyncio.to_thread` for non-blocking I/O, configurable retention, node lifecycle history (30-day), service call history with response bodies |
 | `allocator.py` | Node-ID allocator detection / fallback (CentralizedAllocator), 10s re-check |
 | `startup_setup.py` | DSDL compilation via `nnvg`, sets `UAVCAN__CAN__IFACE` / `UAVCAN__CAN__MTU`, calls `yakut accommodate` for node ID |
+| `node_identity_map.py` | Bidirectional `unique_id ↔ node_id` mapping with displacement detection, snapshot storage, and SQLite-backed persistence |
 | `log_store.py` | In-memory deque (max 5000) fed by a `logging.Handler`; exposed via `/api/logs` |
 
 ### CLI flags
@@ -88,16 +89,20 @@ dsdl_messages/
 
 ## Frontend
 
-All frontend code lives in `website/`. Plain HTML/CSS/JS. No build step. D3 (CDN) for plots; Tabulator (CDN) for the node table. Six concern-focused script files load in order:
+All frontend code lives in `website/`. Plain HTML/CSS/JS. No build step. D3 (CDN) for plots and force graph; Tabulator (CDN) for data tables. Twelve concern-focused script files load in order:
 
 | File | Role |
 |------|------|
 | `state.js` | Global `state` object, constants (`PLOT_COLORS`, `PLOT_TICK_MS`), basic helpers (`el`, `escapeHtml`, formatters), API helpers (`apiBase`, `requestJson`), settings load/save (debounced 250ms, flushed on `beforeunload`) |
 | `cache.js` | Telemetry cache and per-node accessors: `cacheEvent`, `getNodeRate`, `getNodeHealthValue`, `getNodeVisualState`, `pruneNodeCache`, `buildSubjectDetailData` |
-| `detail-panel.js` | Per-node subject cards, multi-panel D3 plot, hover crosshair + tooltip, toggle-pill legend, selection helpers |
-| `nodes-table.js` | Tabulator init, formatters, row build (port arrays joined to strings to avoid spurious cell re-renders), favourite + delete actions |
-| `services-panel.js` | Service interaction: schema fetch, request form rendering, send/repeat/copy, persistent call history from backend, view-isolated state (`forSubjects` parameter) |
+| `plot.js` | Multi-panel D3 time-series plot: axis setup, line rendering, hover crosshair + tooltip, animation loop, resize handling |
+| `detail-panel.js` | Per-node detail panel: subject cards, tab rendering (publishers, subscribers, servers, clients, registers, history), plot integration, selection helpers |
+| `nodes-table.js` | Tabulator init, formatters, row build (port arrays joined to strings to avoid spurious cell re-renders), favourite + ghost delete actions, ghost rows pinned to bottom |
+| `services-panel.js` | Service interaction: schema fetch, request form rendering, send/repeat/copy, persistent call history from backend, view-isolated state (`forSubjects` parameter), offline fallback for stale schemas |
+| `registers-panel.js` | Register read/write UI: renders register list, type validation, edit controls, offline caching |
+| `history-panel.js` | Node lifecycle history: timeline rendering, event labels/badges, subject activity summary, time-range filtering |
 | `subjects-panel.js` | Subject browser: Tabulator-based table of all subjects and services, inline service expansion with node selector, integrated persistent history. Uses a stash/unstash pattern to protect the inline service detail DOM node from Tabulator's virtual re-renders |
+| `graph-view.js` | Network topology: D3 force-directed bipartite graph of device and subject nodes, drag-to-pin with persistent positions, adjacency highlighting, info panel overlay, subject toggle |
 | `connection.js` | WebSocket lifecycle, REST polling (status, nodes, interfaces), throughput meter, semaphores, `disconnectAll` shared teardown |
 | `app.js` | Boot file: DOM event wiring (`bind`), settings restore, frontend-server heartbeat, sidebar view tab switching |
 
@@ -125,9 +130,10 @@ Page load → loadSettings() → bind() → updateSemaphores()
 
 The frontend never blocks on a single source. WebSocket is for live events; REST is for structural snapshots and connection metadata.
 
-Two views share the same WebSocket and REST data:
-- **Nodes view** — Tabulator table of nodes, detail panel below with tabs (Publishers, Subscribers, Servers, Clients, Registers, History).
+Three views share the same WebSocket and REST data:
+- **Nodes view** — Tabulator table of nodes (with ghost rows for displaced identities pinned to bottom), detail panel below with tabs (Publishers, Subscribers, Servers, Clients, Registers, History).
 - **Subjects view** — Tabulator table of all subjects and services across the network. Services can be expanded inline with a node selector and request form. Both views use `services-panel.js` for service interaction but maintain isolated state via the `forSubjects` parameter pattern.
+- **Graph view** — D3 force-directed bipartite topology showing device nodes (circles) and subject nodes (diamonds) with directional pub/sub links. Supports drag-to-pin with persistent positions, zoom/pan, adjacency highlighting, and a toggle to collapse subjects into device-to-device edges.
 
 ### State
 
@@ -178,6 +184,7 @@ cynitor/
     main.py                 Entry point, lifecycle orchestration
     scanner_node.py         CAN network discovery and subscriptions
     node_info.py            Per-node state tracking
+    node_identity_map.py    Stable unique_id ↔ node_id mapping
     telemetry_manager.py    Event routing and caching
     websocket_server.py     REST + WebSocket server
     event_logger.py         SQLite event persistence
@@ -190,10 +197,14 @@ cynitor/
     index.html              Layout
     state.js                Global state, settings, API helpers
     cache.js                Telemetry cache + per-node accessors
-    detail-panel.js         Detail panel + multi-panel plot
-    nodes-table.js          Tabulator (nodes view)
+    plot.js                 Multi-panel D3 time-series plot
+    detail-panel.js         Detail panel, tab rendering, subject cards
+    nodes-table.js          Tabulator (nodes view) with ghost row support
     services-panel.js       Service interaction UI and persistent history
+    registers-panel.js      Register read/write UI
+    history-panel.js        Node lifecycle history timeline
     subjects-panel.js       Subject browser (subjects view) with inline service expansion
+    graph-view.js           D3 force-directed network topology
     connection.js           WS + polling + lifecycle
     app.js                  Boot, bindings, heartbeat, view switching
     styles.css              Theme and layout
