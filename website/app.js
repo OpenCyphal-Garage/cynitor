@@ -191,7 +191,7 @@ const bind = () => {
     selectSubjectCard(card);
   });
 
-  document.querySelectorAll('.sidebar-view-tab').forEach((btn) => {
+  document.querySelectorAll('[data-view]').forEach((btn) => {
     btn.addEventListener('click', () => switchView(btn.dataset.view));
   });
 

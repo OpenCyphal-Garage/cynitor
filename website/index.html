@@ -57,14 +57,23 @@
       </div>
 
       <div class="sidebar-view-tabs" role="tablist">
-        <button class="sidebar-view-tab active" data-view="nodes" role="tab" aria-selected="true">Nodes</button>
-        <button class="sidebar-view-tab" data-view="subjects" role="tab" aria-selected="false">Subjects</button>
-        <button class="sidebar-view-tab" data-view="graph" role="tab" aria-selected="false">Graph</button>
+        <div class="view-segmented">
+          <button class="view-seg-btn active" data-view="nodes" role="tab" aria-selected="true">Nodes</button>
+          <button class="view-seg-btn" data-view="subjects" role="tab" aria-selected="false">Subjects</button>
+          <div class="view-seg-indicator"></div>
+        </div>
+        <button class="view-graph-btn" data-view="graph" role="tab" aria-selected="false">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="12" cy="18" r="3"/>
+            <line x1="8.5" y1="7.5" x2="10.5" y2="16"/><line x1="15.5" y1="7.5" x2="13.5" y2="16"/>
+          </svg>
+          <span>Graph</span>
+        </button>
       </div>
 
       <div class="sidebar-footer">
         <div class="footer-left">
-          <span class="version-tag">v0.2.0</span>
+          <span class="version-tag">v0.2.2</span>
           <a class="sidebar-built-by" href="https://cordicor.com" target="_blank" rel="noopener">
             <img src="./images/cordicor_minimal.svg" alt="Cordicor" class="cordicor-logo" />
             <span class="built-by-label">Built by</span>

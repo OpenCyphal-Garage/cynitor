@@ -315,35 +315,112 @@ body {
 
 .sidebar-view-tabs {
   display: flex;
-  gap: 0.25rem;
+  flex-direction: column;
+  gap: 0.375rem;
   padding: 0.5rem 0.875rem;
   border-bottom: 1px solid var(--border);
 }
 
-.sidebar-view-tab {
+/* Segmented control (Nodes / Subjects) */
+.view-segmented {
+  position: relative;
+  display: flex;
+  background: var(--surface-3);
+  border-radius: 0.375rem;
+  padding: 0.125rem;
+}
+
+.view-seg-btn {
   flex: 1;
-  padding: 0.375rem 0;
+  position: relative;
+  z-index: 1;
+  padding: 0.3125rem 0;
+  font-family: var(--sans);
   font-size: 0.6875rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--muted);
   background: transparent;
-  border: 1px solid transparent;
+  border: none;
   border-radius: 0.25rem;
+  cursor: pointer;
+  transition: color 0.18s;
+}
+
+.view-seg-btn:hover {
+  color: var(--text);
+}
+
+.view-seg-btn.active {
+  color: var(--text-bright);
+}
+
+.view-seg-indicator {
+  position: absolute;
+  top: 0.125rem;
+  left: 0.125rem;
+  width: calc(50% - 0.125rem);
+  height: calc(100% - 0.25rem);
+  background: var(--surface);
+  border-radius: 0.25rem;
+  box-shadow: 0 0.0625rem 0.1875rem rgba(0, 0, 0, 0.08);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+}
+
+[data-theme="dark"] .view-seg-indicator {
+  box-shadow: 0 0.0625rem 0.25rem rgba(0, 0, 0, 0.25);
+}
+
+.view-seg-btn:nth-child(2).active ~ .view-seg-indicator {
+  transform: translateX(100%);
+}
+
+/* Graph button */
+.view-graph-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  width: 100%;
+  padding: 0.3125rem 0;
+  font-family: var(--sans);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.375rem;
   cursor: pointer;
   transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
 
-.sidebar-view-tab:hover {
-  color: var(--text);
-  background: var(--surface-2);
+.view-graph-btn svg {
+  opacity: 0.6;
+  transition: opacity 0.15s;
 }
 
-.sidebar-view-tab.active {
-  color: var(--text-bright);
+.view-graph-btn:hover {
+  color: var(--text);
   background: var(--surface-2);
   border-color: var(--border);
+}
+
+.view-graph-btn:hover svg {
+  opacity: 1;
+}
+
+.view-graph-btn.active {
+  color: var(--accent);
+  background: var(--accent-muted);
+  border-color: var(--accent);
+}
+
+.view-graph-btn.active svg {
+  opacity: 1;
 }
 
 .sidebar-footer {

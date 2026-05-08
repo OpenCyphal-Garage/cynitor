@@ -751,7 +751,7 @@ const switchView = (view) => {
     renderSelectedNodeContent();
   }
 
-  document.querySelectorAll('.sidebar-view-tab').forEach((btn) => {
+  document.querySelectorAll('[data-view]').forEach((btn) => {
     const isActive = btn.dataset.view === view;
     btn.classList.toggle('active', isActive);
     btn.setAttribute('aria-selected', isActive);
