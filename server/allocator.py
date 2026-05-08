@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import asyncio
 import logging
 import hashlib
@@ -33,6 +34,15 @@ def _normalize_pythoncan_iface(iface: str) -> str:
     return f"socketcan:{value}"
 
 
+def _get_local_ip() -> str:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+
+
 class AllocatorApp:
     REGISTER_FILE = "allocator_2app.db"
     NODE_ID = 1
@@ -40,7 +50,7 @@ class AllocatorApp:
     def __init__(self, iface_name: Optional[str] = None) -> None:
         node_info = uavcan.node.GetInfo_1_0.Response(
             software_version=uavcan.node.Version_1(major=1, minor=0),
-            name="cynitor.allocator",
+            name=f"{_get_local_ip()}.allocator",
         )
 
         can_interface = _normalize_pythoncan_iface(iface_name or _iface_from_env())
