@@ -682,16 +682,37 @@ const switchView = (view) => {
 
   const nodesEl = el('nodesTable');
   const subjectsEl = el('subjectsTable');
+  const graphEl = el('graphContainer');
   const detailHandle = el('detailResizeHandle');
   const detailPanel = el('detailPanel');
 
   _saveDetailPanelState(prevView);
 
+  // Tear down previous view
+  if (prevView === 'subjects') {
+    state._subjectsPlotSubject = state.selectedPlotSubject;
+    stopPlotAnim();
+    const inlineDetail = document.getElementById('subjectInlineDetail');
+    if (inlineDetail) {
+      state._stashedInlineDetail = inlineDetail;
+      inlineDetail.remove();
+    }
+    _suppressReattach = true;
+  } else if (prevView === 'nodes') {
+    state._nodesPlotSubject = state.selectedPlotSubject;
+  } else if (prevView === 'graph') {
+    GraphView.hide();
+  }
+
+  // Hide all content panes
+  nodesEl.classList.add('hidden');
+  subjectsEl.classList.add('hidden');
+  graphEl.classList.add('hidden');
+
+  // Activate target view
   if (view === 'subjects') {
     _suppressReattach = false;
-    state._nodesPlotSubject = state.selectedPlotSubject;
     state.selectedPlotSubject = state._subjectsPlotSubject ?? null;
-    nodesEl.classList.add('hidden');
     subjectsEl.classList.remove('hidden');
     stopPlotAnim();
     const hasPlot = state.selectedPlotSubject != null;
@@ -710,17 +731,13 @@ const switchView = (view) => {
       _highlightSubjectRow(state.selectedPlotSubject);
       startPlotAnim();
     }
+  } else if (view === 'graph') {
+    detailHandle.classList.add('hidden');
+    detailPanel.classList.add('hidden');
+    GraphView.show();
   } else {
-    state._subjectsPlotSubject = state.selectedPlotSubject;
     state.selectedPlotSubject = state._nodesPlotSubject ?? null;
     stopPlotAnim();
-    const inlineDetail = document.getElementById('subjectInlineDetail');
-    if (inlineDetail) {
-      state._stashedInlineDetail = inlineDetail;
-      inlineDetail.remove();
-    }
-    _suppressReattach = true;
-    subjectsEl.classList.add('hidden');
     nodesEl.classList.remove('hidden');
     detailHandle.classList.remove('hidden');
     detailPanel.classList.remove('hidden');

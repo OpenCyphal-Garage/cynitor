@@ -450,6 +450,7 @@ const getAllNodes = async () => {
   try {
     const data = await requestJson('/api/nodes');
     state.latestNodesPayload = data;
+    upgradeStableKeys();
     pruneNodeCache();
     const selectedStillExists = state.selectedNodeId !== null && data.nodes && data.nodes[String(state.selectedNodeId)];
     if (!selectedStillExists) {

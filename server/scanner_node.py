@@ -23,6 +23,7 @@ import uavcan.diagnostic
 import uavcan.pnp
 
 from node_info import NodeInfo
+from node_identity_map import NodeIdentityMap
 
 class ScannerNode:
     # Constants
@@ -68,6 +69,7 @@ class ScannerNode:
         self.pnp_v1_subscriber.receive_in_background(self.pnp_v1_callback)
 
         self.all_nodes: dict[int, NodeInfo] = {node_id: NodeInfo(node_id=node_id) for node_id in range(self.NUM_NODES)}
+        self.identity_map = NodeIdentityMap()
         self.subject_attributes: dict[int, list[str]] = {}                # Maps subject_id to list of attribute names
         self.publishers_subscribers: dict[int, pycyphal.application.Subscriber] = {}
         self.message_timestamps: dict[int, list[float]] = {}              # Maps subject_id to timestamps for rate calculation
@@ -78,6 +80,7 @@ class ScannerNode:
         self.service_clients = {}
         self.node_service_types: dict[int, dict[int, str]] = {}  # node_id -> {service_id -> type_string}
         self.on_node_event: Optional[Callable] = None
+        self.on_node_data_save: Optional[Callable] = None
         self._prev_health: dict[int, int] = {}
         self._prev_mode: dict[int, int] = {}
         self._prev_uptime: dict[int, int] = {}
@@ -947,7 +950,7 @@ class ScannerNode:
             "message_type": message_type,
             "attributes": attributes,
             "publisher_node_id": publisher_node_id,
-            "unique_id": self._get_node_unique_id_hex(publisher_node_id),
+            "unique_id": self._get_node_unique_id_hex(publisher_node_id) or self.identity_map.get_uid(publisher_node_id),
         }
         try:
             self.message_queue.put_nowait(event)
@@ -1126,6 +1129,11 @@ class ScannerNode:
             register_access_client.close()
 
     def cleanup_subscriptions(self, node_id: int) -> None:
+        self._snapshot_node_for_identity(node_id)
+        self._prev_ports.pop(node_id, None)
+        self._prev_health.pop(node_id, None)
+        self._prev_mode.pop(node_id, None)
+        self._prev_uptime.pop(node_id, None)
         self._emit_node_event(node_id, "disappeared")
         to_remove = []
 
@@ -1156,7 +1164,7 @@ class ScannerNode:
 
     def _emit_node_event(self, node_id: int, event_type: str, detail: Optional[dict] = None) -> None:
         if self.on_node_event:
-            uid = self._get_node_unique_id_hex(node_id)
+            uid = self._get_node_unique_id_hex(node_id) or self.identity_map.get_uid(node_id)
             asyncio.ensure_future(self.on_node_event(node_id, event_type, detail, unique_id=uid))
 
     async def port_callback(self, msg: uavcan.node.port.List_1_0, transfer: pycyphal.transport.TransferFrom):
@@ -1221,7 +1229,7 @@ class ScannerNode:
             node.mark_seen(last_seen=now)
 
             if was_disappeared:
-                self._emit_node_event(node_id, "reappeared")
+                self._prev_ports.pop(node_id, None)
 
             # Restart detection: uptime jumped backward
             prev_uptime = self._prev_uptime.get(node_id)
@@ -1233,9 +1241,10 @@ class ScannerNode:
 
             node.uptime = msg.uptime
 
-            # Refresh getInfo periodically (every 60s) to detect node replacements
+            # Refresh getInfo: immediately on reappearance, otherwise every 60s
             needs_refresh = (
-                node.last_info_time is None
+                was_disappeared
+                or node.last_info_time is None
                 or (now - node.last_info_time).total_seconds() >= 60
             )
             if needs_refresh:
@@ -1243,10 +1252,22 @@ class ScannerNode:
                 await self.getInfo(node_id)
                 new_unique_id = ''.join(f'{byte:02x}' for byte in node.unique_id) if node.has_responded_to_getInfo else None
 
-                if old_unique_id and new_unique_id and old_unique_id != new_unique_id:
-                    logging.info(f"Node {node_id} unique_id changed: {old_unique_id} -> {new_unique_id}. Resetting.")
-                    self.all_nodes[node_id] = NodeInfo(node_id=node.node_id)
-                    await self.getInfo(node_id)
+                is_replacement = old_unique_id and new_unique_id and old_unique_id != new_unique_id
+                if is_replacement:
+                    known_nid = self.identity_map.get_nid(new_unique_id)
+                    if known_nid is None or known_nid == node_id:
+                        logging.info(f"Node {node_id} identity changed: {old_unique_id} -> {new_unique_id}. Resetting node state.")
+                        self._prev_ports.pop(node_id, None)
+                        self._prev_health.pop(node_id, None)
+                        self._prev_mode.pop(node_id, None)
+                        self._prev_uptime.pop(node_id, None)
+                        self.all_nodes[node_id] = NodeInfo(node_id=node.node_id)
+                        await self.getInfo(node_id)
+                else:
+                    if was_disappeared:
+                        self._emit_node_event(node_id, "reappeared")
+            elif was_disappeared:
+                self._emit_node_event(node_id, "reappeared")
 
         # Track health/mode changes
         health_val = self._make_json_serializable(msg.health.value)
@@ -1290,6 +1311,12 @@ class ScannerNode:
         unique_id = bytes(raw_uid).hex() if hasattr(raw_uid, '__iter__') else str(raw_uid)
         node_id_value = self._make_json_serializable(msg.node_id.value)
         logging.info(f"PnP v2 allocation: unique_id={unique_id}, node_id={node_id_value}")
+
+        if isinstance(node_id_value, int) and 0 <= node_id_value < self.NUM_NODES:
+            old_node_id = self.identity_map.register(node_id_value, unique_id)
+            if old_node_id is not None:
+                self._migrate_node_state(old_node_id, node_id_value, unique_id)
+
         attrs = [
             {"attribute": "unique_id", "value": unique_id},
             {"attribute": "node_id", "value": node_id_value},
@@ -1316,14 +1343,114 @@ class ScannerNode:
             publisher_node_id=transfer.source_node_id if transfer.source_node_id is not None else -1,
         )
 
+    def _snapshot_node_for_identity(self, node_id: int) -> None:
+        """Save last known state of a node into the identity map before it gets displaced."""
+        try:
+            uid = self.identity_map.get_uid(node_id)
+            if not uid:
+                return
+            node = self.all_nodes.get(node_id)
+            if not node or not node.has_appeared or not node.has_responded_to_getInfo:
+                return
+            info = getattr(node, "info_response", None)
+
+            def _ids(attr):
+                items = getattr(node, attr, [])
+                return sorted(self._make_json_serializable(s.value) if hasattr(s, 'value') else int(s) for s in items)
+
+            name = None
+            if info:
+                n = info.name
+                if hasattr(n, 'tobytes'):
+                    n = n.tobytes().decode('utf-8', errors='replace')
+                name = str(n) if n else None
+
+            snapshot = {
+                "unique_id": [int(b) for b in node.unique_id] if hasattr(node.unique_id, '__iter__') else [],
+                "name": name or self.identity_map._node_names.get(uid),
+                "software_version": {
+                    "major": self._make_json_serializable(info.software_version.major),
+                    "minor": self._make_json_serializable(info.software_version.minor),
+                } if info else None,
+                "publishers": _ids("publisher_SubjectIDs") if getattr(node, 'has_publishers', False) else [],
+                "subscribers": _ids("subscriber_SubjectIDs") if getattr(node, 'has_subscribers', False) else [],
+                "servers": _ids("server_ServiceIDs") if getattr(node, 'has_servers', False) else [],
+                "clients": _ids("client_ServiceIDs") if getattr(node, 'has_clients', False) else [],
+                "uptime": self._make_json_serializable(node.uptime) if getattr(node, 'uptime', None) else None,
+                "last_seen": node.last_seen[-1].isoformat() if getattr(node, 'last_seen', None) and len(node.last_seen) else None,
+            }
+            self.identity_map.save_node_snapshot(uid, snapshot)
+            if self.on_node_data_save:
+                asyncio.ensure_future(self.on_node_data_save(uid, snapshot))
+        except Exception as e:
+            logging.warning(f"Failed to snapshot node {node_id}: {e}")
+
+    def _migrate_node_state(self, old_node_id: int, new_node_id: int, unique_id_hex: str) -> None:
+        """Transfer accumulated state from old node_id slot to new one after re-allocation."""
+        logging.info(f"Migrating node state: node_id {old_node_id} -> {new_node_id} (unique_id={unique_id_hex})")
+
+        for subject_id, publishers in self.active_publishers.items():
+            if old_node_id in publishers:
+                publishers.discard(old_node_id)
+                publishers.add(new_node_id)
+
+        old_service_types = self.node_service_types.pop(old_node_id, None)
+        if old_service_types:
+            self.node_service_types[new_node_id] = old_service_types
+
+        old_keys = [k for k in self.service_metadata if k[0] == old_node_id]
+        for old_key in old_keys:
+            service_id = old_key[1]
+            self.service_metadata[(new_node_id, service_id)] = self.service_metadata.pop(old_key)
+            client = self.service_clients.pop(old_key, None)
+            if client:
+                client.close()
+
+        for tracker in (self._prev_health, self._prev_mode, self._prev_uptime):
+            val = tracker.pop(old_node_id, None)
+            if val is not None:
+                tracker[new_node_id] = val
+
+        prev_ports = self._prev_ports.pop(old_node_id, None)
+        if prev_ports is not None:
+            self._prev_ports[new_node_id] = prev_ports
+
+        self.all_nodes[old_node_id] = NodeInfo(node_id=old_node_id)
+
+        self._emit_node_event(new_node_id, "node_id_migration", {
+            "old_node_id": old_node_id,
+            "new_node_id": new_node_id,
+            "unique_id": unique_id_hex,
+        })
+
     async def getInfo(self, node_id: int) -> None:
         info_client    = self._node.make_client(uavcan.node.GetInfo_1, node_id)
         try:
             request         = uavcan.node.GetInfo_1.Request()
             response        = await info_client.call(request)
+            self._snapshot_node_for_identity(node_id)
             self.all_nodes[node_id].set_info(get_info_response=response[0], transfer_from=response[1])
             self.all_nodes[node_id].last_info_time = datetime.datetime.now()
             logging.debug(f"Node {node_id} has responded to getInfo service.")
+
+            uid_hex = self._get_node_unique_id_hex(node_id)
+            if uid_hex:
+                displaced_uid = self.identity_map.get_uid(node_id)
+                if displaced_uid and displaced_uid != uid_hex and self.on_node_event:
+                    asyncio.ensure_future(self.on_node_event(node_id, "lost_node_id", {"node_id": node_id}, unique_id=displaced_uid))
+                prev_nid = self.identity_map.get_nid(uid_hex)
+                old_node_id = self.identity_map.register(node_id, uid_hex)
+                if prev_nid != node_id:
+                    self._emit_node_event(node_id, "got_node_id", {"node_id": node_id})
+                if old_node_id is not None:
+                    self._snapshot_node_for_identity(old_node_id)
+                    self._migrate_node_state(old_node_id, node_id, uid_hex)
+                self._snapshot_node_for_identity(node_id)
+                name = response[0].name
+                if hasattr(name, 'tobytes'):
+                    name = name.tobytes().decode('utf-8', errors='replace')
+                if name:
+                    self.identity_map.set_node_name(uid_hex, str(name))
         except Exception as e:
             logging.warning(f"Node {node_id} could not provide GetInfo service. Threw {e}")
         finally:

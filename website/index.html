@@ -59,6 +59,7 @@
       <div class="sidebar-view-tabs" role="tablist">
         <button class="sidebar-view-tab active" data-view="nodes" role="tab" aria-selected="true">Nodes</button>
         <button class="sidebar-view-tab" data-view="subjects" role="tab" aria-selected="false">Subjects</button>
+        <button class="sidebar-view-tab" data-view="graph" role="tab" aria-selected="false">Graph</button>
       </div>
 
       <div class="sidebar-footer">
@@ -90,6 +91,7 @@
     <div class="main-area">
       <div id="nodesTable"></div>
       <div id="subjectsTable" class="hidden"></div>
+      <div id="graphContainer" class="hidden"></div>
       <div class="detail-resize-handle" id="detailResizeHandle">
         <button class="detail-collapse-btn" id="detailCollapseBtn" aria-label="Toggle detail panel">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -141,6 +143,7 @@
   <script src="./detail-panel.js"></script>
   <script src="./nodes-table.js"></script>
   <script src="./subjects-panel.js"></script>
+  <script src="./graph-view.js"></script>
   <script src="./connection.js"></script>
   <script src="./app.js"></script>
 </body>

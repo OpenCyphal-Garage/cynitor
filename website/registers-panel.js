@@ -200,6 +200,7 @@ const renderRegistersTab = async (force) => {
 
   const node = getSelectedNode();
   if (!node || node.has_disappeared) {
+    const regLabel = getNodeAlias(node?.unique_id) || node?.name || `Node ${nodeId}`;
     const cached = REG_CACHE.get(nodeId);
     if (cached && cached !== 'error' && cached.length) {
       renderRegisterList(content, cached, nodeId);
@@ -207,11 +208,11 @@ const renderRegistersTab = async (force) => {
       if (panel) {
         panel.classList.add('svc-panel-stale');
         panel.insertAdjacentHTML('afterbegin',
-          `<div class="svc-stale-banner" role="alert"><span class="svc-stale-icon">⚠</span>Node ${nodeId} is offline — register data may be stale.</div>`);
+          `<div class="svc-stale-banner" role="alert"><span class="svc-stale-icon">⚠</span>${escapeHtml(regLabel)} is offline — register data may be stale.</div>`);
       }
       return;
     }
-    content.innerHTML = svcStateMsg('⚠', `Node ${nodeId} is offline`, 'Cannot fetch registers from an offline node.');
+    content.innerHTML = svcStateMsg('⚠', `${escapeHtml(regLabel)} is offline`, 'Cannot fetch registers from an offline node.');
     return;
   }
 

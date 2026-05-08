@@ -199,7 +199,16 @@ class CANSession:
                 self.event_logger = EventLogger(db_path="telemetry_events.db", max_events=100000)
                 await self.event_logger.start()
 
+                saved_identities = await self.event_logger.load_identity_map()
+                if saved_identities:
+                    self.scanner.identity_map.load_snapshot(saved_identities)
+
+                saved_node_data = await self.event_logger.load_all_node_data()
+                if saved_node_data:
+                    self.scanner.identity_map.load_node_data(saved_node_data)
+
                 self.scanner.on_node_event = self.event_logger.log_node_event
+                self.scanner.on_node_data_save = self.event_logger.save_node_data
 
                 logger_queue = self.telemetry.subscribe(max_queue=100)
                 self._tasks = [
@@ -237,6 +246,9 @@ class CANSession:
                 except asyncio.CancelledError:
                     pass
         self._tasks.clear()
+
+        if self.event_logger and self.scanner:
+            await self.event_logger.save_identity_map(self.scanner.identity_map.snapshot())
 
         if self.event_logger:
             await self.event_logger.stop()

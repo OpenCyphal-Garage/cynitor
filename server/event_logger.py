@@ -78,6 +78,35 @@ class EventLogger:
                         cursor.execute(f"ALTER TABLE {table} ADD COLUMN unique_id TEXT")
                         logger.info(f"Migrated {table}: added unique_id column")
 
+                # Identity map persistence table
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS identity_map (
+                        unique_id TEXT PRIMARY KEY,
+                        current_node_id INTEGER,
+                        last_seen_unix REAL,
+                        node_name TEXT,
+                        previous_node_ids TEXT
+                    )
+                """)
+
+                # Node data persistence (unique_id as primary key)
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS node_data (
+                        unique_id TEXT PRIMARY KEY,
+                        node_name TEXT,
+                        software_version_major INTEGER,
+                        software_version_minor INTEGER,
+                        publishers TEXT,
+                        subscribers TEXT,
+                        servers TEXT,
+                        clients TEXT,
+                        unique_id_bytes TEXT,
+                        last_uptime REAL,
+                        last_seen TEXT,
+                        updated_at REAL NOT NULL
+                    )
+                """)
+
                 # Create indexes (after migration so unique_id column exists)
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_subject ON events(subject_id)")
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_node ON events(publisher_node_id)")
@@ -487,3 +516,123 @@ class EventLogger:
         except Exception as e:
             logger.error(f"Failed to query service call history: {e}", exc_info=True)
             return []
+
+    # ------------------------------------------------------------------
+    # Identity map persistence
+    # ------------------------------------------------------------------
+
+    def _save_identity_map_sync(self, records: list[dict[str, Any]]) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM identity_map")
+            for rec in records:
+                cursor.execute(
+                    "INSERT INTO identity_map (unique_id, current_node_id, last_seen_unix, node_name, previous_node_ids) VALUES (?, ?, ?, ?, ?)",
+                    (rec["unique_id"], rec.get("current_node_id"), rec.get("last_seen_unix"), rec.get("node_name"), json.dumps(rec.get("previous_node_ids", []))),
+                )
+        logger.debug(f"Saved {len(records)} identity map entries")
+
+    async def save_identity_map(self, records: list[dict[str, Any]]) -> None:
+        try:
+            await asyncio.to_thread(self._save_identity_map_sync, records)
+        except Exception as e:
+            logger.error(f"Failed to save identity map: {e}", exc_info=True)
+
+    def _load_identity_map_sync(self) -> list[dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT * FROM identity_map").fetchall()
+        return [
+            {
+                "unique_id": row["unique_id"],
+                "current_node_id": row["current_node_id"],
+                "last_seen_unix": row["last_seen_unix"],
+                "node_name": row["node_name"],
+                "previous_node_ids": json.loads(row["previous_node_ids"]) if row["previous_node_ids"] else [],
+            }
+            for row in rows
+        ]
+
+    async def load_identity_map(self) -> list[dict[str, Any]]:
+        try:
+            return await asyncio.to_thread(self._load_identity_map_sync)
+        except Exception as e:
+            logger.error(f"Failed to load identity map: {e}", exc_info=True)
+            return []
+
+    # ------------------------------------------------------------------
+    # Node data persistence (unique_id as primary key)
+    # ------------------------------------------------------------------
+
+    def _save_node_data_sync(self, unique_id: str, snapshot: dict) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO node_data
+                   (unique_id, node_name, software_version_major, software_version_minor,
+                    publishers, subscribers, servers, clients,
+                    unique_id_bytes, last_uptime, last_seen, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    unique_id,
+                    snapshot.get("name"),
+                    snapshot.get("software_version", {}).get("major") if snapshot.get("software_version") else None,
+                    snapshot.get("software_version", {}).get("minor") if snapshot.get("software_version") else None,
+                    json.dumps(snapshot.get("publishers", [])),
+                    json.dumps(snapshot.get("subscribers", [])),
+                    json.dumps(snapshot.get("servers", [])),
+                    json.dumps(snapshot.get("clients", [])),
+                    json.dumps(snapshot.get("unique_id", [])),
+                    snapshot.get("uptime"),
+                    snapshot.get("last_seen"),
+                    time.time(),
+                ),
+            )
+
+    async def save_node_data(self, unique_id: str, snapshot: dict) -> None:
+        try:
+            await asyncio.to_thread(self._save_node_data_sync, unique_id, snapshot)
+            logger.debug(f"Saved node data for {unique_id}")
+        except Exception as e:
+            logger.error(f"Failed to save node data: {e}", exc_info=True)
+
+    def _load_all_node_data_sync(self) -> dict[str, dict]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT * FROM node_data").fetchall()
+        result = {}
+        for row in rows:
+            uid = row["unique_id"]
+            sv = None
+            if row["software_version_major"] is not None:
+                sv = {"major": row["software_version_major"], "minor": row["software_version_minor"]}
+            result[uid] = {
+                "unique_id": json.loads(row["unique_id_bytes"]) if row["unique_id_bytes"] else [],
+                "name": row["node_name"],
+                "software_version": sv,
+                "publishers": json.loads(row["publishers"]) if row["publishers"] else [],
+                "subscribers": json.loads(row["subscribers"]) if row["subscribers"] else [],
+                "servers": json.loads(row["servers"]) if row["servers"] else [],
+                "clients": json.loads(row["clients"]) if row["clients"] else [],
+                "uptime": row["last_uptime"],
+                "last_seen": row["last_seen"],
+            }
+        return result
+
+    async def load_all_node_data(self) -> dict[str, dict]:
+        try:
+            return await asyncio.to_thread(self._load_all_node_data_sync)
+        except Exception as e:
+            logger.error(f"Failed to load node data: {e}", exc_info=True)
+            return {}
+
+    def _delete_node_data_sync(self, unique_id: str) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM node_data WHERE unique_id = ?", (unique_id,))
+            conn.execute("DELETE FROM identity_map WHERE unique_id = ?", (unique_id,))
+
+    async def delete_node_data(self, unique_id: str) -> None:
+        try:
+            await asyncio.to_thread(self._delete_node_data_sync, unique_id)
+            logger.info(f"Deleted node data for {unique_id}")
+        except Exception as e:
+            logger.error(f"Failed to delete node data: {e}", exc_info=True)

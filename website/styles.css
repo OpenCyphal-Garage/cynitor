@@ -1405,6 +1405,13 @@ button:focus-visible,
   background: rgba(88, 166, 255, 0.10) !important;
 }
 
+.ghost-delete-btn {
+  background: none; border: none; color: var(--error); cursor: pointer;
+  font-size: 1rem; padding: 0.125rem 0.375rem; line-height: 1;
+  opacity: 0.8; transition: opacity 0.15s;
+}
+.ghost-delete-btn:hover { opacity: 1; }
+
 .tabulator .tabulator-placeholder {
   color: var(--muted);
   font-family: var(--sans);
@@ -2739,4 +2746,263 @@ details.svc-history-entry[open] > summary::before {
   font-family: var(--mono);
   font-size: 0.625rem;
   color: var(--muted);
+}
+
+/* ── Graph view ── */
+
+#graphContainer {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+
+.graph-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.625rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.75rem;
+  flex-shrink: 0;
+}
+
+.graph-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.graph-toggle input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+.graph-btn {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  padding: 0.1875rem 0.5rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.graph-btn:hover {
+  background: var(--surface-3);
+}
+
+.graph-svg-wrap {
+  flex: 1;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.graph-svg-wrap svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Links */
+.graph-link {
+  stroke: var(--border);
+  stroke-width: 1;
+  fill: none;
+  transition: opacity 0.15s;
+}
+
+.graph-link--hi {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+
+.graph-link.graph-dim {
+  opacity: 0.1;
+}
+
+/* Device nodes */
+.graph-device-circle {
+  fill: var(--surface);
+  stroke-width: 2;
+  cursor: grab;
+  transition: opacity 0.15s;
+}
+
+.graph-node--pinned .graph-device-circle {
+  stroke-dasharray: 3 2;
+}
+
+.graph-node.graph-hi .graph-device-circle {
+  stroke-width: 3;
+  filter: drop-shadow(0 0 0.25rem var(--accent));
+}
+
+.graph-node.graph-dim {
+  opacity: 0.15;
+}
+
+.graph-node-id {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  fill: var(--text);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Subject nodes */
+.graph-subject-rect {
+  fill: var(--surface-2);
+  stroke: var(--muted);
+  stroke-width: 1.5;
+  cursor: grab;
+  transition: opacity 0.15s;
+}
+
+.graph-node.graph-hi .graph-subject-rect {
+  stroke: var(--accent);
+  stroke-width: 2;
+  filter: drop-shadow(0 0 0.25rem var(--accent));
+}
+
+/* Labels */
+.graph-label {
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+  fill: var(--muted);
+  pointer-events: none;
+  user-select: none;
+  transition: opacity 0.15s;
+}
+
+.graph-label--device {
+  font-size: 0.625rem;
+  fill: var(--text);
+}
+
+.graph-label.graph-dim {
+  opacity: 0.1;
+}
+
+/* Info panel (overlay inside graph) */
+.graph-info {
+  position: absolute;
+  bottom: 0.5rem;
+  right: 0.5rem;
+  width: 16rem;
+  max-height: 50%;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.625rem;
+  font-size: 0.75rem;
+  box-shadow: 0 0.125rem 0.5rem rgba(0, 0, 0, 0.12);
+  z-index: 10;
+}
+
+.graph-info.hidden {
+  display: none;
+}
+
+.graph-info-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.25rem;
+}
+
+.graph-info-type {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.graph-info-close {
+  background: none;
+  border: none;
+  font-size: 1rem;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 0;
+  line-height: 1;
+}
+
+.graph-info-close:hover {
+  color: var(--text);
+}
+
+.graph-info-title {
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-bright);
+  margin-bottom: 0.25rem;
+  word-break: break-all;
+}
+
+.graph-info-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}
+
+.graph-info-health {
+  font-weight: 600;
+}
+
+.graph-info-offline {
+  color: var(--error);
+  font-weight: 600;
+}
+
+.graph-info-section {
+  margin-top: 0.375rem;
+}
+
+.graph-info-section-label {
+  font-family: var(--sans);
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 0.125rem;
+}
+
+.graph-info-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.125rem 0;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+}
+
+.graph-info-sid {
+  color: var(--accent);
+  min-width: 2.5rem;
+}
+
+.graph-info-mtype {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

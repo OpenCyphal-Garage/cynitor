@@ -33,6 +33,7 @@ TelemetryManager (pub-sub router)
 ✅ **Offline Node Detection** - Tracks node disappearance with `last_seen` timestamps and stale state handling  
 ✅ **Node History** - Lifecycle event tracking (health changes, mode changes, service calls) with 30-day retention  
 ✅ **Service Call History** - Persistent service call log with response bodies, queryable by service ID  
+✅ **Node Identity Map** - Tracks stable hardware identity (unique_id) across node_id re-allocations, with state migration  
 
 ## Setup
 
@@ -258,6 +259,7 @@ Response:
         "37": {
             "node_id": 37,
             "unique_id": [215, 79, 139, 105, 174, 196, 24, 37, 77, 69, 95, 193, 150, 10, 89, 50],
+            "unique_id_hex": "d74f8b69aec418254d455fc1960a5932",
             "uptime": 8285,
             "has_disappeared": false,
             "has_responded_to_getinfo": true,
@@ -278,6 +280,33 @@ Response:
     }
 }
 ```
+
+**Get identity map (unique_id to node_id mappings):**
+```bash
+curl http://localhost:8080/api/identity-map
+```
+
+Response:
+```json
+{
+    "mappings": {
+        "d74f8b69aec418254d455fc1960a5932": {
+            "current_node_id": 37,
+            "previous_node_ids": [42, 99],
+            "last_seen": 1741949445.123,
+            "name": "org.example.my_node"
+        },
+        "ab12cd34ef56789000000000deadbeef": {
+            "current_node_id": null,
+            "previous_node_ids": [5, 10],
+            "last_seen": 1741940000.0,
+            "name": null
+        }
+    }
+}
+```
+
+Each key is a hardware `unique_id` hex string. `current_node_id` is `null` if the device is offline and its slot was taken by another device. `previous_node_ids` lists all past node_id assignments. `last_seen` is a Unix timestamp of the last identity registration. `name` is the node name from GetInfo (if available). The identity map is persisted to SQLite and restored across server restarts.
 
 **Health check:**
 ```bash
@@ -689,6 +718,7 @@ asyncio.run(main())
 | `scanner_node.py` | UAVCAN network scanner |
 | `telemetry_manager.py` | Event pub-sub router |
 | `node_info.py` | Per-node state (lifecycle, ports, getInfo) |
+| `node_identity_map.py` | Bidirectional unique_id ↔ node_id mapping with migration detection |
 | `websocket_server.py` | WebSocket/REST server |
 | `log_store.py` | In-memory API log buffer + log handler |
 | `event_logger.py` | SQLite persistence |

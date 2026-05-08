@@ -79,6 +79,8 @@ class WebSocketServer:
         self.app.router.add_get('/api/nodes/{node_id}/history', self._get_node_history)
         self.app.router.add_get('/api/nodes/{node_id}/history/subjects', self._get_node_subject_summary)
         self.app.router.add_get('/api/services/{service_id}/history', self._get_service_call_history)
+        self.app.router.add_get('/api/identity-map', self._get_identity_map)
+        self.app.router.add_delete('/api/identity/{unique_id}', self._delete_identity)
         self.app.router.add_post('/api/can/connect', self._can_connect)
         self.app.router.add_post('/api/can/disconnect', self._can_disconnect)
 
@@ -570,6 +572,7 @@ class WebSocketServer:
                     "/api/nodes": "Get info about all discovered nodes",
                     "/api/latest/subject/{subject_id}": "Get latest event for a subject",
                     "/api/latest/node/{node_id}": "Get latest events from a node",
+                    "/api/identity-map": "Get unique_id to node_id mappings",
                     "/api/logs": "Get recent application logs",
                 }
             },
@@ -674,6 +677,22 @@ class WebSocketServer:
                 "port": self.port,
             }
         })
+
+    async def _get_identity_map(self, request: web.Request) -> web.Response:
+        scanner = self.session.scanner
+        if scanner is None:
+            return web.json_response({"mappings": {}})
+        return web.json_response({"mappings": scanner.identity_map.all_mappings()})
+
+    async def _delete_identity(self, request: web.Request) -> web.Response:
+        uid = request.match_info.get('unique_id', '')
+        scanner = self.session.scanner
+        if not scanner:
+            return web.json_response({"error": "Not connected"}, status=503)
+        scanner.identity_map.remove_identity(uid)
+        if self.session.event_logger:
+            await self.session.event_logger.delete_node_data(uid)
+        return web.json_response({"status": "ok"})
 
     async def _get_all_nodes(self, request: web.Request) -> web.Response:
         telemetry = self.session.telemetry

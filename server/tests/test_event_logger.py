@@ -177,3 +177,136 @@ class TestEventLogger:
         assert len(summary) == 1
         assert summary[0]["subject_id"] == 100
         assert summary[0]["total_events"] == 2
+
+    @pytest.mark.asyncio
+    async def test_save_and_load_identity_map(self, logger):
+        records = [
+            {
+                "unique_id": "aaa111",
+                "current_node_id": 5,
+                "last_seen_unix": 1700000000.0,
+                "node_name": "my_node",
+                "previous_node_ids": [3, 5],
+            },
+            {
+                "unique_id": "bbb222",
+                "current_node_id": None,
+                "last_seen_unix": 1700000100.0,
+                "node_name": None,
+                "previous_node_ids": [10],
+            },
+        ]
+        logger._save_identity_map_sync(records)
+        loaded = logger._load_identity_map_sync()
+        assert len(loaded) == 2
+
+        by_uid = {r["unique_id"]: r for r in loaded}
+        assert by_uid["aaa111"]["current_node_id"] == 5
+        assert by_uid["aaa111"]["node_name"] == "my_node"
+        assert by_uid["aaa111"]["previous_node_ids"] == [3, 5]
+        assert by_uid["bbb222"]["current_node_id"] is None
+        assert by_uid["bbb222"]["node_name"] is None
+
+    @pytest.mark.asyncio
+    async def test_save_identity_map_replaces_previous(self, logger):
+        logger._save_identity_map_sync([
+            {"unique_id": "aaa111", "current_node_id": 5, "previous_node_ids": [5]},
+        ])
+        logger._save_identity_map_sync([
+            {"unique_id": "bbb222", "current_node_id": 10, "previous_node_ids": [10]},
+        ])
+        loaded = logger._load_identity_map_sync()
+        assert len(loaded) == 1
+        assert loaded[0]["unique_id"] == "bbb222"
+
+    @pytest.mark.asyncio
+    async def test_load_identity_map_empty(self, logger):
+        loaded = logger._load_identity_map_sync()
+        assert loaded == []
+
+    @pytest.mark.asyncio
+    async def test_save_load_identity_map_async(self, logger):
+        records = [
+            {
+                "unique_id": "ccc333",
+                "current_node_id": 42,
+                "last_seen_unix": 1700000200.0,
+                "node_name": "async_node",
+                "previous_node_ids": [42],
+            },
+        ]
+        await logger.save_identity_map(records)
+        loaded = await logger.load_identity_map()
+        assert len(loaded) == 1
+        assert loaded[0]["unique_id"] == "ccc333"
+        assert loaded[0]["node_name"] == "async_node"
+
+    # ------------------------------------------------------------------
+    # Node data persistence
+    # ------------------------------------------------------------------
+
+    def test_save_and_load_node_data(self, logger):
+        snapshot = {
+            "unique_id": [1, 2, 3],
+            "name": "my.node",
+            "software_version": {"major": 2, "minor": 5},
+            "publishers": [100, 200],
+            "subscribers": [300],
+            "servers": [430],
+            "clients": [],
+            "uptime": 12345,
+            "last_seen": "2026-03-19T10:00:00",
+        }
+        logger._save_node_data_sync("aaa111", snapshot)
+        loaded = logger._load_all_node_data_sync()
+        assert "aaa111" in loaded
+        s = loaded["aaa111"]
+        assert s["name"] == "my.node"
+        assert s["software_version"] == {"major": 2, "minor": 5}
+        assert s["publishers"] == [100, 200]
+        assert s["subscribers"] == [300]
+        assert s["servers"] == [430]
+        assert s["clients"] == []
+        assert s["unique_id"] == [1, 2, 3]
+        assert s["uptime"] == 12345
+        assert s["last_seen"] == "2026-03-19T10:00:00"
+
+    def test_save_node_data_upsert(self, logger):
+        snap1 = {"name": "old.name", "publishers": [100]}
+        logger._save_node_data_sync("uid1", snap1)
+        snap2 = {"name": "new.name", "publishers": [200, 300]}
+        logger._save_node_data_sync("uid1", snap2)
+        loaded = logger._load_all_node_data_sync()
+        assert len(loaded) == 1
+        assert loaded["uid1"]["name"] == "new.name"
+        assert loaded["uid1"]["publishers"] == [200, 300]
+
+    def test_load_node_data_empty(self, logger):
+        loaded = logger._load_all_node_data_sync()
+        assert loaded == {}
+
+    def test_save_node_data_no_version(self, logger):
+        snap = {"name": "bare.node"}
+        logger._save_node_data_sync("uid2", snap)
+        loaded = logger._load_all_node_data_sync()
+        assert loaded["uid2"]["software_version"] is None
+        assert loaded["uid2"]["publishers"] == []
+
+    @pytest.mark.asyncio
+    async def test_save_load_node_data_async(self, logger):
+        snapshot = {
+            "unique_id": [10, 20],
+            "name": "async.node",
+            "software_version": {"major": 1, "minor": 0},
+            "publishers": [500],
+            "subscribers": [],
+            "servers": [384, 385, 430],
+            "clients": [430],
+            "uptime": 99,
+            "last_seen": "2026-05-08T12:00:00",
+        }
+        await logger.save_node_data("uid_async", snapshot)
+        loaded = await logger.load_all_node_data()
+        assert "uid_async" in loaded
+        assert loaded["uid_async"]["name"] == "async.node"
+        assert loaded["uid_async"]["servers"] == [384, 385, 430]
