@@ -6,14 +6,6 @@ let _subjectsTableReady = false;
 let _suppressReattach = false;
 const _serviceTypeCache = new Map();
 
-const _fmt24H = (unix) => {
-  const d = new Date(unix * 1000);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  return `${hh}:${mm}:${ss}`;
-};
-
 const _fmtDate = (unix) => {
   const d = new Date(unix * 1000);
   const dd = String(d.getDate()).padStart(2, '0');
@@ -104,7 +96,7 @@ const buildSubjectsRows = () => {
       publishers: info.publishers.sort((a, b) => a - b).join(', '),
       subscribers: info.subscribers.sort((a, b) => a - b).join(', '),
       rate: event?.rate ?? 0,
-      lastTime: event?.timestamp_unix ? `${_fmt24H(event.timestamp_unix)} ${pubNode}` : '-',
+      lastTime: event?.timestamp_unix ? `${formatPlotTime(event.timestamp_unix)} ${pubNode}` : '-',
       lastDate: event?.timestamp_unix ? _fmtDate(event.timestamp_unix) : '-',
       _fav: state.favouriteSubjectIds.has(sid),
     });
@@ -123,7 +115,7 @@ const buildSubjectsRows = () => {
       publishers: info.servers.sort((a, b) => a - b).join(', '),
       subscribers: info.clients.sort((a, b) => a - b).join(', '),
       rate: 0,
-      lastTime: lastTs ? `${_fmt24H(lastTs)} ${calledNode}` : '-',
+      lastTime: lastTs ? `${formatPlotTime(lastTs)} ${calledNode}` : '-',
       lastDate: lastTs ? _fmtDate(lastTs) : '-',
       _fav: state.favouriteSubjectIds.has(`svc:${sid}`),
     });

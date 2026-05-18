@@ -184,15 +184,27 @@ const formatPlotTime = (unix) => {
   return `${h}:${m}:${s}`;
 };
 
+const classifyHealth = (health) => {
+  if (!health) return null;
+  const v = String(health).toUpperCase();
+  if (v === 'NOMINAL' || v === '0') return 'ok';
+  if (v === 'ADVISORY' || v === '1') return 'ok';
+  if (v === 'CAUTION' || v === '2') return 'warn';
+  if (v === 'WARNING' || v === '3') return 'err';
+  return null;
+};
+
+const HEALTH_CSS_CLASS = { ok: 'status-ok', warn: 'status-warn', err: 'status-err' };
+const HEALTH_CSS_COLOR = { ok: 'var(--ok)', warn: 'var(--warn)', err: 'var(--error)' };
+
+const getHealthCssClass = (health) => HEALTH_CSS_CLASS[classifyHealth(health)] || '';
+const getHealthColor = (health) => HEALTH_CSS_COLOR[classifyHealth(health)] || 'var(--muted)';
+
 const getStatusClass = (attr, value) => {
   const v = String(value).toUpperCase();
   switch (attr) {
     case 'health':
-      if (v === 'NOMINAL' || v === '0') return 'status-ok';
-      if (v === 'ADVISORY' || v === '1') return 'status-ok';
-      if (v === 'CAUTION' || v === '2') return 'status-warn';
-      if (v === 'WARNING' || v === '3') return 'status-err';
-      return '';
+      return getHealthCssClass(value);
     case 'mode':
       if (v === 'OPERATIONAL' || v === '0') return 'status-ok';
       if (v === 'INITIALIZATION' || v === '1') return 'status-init';
@@ -246,12 +258,24 @@ const withSmartJsonHeaders = (options = {}) => {
   };
 };
 
+const REQUEST_TIMEOUT_MS = 15000;
+
 const requestJson = async (path, options = {}) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   let response;
   try {
-    response = await fetch(`${apiBase()}${path}`, withSmartJsonHeaders(options));
+    response = await fetch(`${apiBase()}${path}`, {
+      ...withSmartJsonHeaders(options),
+      signal: controller.signal,
+    });
   } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error(`Request timeout for ${path}`);
+    }
     throw new Error(`Network error for ${path}: ${error?.message || error}`);
+  } finally {
+    clearTimeout(timeout);
   }
 
   const data = await response.json().catch(() => ({}));

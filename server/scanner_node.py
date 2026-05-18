@@ -414,13 +414,13 @@ class ScannerNode:
                                 
                                 # Split type into namespace and type name
                                 try:
-                                    attribyte_type_split = attr_type.split('.')
-                                    if len(attribyte_type_split) < 3:
+                                    attribute_type_split = attr_type.split('.')
+                                    if len(attribute_type_split) < 3:
                                         logging.error(f"Invalid type format for attribute {key}: {attr_type}")
                                         raise ValueError(f"Invalid type format: {attr_type}")
                                     
-                                    attribute_type_name = '_'.join(attribyte_type_split[-3:])
-                                    attribute_type_namespace = '.'.join(attribyte_type_split[:-3])
+                                    attribute_type_name = '_'.join(attribute_type_split[-3:])
+                                    attribute_type_namespace = '.'.join(attribute_type_split[:-3])
                                     logging.debug(f"Parsed type: namespace={attribute_type_namespace}, type_name={attribute_type_name}")
                                 except AttributeError as e:
                                     logging.error(f"Failed to split type {attr_type} for attribute {key}: {str(e)}")

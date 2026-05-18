@@ -61,7 +61,6 @@ class NodeInfo:
     info_response: uavcan.node.GetInfo_1_0.Response
     transfer_from: pycyphal.transport.TransferFrom
     has_published_port_list: bool
-    has_been_registered_by_web_scanner: bool
     port_list: uavcan.node.port.List_1_0
     has_registered_ports: bool
     has_subscribers: bool
@@ -73,7 +72,7 @@ class NodeInfo:
     has_servers: bool
     server_ServiceIDs: List[int]
 
-    OFFLINE_THRESHOLD_S: float = 1.1
+    OFFLINE_THRESHOLD_S: float = 3.0
     _online_time: Optional[NodeTime] = None
     _offline_time: Optional[NodeTime] = None
     publishers_info: Dict[int, PublisherInfo] = field(default_factory=dict)
@@ -87,7 +86,6 @@ class NodeInfo:
         self.has_responded_to_getInfo = False
         self.has_disappeared = False
         self.has_published_port_list = False
-        self.has_been_registered_by_web_scanner = False
         self.has_registered_ports = False
         self.has_subscribers = False
         self.subscriber_SubjectIDs = []

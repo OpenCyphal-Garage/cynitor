@@ -7,6 +7,7 @@
   --surface-2: #f6f8fa;
   --surface-3: #eaeef2;
   --border: #d0d7de;
+  --border-hover: #b6bec8;
   --border-subtle: #e1e4e8;
   --text: #1f2328;
   --text-bright: #0d1117;
@@ -44,6 +45,7 @@
   --surface-2: #2a2f38;
   --surface-3: #323842;
   --border: #3d4450;
+  --border-hover: #4d5566;
   --border-subtle: #2e3440;
   --text: #d0d4dc;
   --text-bright: #eceff4;
@@ -607,7 +609,7 @@ button {
 
 button:hover {
   background: var(--surface-3);
-  border-color: #2a3346;
+  border-color: var(--border-hover, var(--border));
   transform: none;
 }
 

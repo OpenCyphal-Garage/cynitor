@@ -159,7 +159,7 @@ class CANSession:
         self.allocator_manager = None
         self.event_logger = None
         self.bus_load: Optional[BusLoadMonitor] = None
-        self.registered_nodes: list[int] = []
+        self.registered_nodes: set[int] = set()
         self._tasks: list[asyncio.Task] = []
         self._lock = asyncio.Lock()
         self._disconnect_task: Optional[asyncio.Task] = None
@@ -288,12 +288,12 @@ class CANSession:
 # Node registration
 # ---------------------------------------------------------------------------
 
-async def register_nodes(scanner, registered_nodes_list: list[int]) -> None:
+async def register_nodes(scanner, registered_nodes_set: set[int]) -> None:
     """Register newly discovered nodes and clean up disappeared ones."""
     try:
         for node in scanner.nodes.values():
-            if node.has_disappeared and node.node_id in registered_nodes_list:
-                registered_nodes_list.remove(node.node_id)
+            if node.has_disappeared and node.node_id in registered_nodes_set:
+                registered_nodes_set.discard(node.node_id)
                 scanner.cleanup_subscriptions(node.node_id)
                 logger.info(f"Node {node.node_id} was removed from the node registration list")
                 continue
@@ -301,10 +301,10 @@ async def register_nodes(scanner, registered_nodes_list: list[int]) -> None:
             if not node.has_appeared or not node.has_registered_ports:
                 continue
 
-            if node.node_id in registered_nodes_list or node.has_disappeared:
+            if node.node_id in registered_nodes_set or node.has_disappeared:
                 continue
 
-            registered_nodes_list.append(node.node_id)
+            registered_nodes_set.add(node.node_id)
             dsdl_pub_messages, dsdl_srv_messages = await scanner.update_reg_list(node.node_id)
             scanner.node_service_types[node.node_id] = dict(dsdl_srv_messages)
             await scanner.add_subscriptions(node.node_id, dsdl_pub_messages)
@@ -353,7 +353,7 @@ def _check_can_health(iface: str) -> Optional[str]:
     return None
 
 
-async def _register_loop(scanner, registered_nodes: list[int], session: 'CANSession' = None) -> None:
+async def _register_loop(scanner, registered_nodes: set[int], session: 'CANSession' = None) -> None:
     health_check_counter = 0
     try:
         while True:

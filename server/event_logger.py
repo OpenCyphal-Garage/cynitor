@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Optional, Any
@@ -33,8 +34,8 @@ class EventLogger:
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._write_count = 0
-
-        self._init_db()
+        self._write_lock = threading.Lock()
+        self._db_initialized = False
     
     def _init_db(self) -> None:
         """Initialize database schema."""
@@ -117,16 +118,24 @@ class EventLogger:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_nh_timestamp ON node_history(timestamp_unix)")
 
                 conn.execute("PRAGMA journal_mode=WAL")
+            self._db_initialized = True
             logger.info(f"Database initialized at {self.db_path}")
         except Exception as e:
             logger.error(f"Failed to initialize database: {e}", exc_info=True)
     
+    def init_db_sync(self) -> None:
+        """Initialize database synchronously. Use for tests or non-async contexts."""
+        self._init_db()
+
     async def start(self) -> None:
         """Start the event logger background task."""
         if self._running:
             logger.debug("EventLogger already running")
             return
-        
+
+        if not self._db_initialized:
+            await asyncio.to_thread(self._init_db)
+
         self._running = True
         self._task = asyncio.create_task(self._log_loop())
         logger.info("EventLogger started")
@@ -213,9 +222,12 @@ class EventLogger:
                     json.dumps(event.get("attributes", []))
                 ))
 
-            self._write_count += len(events)
-            if self.max_events > 0 and self._write_count >= self.max_events:
-                self._write_count = 0
+            with self._write_lock:
+                self._write_count += len(events)
+                should_prune = self.max_events > 0 and self._write_count >= self.max_events
+                if should_prune:
+                    self._write_count = 0
+            if should_prune:
                 cursor.execute(f"""
                     DELETE FROM events
                     WHERE id NOT IN (
@@ -350,9 +362,10 @@ class EventLogger:
                 "INSERT INTO node_history (node_id, unique_id, timestamp_unix, event_type, detail) VALUES (?, ?, ?, ?, ?)",
                 (node_id, unique_id, time.time(), event_type, json.dumps(detail) if detail else None),
             )
-            # Prune old entries periodically
-            self._write_count += 1
-            if self._write_count % 100 == 0:
+            with self._write_lock:
+                self._write_count += 1
+                should_prune = self._write_count % 100 == 0
+            if should_prune:
                 cutoff = time.time() - self.NODE_HISTORY_RETENTION_DAYS * 86400
                 cursor.execute("DELETE FROM node_history WHERE timestamp_unix < ?", (cutoff,))
 

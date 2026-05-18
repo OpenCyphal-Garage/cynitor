@@ -256,7 +256,8 @@ const connectWs = () => {
       cacheEvent(event);
       scheduleDetailRefresh();
       scheduleTableRefresh();
-    } catch {
+    } catch (err) {
+      console.warn('WS message handling error:', err);
     }
   };
 };
@@ -340,6 +341,7 @@ const selectInterface = async () => {
     saveSettings();
     return data;
   } catch (error) {
+    showToast(`CAN connect failed: ${error.message}`, 'error');
     return null;
   }
 };
