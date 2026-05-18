@@ -246,19 +246,7 @@ const toggleHiddenSubjectsPopover = () => {
   }
 };
 
-const subjectFavPinSorter = (baseSorter) => (a, b, aRow, bRow, column, dir, sorterParams) => {
-  const aFav = aRow.getData()._fav ? 1 : 0;
-  const bFav = bRow.getData()._fav ? 1 : 0;
-  if (aFav !== bFav) {
-    return dir === 'asc' ? bFav - aFav : aFav - bFav;
-  }
-  if (typeof baseSorter === 'function') return baseSorter(a, b, aRow, bRow, column, dir, sorterParams);
-  if (a == null && b == null) return 0;
-  if (a == null) return 1;
-  if (b == null) return -1;
-  if (baseSorter === 'number') return Number(a) - Number(b);
-  return String(a).localeCompare(String(b));
-};
+const subjectFavPinSorter = makeFavPinSorter();
 
 const initSubjectsTable = () => {
   if (subjectsTabulator) return;

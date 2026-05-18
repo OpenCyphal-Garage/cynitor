@@ -531,7 +531,7 @@ class TestServiceCall:
         scanner = MagicMock()
         scanner.service_metadata = {}
         session.scanner = scanner
-        resp = await client.post("/api/services/42/999/call", json={"attributes": {}})
+        resp = await client.post("/api/services/42/400/call", json={"attributes": {}})
         assert resp.status == 404
 
     @pytest.mark.asyncio

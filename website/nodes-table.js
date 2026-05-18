@@ -327,30 +327,7 @@ const initNodesTable = () => {
 
   const settings = readSettings();
 
-  // Wrap sorters to always pin favourites to top
-  const favPinSorter = (baseSorter) => (a, b, aRow, bRow, column, dir, sorterParams) => {
-    const aGhost = aRow.getData()._ghost ? 1 : 0;
-    const bGhost = bRow.getData()._ghost ? 1 : 0;
-    if (aGhost !== bGhost) return aGhost - bGhost;
-    const aFav = aRow.getData()._fav ? 1 : 0;
-    const bFav = bRow.getData()._fav ? 1 : 0;
-    if (aFav !== bFav) {
-      return dir === 'asc' ? bFav - aFav : aFav - bFav;
-    }
-    if (typeof baseSorter === 'function') return baseSorter(a, b, aRow, bRow, column, dir, sorterParams);
-    if (a == null && b == null) return 0;
-    if (a == null) return 1;
-    if (b == null) return -1;
-    if (baseSorter === 'number') {
-      const aNum = Number(a), bNum = Number(b);
-      const aNaN = isNaN(aNum), bNaN = isNaN(bNum);
-      if (aNaN && bNaN) return String(a).localeCompare(String(b));
-      if (aNaN) return 1;
-      if (bNaN) return -1;
-      return aNum - bNum;
-    }
-    return String(a).localeCompare(String(b));
-  };
+  const favPinSorter = makeFavPinSorter({ ghostField: '_ghost' });
 
   const colDef = (title, field, opts = {}) => {
     const def = { title, field, headerFilter: 'input', ...opts };

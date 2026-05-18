@@ -223,7 +223,7 @@ updateSemaphores();
 // ── Frontend server heartbeat ──
 (() => {
   const HEARTBEAT_INTERVAL = 5000;
-  const FAIL_THRESHOLD = 2;
+  const FAIL_THRESHOLD = 4;
   const overlay = el('serverDownOverlay');
   let serverDown = false;
   let consecutiveFailures = 0;

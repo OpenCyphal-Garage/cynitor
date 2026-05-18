@@ -213,6 +213,8 @@ const updatePlotLegend = (plotArea, allSeries, hidden) => {
   }
 };
 
+let _lastPlotFingerprint = '';
+
 const renderPlot = (container) => {
   const plotArea = container.querySelector('.detail-plot-area');
   if (!plotArea) return;
@@ -220,14 +222,24 @@ const renderPlot = (container) => {
   const sid = state.selectedPlotSubject;
   if (sid == null) {
     plotArea.innerHTML = '<div class="plot-empty">Click a subject to plot its data</div>';
+    _lastPlotFingerprint = '';
     return;
   }
 
   const allSeries = collectPlotSeries(sid);
   if (!allSeries.length) {
     plotArea.innerHTML = '<div class="plot-empty">No numeric data to plot</div>';
+    _lastPlotFingerprint = '';
     return;
   }
+
+  const lastPts = allSeries.map((s) => s.data.length ? s.data[s.data.length - 1].t : 0);
+  const fp = `${sid}:${allSeries.length}:${lastPts.join(',')}`;
+  const rect = plotArea.getBoundingClientRect();
+  const sizeKey = `${Math.round(rect.width)}x${Math.round(rect.height)}`;
+  const fullFp = `${fp}:${sizeKey}`;
+  if (fullFp === _lastPlotFingerprint) return;
+  _lastPlotFingerprint = fullFp;
 
   if (!state.hiddenPlotSeries.has(sid)) {
     state.hiddenPlotSeries.set(sid, new Set());
@@ -235,7 +247,6 @@ const renderPlot = (container) => {
   const hidden = state.hiddenPlotSeries.get(sid);
   const visible = allSeries.filter((s) => !hidden.has(s.name));
 
-  const rect = plotArea.getBoundingClientRect();
   const w = rect.width - PLOT_MARGIN.left - PLOT_MARGIN.right;
   const headerEl = plotArea.querySelector('.plot-header');
   const HEADER_H = headerEl ? Math.max(28, Math.ceil(headerEl.getBoundingClientRect().height)) : 28;
@@ -278,6 +289,7 @@ const stopPlotAnim = () => {
     clearTimeout(state.plotTimer);
     state.plotTimer = null;
   }
+  _lastPlotFingerprint = '';
 };
 
 const startPlotAnim = () => {

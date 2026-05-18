@@ -368,6 +368,7 @@ const disconnectAll = ({ persist = true } = {}) => {
   stopInterfacePolling();
   stopThroughputTimer();
   stopPlotAnim();
+  if (typeof GraphView !== 'undefined') GraphView.hide();
   disconnectWs();
   updateDashboardConnectButton();
   updateCanConnectButton();

@@ -214,6 +214,31 @@ const getStatusClass = (attr, value) => {
   }
 };
 
+const makeFavPinSorter = ({ ghostField } = {}) => (baseSorter) =>
+  (a, b, aRow, bRow, column, dir, sorterParams) => {
+    if (ghostField) {
+      const aGhost = aRow.getData()[ghostField] ? 1 : 0;
+      const bGhost = bRow.getData()[ghostField] ? 1 : 0;
+      if (aGhost !== bGhost) return aGhost - bGhost;
+    }
+    const aFav = aRow.getData()._fav ? 1 : 0;
+    const bFav = bRow.getData()._fav ? 1 : 0;
+    if (aFav !== bFav) return dir === 'asc' ? bFav - aFav : aFav - bFav;
+    if (typeof baseSorter === 'function') return baseSorter(a, b, aRow, bRow, column, dir, sorterParams);
+    if (a == null && b == null) return 0;
+    if (a == null) return 1;
+    if (b == null) return -1;
+    if (baseSorter === 'number') {
+      const aNum = Number(a), bNum = Number(b);
+      const aNaN = isNaN(aNum), bNaN = isNaN(bNum);
+      if (aNaN && bNaN) return String(a).localeCompare(String(b));
+      if (aNaN) return 1;
+      if (bNaN) return -1;
+      return aNum - bNum;
+    }
+    return String(a).localeCompare(String(b));
+  };
+
 const getMetricMinWidth = (subjectId, attr, displayStr) => {
   const key = `${subjectId}:${attr}`;
   const prev = metricMaxLen.get(key) || 0;
