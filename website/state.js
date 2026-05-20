@@ -31,6 +31,12 @@ const state = {
   subjectHistory: new Map(),
   hiddenPlotSeries: new Map(),
   plotTimer: null,
+  plotPaused: false,
+  plotPausedAt: null,
+  plotTimeWindow: 60,
+  plotSmooth: 0,
+  plotDisconnectPoints: false,
+  plotStroke: 1.5,
   wsBytesAccum: 0,
   wsThroughput: 0,
   busUtilization: null,
@@ -352,6 +358,10 @@ const _writeSettingsNow = () => {
     headerFilters: getHeaderFilters(),
     selectedNodeId: state.selectedNodeId,
     splitRatio: state.splitRatio,
+    plotTimeWindow: state.plotTimeWindow,
+    plotSmooth: state.plotSmooth,
+    plotDisconnectPoints: state.plotDisconnectPoints,
+    plotStroke: state.plotStroke,
     favouriteNodeIds: [...state.favouriteNodeIds],
     hiddenNodeIds: [...state.hiddenNodeIds],
     nodeAliases: state.nodeAliases,
@@ -462,5 +472,17 @@ const loadSettings = () => {
   }
   if (settings.subjectsTableSort?.key) {
     state.subjectsTableSort = settings.subjectsTableSort;
+  }
+  if (typeof settings.plotTimeWindow === 'number' && settings.plotTimeWindow >= 0) {
+    state.plotTimeWindow = settings.plotTimeWindow;
+  }
+  if (typeof settings.plotSmooth === 'number' && settings.plotSmooth >= 0 && settings.plotSmooth <= 30) {
+    state.plotSmooth = settings.plotSmooth;
+  }
+  if (settings.plotDisconnectPoints === true) {
+    state.plotDisconnectPoints = true;
+  }
+  if (typeof settings.plotStroke === 'number' && settings.plotStroke >= 1 && settings.plotStroke <= 5) {
+    state.plotStroke = settings.plotStroke;
   }
 };

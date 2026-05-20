@@ -3,7 +3,13 @@
 
 const PLOT_MARGIN = { top: 8, right: 12, bottom: 24, left: 48 };
 const PLOT_PANEL_GAP = 8;
-const PLOT_WINDOW_SECS = 60;
+const PLOT_TIME_WINDOWS = [
+  { label: '30s', secs: 30 },
+  { label: '1m', secs: 60 },
+  { label: '5m', secs: 300 },
+  { label: '15m', secs: 900 },
+  { label: 'All', secs: 0 },
+];
 
 const collectPlotSeries = (sid) => {
   const allSeries = [];
@@ -16,18 +22,33 @@ const collectPlotSeries = (sid) => {
 };
 
 const computePlotScales = (visible, w, totalPanelsH) => {
-  let tDataMax = -Infinity;
+  let tDataMin = Infinity, tDataMax = -Infinity;
   for (const s of visible) {
     for (const p of s.data) {
+      if (p.t < tDataMin) tDataMin = p.t;
       if (p.t > tDataMax) tDataMax = p.t;
     }
   }
-  if (!isFinite(tDataMax)) tDataMax = Date.now() / 1000;
-
   const now = Date.now() / 1000;
-  const tRight = now;
+  if (!isFinite(tDataMax)) tDataMax = now;
+  if (!isFinite(tDataMin)) tDataMin = now - 60;
+
+  const isSubjects = state.activeView === 'subjects';
+  const windowSecs = isSubjects ? state.plotTimeWindow : 60;
+  const anchor = isSubjects && state.plotPaused && state.plotPausedAt ? state.plotPausedAt : now;
+
+  let domainLeft, domainRight;
+  if (windowSecs === 0) {
+    const pad = Math.max(2, (tDataMax - tDataMin) * 0.03);
+    domainLeft = tDataMin - pad;
+    domainRight = tDataMax + pad;
+  } else {
+    domainRight = anchor + windowSecs * 0.20;
+    domainLeft = anchor - windowSecs;
+  }
+
   const xScale = d3.scaleLinear()
-    .domain([tRight - PLOT_WINDOW_SECS, tRight + PLOT_WINDOW_SECS * 0.5])
+    .domain([domainLeft, domainRight])
     .range([0, w]);
 
   const numPanels = Math.max(1, visible.length);
@@ -46,6 +67,119 @@ const computePlotScales = (visible, w, totalPanelsH) => {
   return { xScale, yScales, panelH };
 };
 
+const buildPlotControls = () => {
+  const wrap = document.createElement('div');
+  wrap.className = 'plot-controls';
+  if (state.activeView !== 'subjects') return wrap;
+
+  const pauseBtn = document.createElement('button');
+  pauseBtn.className = `plot-pause-btn${state.plotPaused ? ' active' : ''}`;
+  pauseBtn.type = 'button';
+  pauseBtn.setAttribute('aria-label', 'Pause plot');
+  pauseBtn.textContent = state.plotPaused ? '▶' : '⏸';
+  pauseBtn.addEventListener('click', () => {
+    state.plotPaused = !state.plotPaused;
+    state.plotPausedAt = state.plotPaused ? Date.now() / 1000 : null;
+    pauseBtn.textContent = state.plotPaused ? '▶' : '⏸';
+    pauseBtn.classList.toggle('active', state.plotPaused);
+    _lastPlotFingerprint = '';
+    if (!state.plotPaused) startPlotAnim();
+  });
+  wrap.appendChild(pauseBtn);
+
+  for (const tw of PLOT_TIME_WINDOWS) {
+    const btn = document.createElement('button');
+    btn.className = `plot-window-btn${state.plotTimeWindow === tw.secs ? ' active' : ''}`;
+    btn.type = 'button';
+    btn.textContent = tw.label;
+    btn.dataset.secs = tw.secs;
+    btn.addEventListener('click', () => {
+      state.plotTimeWindow = tw.secs;
+      wrap.querySelectorAll('.plot-window-btn').forEach((b) =>
+        b.classList.toggle('active', Number(b.dataset.secs) === tw.secs));
+      _lastPlotFingerprint = '';
+      saveSettings();
+      if (state.plotPaused) renderPlot(el('selectedNodeContent'));
+    });
+    wrap.appendChild(btn);
+  }
+
+  const sep = document.createElement('span');
+  sep.className = 'plot-controls-sep';
+  wrap.appendChild(sep);
+
+  const smoothGroup = document.createElement('div');
+  smoothGroup.className = 'plot-slider-group';
+  const smoothLbl = document.createElement('span');
+  smoothLbl.className = 'plot-slider-label';
+  smoothLbl.textContent = 'Smooth';
+  smoothGroup.appendChild(smoothLbl);
+  const smoothSlider = document.createElement('input');
+  smoothSlider.type = 'range';
+  smoothSlider.className = 'plot-slider';
+  smoothSlider.min = '0';
+  smoothSlider.max = '30';
+  smoothSlider.step = '5';
+  smoothSlider.value = String(state.plotSmooth);
+  smoothSlider.setAttribute('aria-label', 'Interpolation frequency (Hz)');
+  smoothSlider.addEventListener('input', () => {
+    state.plotSmooth = Number(smoothSlider.value);
+    if (state.plotSmooth === 0) flushAllInterpolations();
+    _lastPlotFingerprint = '';
+    saveSettings();
+    if (state.plotPaused) renderPlot(el('selectedNodeContent'));
+  });
+  smoothGroup.appendChild(smoothSlider);
+  const smoothInfo = document.createElement('span');
+  smoothInfo.className = 'plot-info-icon';
+  smoothInfo.textContent = '?';
+  smoothInfo.title = 'Feeds interpolated points between samples at the selected Hz rate — one sample period delay';
+  smoothInfo.setAttribute('aria-label', 'Feeds interpolated points between samples at the selected Hz rate — one sample period delay');
+  smoothGroup.appendChild(smoothInfo);
+  wrap.appendChild(smoothGroup);
+
+  const dotsLabel = document.createElement('label');
+  dotsLabel.className = 'plot-check-label';
+  const dotsCb = document.createElement('input');
+  dotsCb.type = 'checkbox';
+  dotsCb.checked = state.plotDisconnectPoints;
+  dotsCb.setAttribute('aria-label', 'Show disconnected points');
+  dotsCb.addEventListener('change', () => {
+    state.plotDisconnectPoints = dotsCb.checked;
+    _lastPlotFingerprint = '';
+    saveSettings();
+    if (state.plotPaused) renderPlot(el('selectedNodeContent'));
+  });
+  dotsLabel.appendChild(dotsCb);
+  dotsLabel.append(' Points');
+  wrap.appendChild(dotsLabel);
+
+  const strokeGroup = document.createElement('div');
+  strokeGroup.className = 'plot-slider-group';
+  const strokeLbl = document.createElement('span');
+  strokeLbl.className = 'plot-slider-label';
+  strokeLbl.textContent = 'Size';
+  strokeGroup.appendChild(strokeLbl);
+  const strokeSlider = document.createElement('input');
+  strokeSlider.type = 'range';
+  strokeSlider.className = 'plot-slider';
+  strokeSlider.min = '1';
+  strokeSlider.max = '5';
+  strokeSlider.step = '0.5';
+  strokeSlider.value = String(state.plotStroke);
+  strokeSlider.setAttribute('aria-label', 'Line and point size');
+  strokeSlider.addEventListener('input', () => {
+    state.plotStroke = Number(strokeSlider.value);
+    _lastPlotFingerprint = '';
+    saveSettings();
+    if (state.plotPaused) renderPlot(el('selectedNodeContent'));
+  });
+  strokeGroup.appendChild(strokeSlider);
+  wrap.appendChild(strokeGroup);
+
+  return wrap;
+};
+
 const setupPlotSvg = (plotArea, margin) => {
   plotArea.innerHTML = '';
   const header = document.createElement('div');
@@ -53,6 +187,8 @@ const setupPlotSvg = (plotArea, margin) => {
   const titleNode = document.createElement('div');
   titleNode.className = 'plot-title';
   header.appendChild(titleNode);
+  const controls = buildPlotControls();
+  if (controls.childElementCount) header.appendChild(controls);
   const legendNode = document.createElement('div');
   legendNode.className = 'plot-legend';
   legendNode.addEventListener('click', (e) => {
@@ -92,6 +228,7 @@ const setupPlotSvg = (plotArea, margin) => {
   return g.node();
 };
 
+
 const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPanelsH) => {
   const panelsG = g.select('.plot-panels');
   const panels = panelsG.selectAll('.plot-panel').data(visible, (d) => d.name);
@@ -100,9 +237,12 @@ const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPane
     .append('rect');
   panelsEnter.append('g').attr('class', 'panel-y-axis');
   panelsEnter.append('g').attr('class', 'panel-line')
-    .append('path').attr('fill', 'none').attr('stroke-width', 1.5);
+    .append('path').attr('fill', 'none');
+  panelsEnter.append('g').attr('class', 'panel-dots');
   panelsEnter.append('text').attr('class', 'panel-label').attr('x', 4).attr('y', 11);
   panels.exit().remove();
+
+  const isSubjects = state.activeView === 'subjects';
 
   panelsG.selectAll('.plot-panel').each(function (d, i) {
     const yScale = yScales[i];
@@ -112,9 +252,33 @@ const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPane
     panel.select('clipPath rect').attr('width', w).attr('height', panelH);
     panel.select('.panel-y-axis').call(d3.axisLeft(yScale).ticks(3).tickSize(2));
     const lineGen = d3.line().x((p) => xScale(p.t)).y((p) => yScale(p.v)).curve(d3.curveLinear);
+    const showLine = isSubjects ? !state.plotDisconnectPoints : true;
     panel.select('.panel-line')
       .attr('clip-path', `url(#panel-clip-${sid}-${d.name})`)
-      .select('path').attr('stroke', color).attr('d', lineGen(d.data));
+      .select('path')
+      .attr('stroke', color)
+      .attr('stroke-width', isSubjects ? state.plotStroke : 1.5)
+      .attr('d', showLine && d.data.length >= 2 ? lineGen(d.data) : null)
+      .attr('opacity', showLine && d.data.length >= 2 ? 1 : 0);
+
+    const dotsG = panel.select('.panel-dots')
+      .attr('clip-path', `url(#panel-clip-${sid}-${d.name})`);
+    if (isSubjects && state.plotDisconnectPoints) {
+      const visibleData = d.data.filter((p) => xScale(p.t) >= 0 && xScale(p.t) <= w);
+      const maxDots = 600;
+      const step = visibleData.length > maxDots ? Math.ceil(visibleData.length / maxDots) : 1;
+      const sampled = step > 1 ? visibleData.filter((_, j) => j % step === 0) : visibleData;
+      const dots = dotsG.selectAll('circle').data(sampled, (p) => p.t);
+      dots.enter().append('circle').attr('fill', color)
+        .merge(dots)
+        .attr('r', state.plotStroke)
+        .attr('cx', (p) => xScale(p.t))
+        .attr('cy', (p) => yScale(p.v));
+      dots.exit().remove();
+    } else {
+      dotsG.selectAll('circle').remove();
+    }
+
     panel.select('.panel-label').text(d.name).attr('fill', color);
   });
 
@@ -234,7 +398,10 @@ const renderPlot = (container) => {
   }
 
   const lastPts = allSeries.map((s) => s.data.length ? s.data[s.data.length - 1].t : 0);
-  const fp = `${sid}:${allSeries.length}:${lastPts.join(',')}`;
+  const isSubjects = state.activeView === 'subjects';
+  const fp = isSubjects
+    ? `${sid}:${allSeries.length}:${lastPts.join(',')}:v:s:w${state.plotTimeWindow}:p${state.plotPaused ? state.plotPausedAt : 0}:s${state.plotSmooth}:d${state.plotDisconnectPoints}:k${state.plotStroke}`
+    : `${sid}:${allSeries.length}:${lastPts.join(',')}:v:n`;
   const rect = plotArea.getBoundingClientRect();
   const sizeKey = `${Math.round(rect.width)}x${Math.round(rect.height)}`;
   const fullFp = `${fp}:${sizeKey}`;
@@ -256,8 +423,9 @@ const renderPlot = (container) => {
   const { xScale, yScales, panelH } = computePlotScales(visible, w, totalPanelsH);
 
   let gNode = plotArea.querySelector('.plot-root');
-  if (!gNode || !gNode.querySelector('.plot-panels') || !plotArea.querySelector('.plot-header')) {
+  if (!gNode || !gNode.querySelector('.plot-panels') || !plotArea.querySelector('.plot-header') || plotArea.dataset.plotView !== state.activeView) {
     gNode = setupPlotSvg(plotArea, PLOT_MARGIN);
+    plotArea.dataset.plotView = state.activeView;
   }
 
   const svgEl = plotArea.querySelector('svg');
@@ -296,8 +464,13 @@ const startPlotAnim = () => {
   stopPlotAnim();
   if (state.detailPanelCollapsed || state.selectedPlotSubject == null) return;
   const container = el('selectedNodeContent');
+  if (state.activeView === 'subjects' && state.plotPaused) {
+    renderPlot(container);
+    return;
+  }
   const tick = () => {
     if (state.detailPanelCollapsed) { state.plotTimer = null; return; }
+    if (state.activeView === 'subjects' && state.plotPaused) { state.plotTimer = null; return; }
     if (state.activeView !== 'subjects') {
       const node = getSelectedNode();
       if (node?.has_disappeared) { state.plotTimer = null; return; }

@@ -588,6 +588,8 @@ const openSubjectPlot = (rowData) => {
     return;
   }
 
+  state.plotPaused = false;
+  state.plotPausedAt = null;
   state.selectedPlotSubject = sid;
   state._subjectsPlotSubject = sid;
   tabs.classList.add('hidden');
@@ -639,6 +641,7 @@ const _saveDetailPanelState = (viewKey) => {
 
 const _restoreDetailPanelState = (viewKey) => {
   const detailPanel = el('detailPanel');
+  detailPanel.classList.add('no-transition');
   const height = viewKey === 'nodes' ? state._nodesDetailHeight : state._subjectsDetailHeight;
   const collapsed = viewKey === 'nodes' ? state._nodesDetailCollapsed : state._subjectsDetailCollapsed;
 
@@ -653,6 +656,8 @@ const _restoreDetailPanelState = (viewKey) => {
   state.detailPanelHeight = height;
   const collapseBtn = el('detailCollapseBtn');
   if (collapseBtn) collapseBtn.classList.toggle('pointing-up', collapsed);
+  detailPanel.offsetHeight;
+  detailPanel.classList.remove('no-transition');
 };
 
 const switchView = (view) => {

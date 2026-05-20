@@ -361,6 +361,8 @@ const disconnectAll = ({ persist = true } = {}) => {
   state._subjectExpandedServiceId = null;
   state._subjectServiceNodeId = null;
   state.serviceCallHistory.length = 0;
+  state.plotPaused = false;
+  state.plotPausedAt = null;
   REG_CACHE.clear();
   stopStatusPolling();
   stopCanStartupDelay();

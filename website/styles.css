@@ -1094,7 +1094,6 @@ button:focus-visible,
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
   gap: 0.25rem 0.5rem;
   padding: 0.25rem 0.5rem;
   flex-shrink: 0;
@@ -1108,8 +1107,158 @@ button:focus-visible,
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
+}
+
+.plot-controls {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+  margin-left: 1rem;
+}
+
+.plot-pause-btn {
+  font-size: 0.75rem;
+  width: 1.5rem;
+  height: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.12s;
+}
+
+.plot-pause-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.plot-pause-btn.active {
+  background: var(--accent-muted);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.plot-window-btn {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  font-weight: 500;
+  padding: 0.125rem 0.375rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+
+.plot-window-btn:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.plot-window-btn.active {
+  background: var(--accent-muted);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.plot-controls-sep {
+  width: 1px;
+  height: 1rem;
+  background: var(--border);
+  margin: 0 0.125rem;
+}
+
+.plot-check-label {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.plot-check-label input[type="checkbox"] {
+  width: 0.75rem;
+  height: 0.75rem;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.plot-slider-group {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.plot-slider-label {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--muted);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.plot-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 4.5rem;
+  height: 0.1875rem;
+  background: var(--border);
+  border-radius: 0.125rem;
+  outline: none;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+.plot-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+  cursor: pointer;
+}
+
+.plot-slider::-moz-range-thumb {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+  cursor: pointer;
+}
+
+.plot-info-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.875rem;
+  height: 0.875rem;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  font-family: var(--sans);
+  font-size: 0.5625rem;
+  font-weight: 600;
+  font-style: normal;
+  color: var(--muted);
+  cursor: help;
+  flex-shrink: 0;
+  line-height: 1;
 }
 
 .plot-overlay {
@@ -1173,6 +1322,7 @@ button:focus-visible,
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem;
+  margin-left: auto;
   flex: 0 1 auto;
   justify-content: flex-end;
 }
