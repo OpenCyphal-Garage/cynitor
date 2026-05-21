@@ -369,7 +369,7 @@ const _writeSettingsNow = () => {
     plotGrid: state.plotGrid,
     plotColorOverrides: state.plotColorOverrides,
     compareGraphs: state.compareGraphs.map(g => ({
-      id: g.id, name: g.name, series: g.series,
+      id: g.id, name: g.name, series: g.series, thresholds: g.thresholds || [],
       timeWindow: g.timeWindow, smooth: g.smooth, stroke: g.stroke, disconnectPoints: g.disconnectPoints, grid: g.grid,
     })),
     savedCompareConfigs: state.savedCompareConfigs,
@@ -514,6 +514,7 @@ const loadSettings = () => {
         stroke: typeof g.stroke === 'number' ? g.stroke : 1.5,
         disconnectPoints: g.disconnectPoints === true,
         grid: g.grid === true,
+        thresholds: Array.isArray(g.thresholds) ? g.thresholds.filter(t => typeof t.value === 'number') : [],
         _timer: null, _fingerprint: '', _hidden: new Set(),
       }));
   }

@@ -8,6 +8,7 @@ const _newGraph = (preset = null) => ({
   id: _nextGraphId(),
   name: preset?.name || '',
   series: preset?.series ? preset.series.map(s => ({ ...s })) : [],
+  thresholds: preset?.thresholds ? preset.thresholds.map(t => ({ ...t })) : [],
   paused: false,
   pausedAt: null,
   timeWindow: 60,
@@ -52,6 +53,43 @@ const initCompareView = () => {
   });
   toolbar.appendChild(addBtn);
 
+  const pauseAllBtn = document.createElement('button');
+  pauseAllBtn.className = 'compare-add-btn';
+  pauseAllBtn.type = 'button';
+  pauseAllBtn.setAttribute('aria-label', 'Pause/resume all graphs');
+  const _updatePauseAllLabel = () => {
+    const allPaused = state.compareGraphs.length > 0 && state.compareGraphs.every(g => g.paused);
+    pauseAllBtn.textContent = allPaused ? '▶ All' : '⏸ All';
+  };
+  _updatePauseAllLabel();
+  pauseAllBtn.addEventListener('click', () => {
+    const allPaused = state.compareGraphs.length > 0 && state.compareGraphs.every(g => g.paused);
+    const now = Date.now() / 1000;
+    for (const graph of state.compareGraphs) {
+      graph.paused = !allPaused;
+      graph.pausedAt = graph.paused ? now : null;
+      if (!graph.paused) graph._resumeFrom = now;
+    }
+    saveSettings();
+    if (allPaused) startCompareAnim();
+    else stopCompareAnim();
+    _updatePauseAllLabel();
+    for (const graph of state.compareGraphs) {
+      const card = cardsContainer.querySelector(`[data-graph-id="${graph.id}"]`);
+      if (!card) continue;
+      const btn = card.querySelector('.plot-pause-btn');
+      if (btn) {
+        btn.textContent = graph.paused ? '▶' : '⏸';
+        btn.classList.toggle('active', graph.paused);
+      }
+      if (!graph.paused) {
+        const plotArea = card.querySelector('.detail-plot-area');
+        _startGraphAnim(graph, plotArea);
+      }
+    }
+  });
+  toolbar.appendChild(pauseAllBtn);
+
   const savedWrap = document.createElement('div');
   savedWrap.className = 'compare-saved-wrap';
   const savedBtn = document.createElement('button');
@@ -68,6 +106,78 @@ const initCompareView = () => {
   savedMenu.className = 'compare-saved-menu hidden';
   savedWrap.appendChild(savedMenu);
   toolbar.appendChild(savedWrap);
+
+  const exportBtn = document.createElement('button');
+  exportBtn.className = 'compare-add-btn';
+  exportBtn.type = 'button';
+  exportBtn.textContent = 'Export';
+  exportBtn.setAttribute('aria-label', 'Export compare session');
+  exportBtn.addEventListener('click', () => {
+    const data = {
+      graphs: state.compareGraphs.map(g => ({
+        name: g.name, series: g.series, thresholds: g.thresholds || [],
+        timeWindow: g.timeWindow, smooth: g.smooth, stroke: g.stroke,
+        disconnectPoints: g.disconnectPoints, grid: g.grid,
+      })),
+      saved: state.savedCompareConfigs,
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cynitor-compare-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Session exported', 'info', 2000);
+  });
+  toolbar.appendChild(exportBtn);
+
+  const importBtn = document.createElement('button');
+  importBtn.className = 'compare-add-btn';
+  importBtn.type = 'button';
+  importBtn.textContent = 'Import';
+  importBtn.setAttribute('aria-label', 'Import compare session');
+  importBtn.addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.addEventListener('change', () => {
+      const file = input.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const data = JSON.parse(reader.result);
+          if (!Array.isArray(data.graphs)) throw new Error('Invalid format');
+          for (const g of state.compareGraphs) _stopGraphAnim(g);
+          state.compareGraphs.length = 0;
+          for (const g of data.graphs) {
+            const graph = _newGraph(g);
+            graph.timeWindow = g.timeWindow ?? 60;
+            graph.smooth = g.smooth ?? 0;
+            graph.stroke = g.stroke ?? 1.5;
+            graph.disconnectPoints = g.disconnectPoints ?? false;
+            graph.grid = g.grid ?? false;
+            state.compareGraphs.push(graph);
+          }
+          if (Array.isArray(data.saved)) state.savedCompareConfigs = data.saved;
+          saveSettings();
+          cardsContainer.innerHTML = '';
+          for (const graph of state.compareGraphs) {
+            const card = _buildGraphCard(graph);
+            cardsContainer.appendChild(card);
+          }
+          startCompareAnim();
+          showToast('Session imported', 'info', 2000);
+        } catch (err) {
+          showToast(`Import failed: ${err.message}`, 'error', 3000);
+        }
+      };
+      reader.readAsText(file);
+    });
+    input.click();
+  });
+  toolbar.appendChild(importBtn);
 
   document.addEventListener('click', () => savedMenu.classList.add('hidden'));
 
@@ -162,6 +272,30 @@ const _buildGraphCard = (graph) => {
   });
   header.appendChild(saveBtn);
 
+  const cloneBtn = document.createElement('button');
+  cloneBtn.className = 'compare-graph-clone';
+  cloneBtn.type = 'button';
+  cloneBtn.textContent = '⧉';
+  cloneBtn.setAttribute('aria-label', 'Clone graph');
+  cloneBtn.addEventListener('click', () => {
+    const clone = _newGraph({
+      name: graph.name ? `${graph.name} (copy)` : '',
+      series: graph.series,
+    });
+    clone.timeWindow = graph.timeWindow;
+    clone.smooth = graph.smooth;
+    clone.stroke = graph.stroke;
+    clone.disconnectPoints = graph.disconnectPoints;
+    clone.grid = graph.grid;
+    clone.thresholds = graph.thresholds.map(t => ({ ...t }));
+    state.compareGraphs.push(clone);
+    saveSettings();
+    const cloneCard = _buildGraphCard(clone);
+    card.parentElement.appendChild(cloneCard);
+    _startGraphAnim(clone, cloneCard.querySelector('.detail-plot-area'));
+  });
+  header.appendChild(cloneBtn);
+
   const deleteBtn = document.createElement('button');
   deleteBtn.className = 'compare-graph-delete';
   deleteBtn.type = 'button';
@@ -193,6 +327,8 @@ const _buildGraphCard = (graph) => {
 
   _refreshCompareSubjects(panel);
   _updateComparePanelList(panel, graph, onUpdate);
+  const thList = panel.querySelector('.plot-threshold-list');
+  if (thList) _updateThresholdList(thList, graph, onUpdate);
 
   // Zone 3 + 4: Time controls + visual tuning (split from buildPlotControls)
   const opts = {
@@ -228,10 +364,14 @@ const _buildGraphCard = (graph) => {
 const _renderCompareGraphNow = (graph, plotArea) => {
   if (!plotArea) return;
 
+  const seriesKeys = graph.series.map(cmp => `${cmp.subjectId}:${cmp.attribute}`);
+  _processSmooth(graph, seriesKeys);
+
   const compareSeries = [];
-  for (const cmp of graph.series) {
-    const key = `${cmp.subjectId}:${cmp.attribute}`;
-    const buf = state.subjectHistory.get(key);
+  for (let i = 0; i < graph.series.length; i++) {
+    const cmp = graph.series[i];
+    const key = seriesKeys[i];
+    const buf = _getSmoothBuf(graph, key);
     if (buf && buf.length >= 2) {
       compareSeries.push({
         name: `S${cmp.subjectId} · ${cmp.attribute}`,
@@ -244,14 +384,16 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   const visibleSeries = compareSeries.filter(s => !graph._hidden.has(s.name));
 
   if (!compareSeries.length) {
-    plotArea.innerHTML = '<div class="plot-empty">Add subjects and attributes to compare</div>';
+    const msg = graph.series.length ? 'Waiting for data…' : 'Add subjects and attributes to compare';
+    plotArea.innerHTML = `<div class="plot-empty">${msg}</div>`;
     graph._fingerprint = '';
     return;
   }
 
   const lastPts = compareSeries.map(s => s.data.length ? s.data[s.data.length - 1].t : 0);
   const hiddenKey = [...graph._hidden].sort().join(',');
-  const fp = `cg:${graph.id}:${compareSeries.length}:${lastPts.join(',')}:w${graph.timeWindow}:p${graph.paused ? graph.pausedAt : 0}:s${graph.smooth}:d${graph.disconnectPoints}:k${graph.stroke}:g${graph.grid}:h${hiddenKey}`;
+  const thKey = (graph.thresholds || []).map(t => `${t.value}:${t.label || ''}`).join(';');
+  const fp = `cg:${graph.id}:${compareSeries.length}:${lastPts.join(',')}:w${graph.timeWindow}:p${graph.paused ? graph.pausedAt : 0}:s${graph.smooth}:d${graph.disconnectPoints}:k${graph.stroke}:g${graph.grid}:t${thKey}:h${hiddenKey}`;
   const rect = plotArea.getBoundingClientRect();
   const sizeKey = `${Math.round(rect.width)}x${Math.round(rect.height)}`;
   const fullFp = `${fp}:${sizeKey}`;

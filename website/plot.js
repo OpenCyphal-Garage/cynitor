@@ -27,6 +27,10 @@ const _subjectsPlotCfg = {
   set disconnectPoints(v) { state.plotDisconnectPoints = v; },
   get grid() { return state.plotGrid; },
   set grid(v) { state.plotGrid = v; },
+  get _resumeFrom() { return state._plotResumeFrom; },
+  set _resumeFrom(v) { state._plotResumeFrom = v; },
+  get _resumeStart() { return state._plotResumeStart; },
+  set _resumeStart(v) { state._plotResumeStart = v; },
 };
 
 const _colorToHex = (str) => {
@@ -73,11 +77,83 @@ const _openSwatchPicker = (swatch, currentColor, onChange) => {
   input.click();
 };
 
-const collectPlotSeries = (sid) => {
+const _processSmooth = (cfg, keys) => {
+  if (!cfg.smooth || cfg.smooth <= 0) return;
+  if (!cfg._smoothBufs) cfg._smoothBufs = new Map();
+  if (!cfg._rawCursors) cfg._rawCursors = new Map();
+  if (!cfg._activeInterps) cfg._activeInterps = new Map();
+
+  const now = Date.now();
+  for (const key of keys) {
+    const raw = state.subjectHistory.get(key);
+    if (!raw || raw.length < 1) continue;
+
+    if (!cfg._smoothBufs.has(key)) cfg._smoothBufs.set(key, []);
+    const buf = cfg._smoothBufs.get(key);
+    const cursor = cfg._rawCursors.get(key) || 0;
+
+    for (let i = cursor; i < raw.length; i++) {
+      const pt = raw[i];
+      const ip = cfg._activeInterps.get(key);
+      if (ip) {
+        buf.push({ t: ip.to.t, v: ip.to.v });
+        if (buf.length > 7200) buf.shift();
+        cfg._activeInterps.delete(key);
+      }
+      if (buf.length > 0) {
+        const prev = buf[buf.length - 1];
+        const gap = pt.t - prev.t;
+        const steps = Math.max(1, Math.round(cfg.smooth * gap));
+        if (steps <= 1) {
+          buf.push(pt);
+          if (buf.length > 7200) buf.shift();
+        } else {
+          cfg._activeInterps.set(key, {
+            from: prev, to: pt, step: 0, totalSteps: steps,
+            intervalMs: (gap * 1000) / steps, lastPush: now,
+          });
+        }
+      } else {
+        buf.push(pt);
+      }
+    }
+    cfg._rawCursors.set(key, raw.length);
+
+    const ip = cfg._activeInterps.get(key);
+    if (ip) {
+      while (ip.step < ip.totalSteps && now - ip.lastPush >= ip.intervalMs) {
+        ip.step++;
+        ip.lastPush += ip.intervalMs;
+        const frac = ip.step / ip.totalSteps;
+        buf.push({
+          t: ip.from.t + (ip.to.t - ip.from.t) * frac,
+          v: ip.from.v + (ip.to.v - ip.from.v) * frac,
+        });
+        if (buf.length > 7200) buf.shift();
+      }
+      if (ip.step >= ip.totalSteps) cfg._activeInterps.delete(key);
+    }
+  }
+};
+
+const _getSmoothBuf = (cfg, key) => {
+  if (cfg.smooth > 0 && cfg._smoothBufs) {
+    const buf = cfg._smoothBufs.get(key);
+    if (buf && buf.length >= 2) return buf;
+  }
+  return state.subjectHistory.get(key);
+};
+
+const collectPlotSeries = (sid, cfg = null) => {
+  const keys = [];
+  for (const key of state.subjectHistory.keys()) {
+    if (key.startsWith(sid + ':')) keys.push(key);
+  }
+  if (cfg) _processSmooth(cfg, keys);
   const allSeries = [];
-  for (const [key, buf] of state.subjectHistory) {
-    if (!key.startsWith(sid + ':')) continue;
-    if (buf.length < 2) continue;
+  for (const key of keys) {
+    const buf = cfg ? _getSmoothBuf(cfg, key) : state.subjectHistory.get(key);
+    if (!buf || buf.length < 2) continue;
     allSeries.push({ name: key.split(':')[1], data: buf });
   }
   return allSeries;
@@ -95,13 +171,36 @@ const computePlotScales = (visible, w, totalPanelsH, compareSeries = [], cfg = n
   if (!isFinite(tDataMax)) tDataMax = now;
   if (!isFinite(tDataMin)) tDataMin = now - 60;
 
+  const RESUME_DURATION = 2;
+  const _resumeAnchor = (resumeFrom, resumeStart) => {
+    if (!resumeFrom || !resumeStart) return now;
+    const elapsed = now - resumeStart;
+    if (elapsed >= RESUME_DURATION) return now;
+    const t = elapsed / RESUME_DURATION;
+    return resumeFrom + (now - resumeFrom) * t * t;
+  };
+
   let windowSecs, anchor;
   if (cfg) {
     windowSecs = cfg.timeWindow;
-    anchor = cfg.paused && cfg.pausedAt ? cfg.pausedAt : now;
+    if (cfg.paused && cfg.pausedAt) {
+      anchor = cfg.pausedAt;
+    } else if (cfg._resumeFrom) {
+      anchor = _resumeAnchor(cfg._resumeFrom, cfg._resumeStart);
+      if (now - cfg._resumeStart >= RESUME_DURATION) { cfg._resumeFrom = null; cfg._resumeStart = null; }
+    } else {
+      anchor = now;
+    }
   } else if (state.activeView === 'subjects') {
     windowSecs = state.plotTimeWindow;
-    anchor = state.plotPaused && state.plotPausedAt ? state.plotPausedAt : now;
+    if (state.plotPaused && state.plotPausedAt) {
+      anchor = state.plotPausedAt;
+    } else if (state._plotResumeFrom) {
+      anchor = _resumeAnchor(state._plotResumeFrom, state._plotResumeStart);
+      if (now - state._plotResumeStart >= RESUME_DURATION) { state._plotResumeFrom = null; state._plotResumeStart = null; }
+    } else {
+      anchor = now;
+    }
   } else {
     windowSecs = 60;
     anchor = now;
@@ -155,6 +254,10 @@ const buildPlotControls = (opts = {}) => {
   pauseBtn.setAttribute('aria-label', 'Pause plot');
   pauseBtn.textContent = cfg.paused ? '▶' : '⏸';
   pauseBtn.addEventListener('click', () => {
+    if (cfg.paused) {
+      cfg._resumeFrom = cfg.pausedAt;
+      cfg._resumeStart = Date.now() / 1000;
+    }
     cfg.paused = !cfg.paused;
     cfg.pausedAt = cfg.paused ? Date.now() / 1000 : null;
     pauseBtn.textContent = cfg.paused ? '▶' : '⏸';
@@ -201,7 +304,9 @@ const buildPlotControls = (opts = {}) => {
   smoothSlider.setAttribute('aria-label', 'Interpolation frequency (Hz)');
   smoothSlider.addEventListener('input', () => {
     cfg.smooth = Number(smoothSlider.value);
-    if (cfg.smooth === 0) flushAllInterpolations();
+    cfg._smoothBufs = null;
+    cfg._rawCursors = null;
+    cfg._activeInterps = null;
     invalidate();
     saveSettings();
     if (cfg.paused) rerender();
@@ -455,7 +560,124 @@ const buildComparePanel = (graph, onUpdate) => {
   list.className = 'plot-compare-list';
   panel.appendChild(list);
 
+  const thSection = document.createElement('div');
+  thSection.className = 'plot-threshold-section';
+  const thLabel = document.createElement('span');
+  thLabel.className = 'plot-threshold-hdr';
+  thLabel.textContent = 'Thresholds';
+  thSection.appendChild(thLabel);
+  const thPicker = document.createElement('div');
+  thPicker.className = 'plot-threshold-picker';
+  const thInput = document.createElement('input');
+  thInput.type = 'number';
+  thInput.className = 'plot-threshold-input';
+  thInput.placeholder = 'Value';
+  thInput.setAttribute('aria-label', 'Threshold value');
+  const thNameInput = document.createElement('input');
+  thNameInput.type = 'text';
+  thNameInput.className = 'plot-threshold-name-input';
+  thNameInput.placeholder = 'Label';
+  thNameInput.setAttribute('aria-label', 'Threshold label');
+  const thColorInput = document.createElement('input');
+  thColorInput.type = 'color';
+  thColorInput.className = 'plot-threshold-color';
+  thColorInput.value = '#ef4444';
+  thColorInput.setAttribute('aria-label', 'Threshold color');
+
+  const thStyleSel = document.createElement('select');
+  thStyleSel.className = 'plot-threshold-style';
+  thStyleSel.setAttribute('aria-label', 'Threshold line style');
+  for (const s of ['dashed', 'solid', 'dotted']) {
+    const opt = document.createElement('option');
+    opt.value = s;
+    opt.textContent = s;
+    thStyleSel.appendChild(opt);
+  }
+
+  const thAddBtn = document.createElement('button');
+  thAddBtn.className = 'plot-compare-add';
+  thAddBtn.type = 'button';
+  thAddBtn.textContent = 'Add';
+  thAddBtn.setAttribute('aria-label', 'Add threshold line');
+  thAddBtn.addEventListener('click', () => {
+    const val = parseFloat(thInput.value);
+    if (isNaN(val)) return;
+    graph.thresholds.push({
+      value: val,
+      label: thNameInput.value.trim() || String(val),
+      color: thColorInput.value,
+      style: thStyleSel.value,
+    });
+    thInput.value = '';
+    thNameInput.value = '';
+    onUpdate();
+    _updateThresholdList(thList, graph, onUpdate);
+  });
+  thPicker.appendChild(thInput);
+  thPicker.appendChild(thNameInput);
+  thPicker.appendChild(thColorInput);
+  thPicker.appendChild(thStyleSel);
+  thPicker.appendChild(thAddBtn);
+  thSection.appendChild(thPicker);
+  const thList = document.createElement('div');
+  thList.className = 'plot-threshold-list';
+  thSection.appendChild(thList);
+  panel.appendChild(thSection);
+
   return panel;
+};
+
+const _updateThresholdList = (container, graph, onUpdate) => {
+  container.innerHTML = '';
+  for (let i = 0; i < graph.thresholds.length; i++) {
+    const th = graph.thresholds[i];
+    const row = document.createElement('div');
+    row.className = 'plot-threshold-item';
+    const line = document.createElement('span');
+    line.className = 'plot-threshold-line-preview';
+    line.style.borderColor = th.color || '#ef4444';
+    line.style.borderTopStyle = th.style || 'dashed';
+    line.style.cursor = 'pointer';
+    line.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _openSwatchPicker(line, th.color || '#ef4444', (newColor) => {
+        th.color = newColor;
+        line.style.borderColor = newColor;
+        onUpdate();
+      });
+    });
+    row.appendChild(line);
+    const name = document.createElement('span');
+    name.className = 'plot-compare-name';
+    name.textContent = `${th.label || th.value} = ${th.value}`;
+    row.appendChild(name);
+    const styleSel = document.createElement('select');
+    styleSel.className = 'plot-threshold-style-mini';
+    for (const s of ['dashed', 'solid', 'dotted']) {
+      const opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = s;
+      if ((th.style || 'dashed') === s) opt.selected = true;
+      styleSel.appendChild(opt);
+    }
+    styleSel.addEventListener('change', () => {
+      th.style = styleSel.value;
+      line.style.borderTopStyle = styleSel.value;
+      onUpdate();
+    });
+    row.appendChild(styleSel);
+    const rm = document.createElement('button');
+    rm.className = 'plot-compare-remove';
+    rm.textContent = '×';
+    rm.setAttribute('aria-label', `Remove threshold ${th.label || th.value}`);
+    rm.addEventListener('click', () => {
+      graph.thresholds.splice(i, 1);
+      onUpdate();
+      _updateThresholdList(container, graph, onUpdate);
+    });
+    row.appendChild(rm);
+    container.appendChild(row);
+  }
 };
 
 const setupPlotSvg = (plotArea, margin, opts = {}) => {
@@ -565,6 +787,35 @@ const _renderGrid = (container, xScale, yScale, w, h) => {
   }
 };
 
+const THRESHOLD_STYLES = { solid: 'none', dashed: '6 3', dotted: '2 3' };
+
+const _renderThresholds = (container, thresholds, yScale, w) => {
+  let thG = container.select('.plot-thresholds');
+  if (!thresholds || !thresholds.length) {
+    if (!thG.empty()) thG.remove();
+    return;
+  }
+  if (thG.empty()) thG = container.append('g').attr('class', 'plot-thresholds');
+  const lines = thG.selectAll('.plot-threshold').data(thresholds, (d) => `${d.value}:${d.label || ''}:${d.color || ''}:${d.style || ''}`);
+  const enter = lines.enter().append('g').attr('class', 'plot-threshold');
+  enter.append('line');
+  enter.append('text');
+  const merged = enter.merge(lines);
+  merged.select('line')
+    .attr('x1', 0).attr('x2', w)
+    .attr('y1', d => yScale(d.value)).attr('y2', d => yScale(d.value))
+    .attr('stroke', d => d.color || '#ef4444')
+    .attr('stroke-width', 1)
+    .attr('stroke-dasharray', d => THRESHOLD_STYLES[d.style] || THRESHOLD_STYLES.dashed);
+  merged.select('text')
+    .attr('x', w - 4).attr('y', d => yScale(d.value) - 3)
+    .attr('text-anchor', 'end')
+    .attr('class', 'plot-threshold-label')
+    .attr('fill', d => d.color || '#ef4444')
+    .text(d => d.label || String(d.value));
+  lines.exit().remove();
+};
+
 const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPanelsH) => {
   const panelsG = g.select('.plot-panels');
   const panels = panelsG.selectAll('.plot-panel').data(visible, (d) => d.name);
@@ -667,6 +918,8 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
   if (showGrid) _renderGrid(overlay, xScale, yScale, w, panelH);
   else overlay.select('.plot-grid').remove();
 
+  _renderThresholds(overlay, cfg?.thresholds, yScale, w);
+
   const strokeW = cfg ? cfg.stroke : 1.5;
   const showDots = cfg ? cfg.disconnectPoints : false;
   const lineGen = d3.line().x((p) => xScale(p.t)).y((p) => yScale(p.v)).curve(d3.curveLinear);
@@ -721,6 +974,8 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect) => {
   const overlay = g.select('.plot-overlay');
   const crosshair = g.select('.plot-crosshair');
   const bisect = d3.bisector((d) => d.t).left;
+  const card = plotArea.closest('.compare-graph-card');
+  const syncContainer = card ? card.closest('.compare-cards') : null;
 
   const showCrosshairAt = (mx) => {
     if (mx < 0 || mx > w || !visible.length) {
@@ -759,14 +1014,46 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect) => {
     tooltipEl.style.top = `${HEADER_H + 4}px`;
   };
 
+  const showAtTimestamp = (t0) => {
+    if (!visible.length) return;
+    const mx = xScale(t0);
+    showCrosshairAt(mx);
+  };
+
+  const hideCrosshair = () => {
+    crosshair.attr('opacity', 0);
+    tooltipEl.style.display = 'none';
+  };
+
+  if (syncContainer) {
+    if (plotArea._crosshairSync) syncContainer.removeEventListener('crosshair-sync', plotArea._crosshairSync);
+    if (plotArea._crosshairHide) syncContainer.removeEventListener('crosshair-hide', plotArea._crosshairHide);
+    plotArea._crosshairSync = (e) => {
+      if (e.detail.source === plotArea) return;
+      showAtTimestamp(e.detail.t);
+    };
+    plotArea._crosshairHide = (e) => {
+      if (e.detail.source === plotArea) return;
+      hideCrosshair();
+    };
+    syncContainer.addEventListener('crosshair-sync', plotArea._crosshairSync);
+    syncContainer.addEventListener('crosshair-hide', plotArea._crosshairHide);
+  }
+
   overlay
     .on('mousemove', (event) => {
       const [mx] = d3.pointer(event);
       showCrosshairAt(mx);
+      if (syncContainer) {
+        const t0 = xScale.invert(mx);
+        syncContainer.dispatchEvent(new CustomEvent('crosshair-sync', { detail: { t: t0, source: plotArea } }));
+      }
     })
     .on('mouseleave', () => {
-      crosshair.attr('opacity', 0);
-      tooltipEl.style.display = 'none';
+      hideCrosshair();
+      if (syncContainer) {
+        syncContainer.dispatchEvent(new CustomEvent('crosshair-hide', { detail: { source: plotArea } }));
+      }
     });
 
   const svgEl = plotArea.querySelector('svg');
@@ -777,10 +1064,14 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect) => {
       const step = w / 20;
       if (e.key === 'ArrowLeft') { kbPos = Math.max(0, kbPos - step); }
       else if (e.key === 'ArrowRight') { kbPos = Math.min(w, kbPos + step); }
-      else if (e.key === 'Escape') { crosshair.attr('opacity', 0); tooltipEl.style.display = 'none'; return; }
+      else if (e.key === 'Escape') { hideCrosshair(); return; }
       else return;
       e.preventDefault();
       showCrosshairAt(kbPos);
+      if (syncContainer) {
+        const t0 = xScale.invert(kbPos);
+        syncContainer.dispatchEvent(new CustomEvent('crosshair-sync', { detail: { t: t0, source: plotArea } }));
+      }
     });
   }
 };
@@ -822,7 +1113,7 @@ const renderPlot = (container) => {
     return;
   }
 
-  const allSeries = collectPlotSeries(sid);
+  const allSeries = collectPlotSeries(sid, _subjectsPlotCfg);
   allSeries.forEach((s, i) => {
     s.color = state.plotColorOverrides[`${sid}:${s.name}`] || PLOT_COLORS[i % PLOT_COLORS.length];
   });

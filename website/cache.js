@@ -8,65 +8,6 @@ const isNodeDisappeared = (nodeId) => {
   return node?.has_disappeared === true;
 };
 
-// Progressive interpolation: feeds intermediate points between samples
-// so the line tip grows gradually instead of jumping.
-const _interpState = new Map();
-let _interpTimerId = null;
-
-const _interpTick = () => {
-  const now = Date.now();
-  for (const [key, ip] of _interpState) {
-    if (now - ip.lastPush < ip.intervalMs) continue;
-    ip.step++;
-    ip.lastPush = now;
-    const progress = ip.step / ip.totalSteps;
-    const buf = state.subjectHistory.get(key);
-    if (buf) {
-      buf.push({
-        t: ip.from.t + (ip.to.t - ip.from.t) * progress,
-        v: ip.from.v + (ip.to.v - ip.from.v) * progress,
-      });
-      if (buf.length > 3600) buf.shift();
-    }
-    if (ip.step >= ip.totalSteps) _interpState.delete(key);
-  }
-  if (_interpState.size === 0) {
-    clearInterval(_interpTimerId);
-    _interpTimerId = null;
-  }
-};
-
-const _ensureInterpTimer = () => {
-  if (_interpTimerId) return;
-  _interpTimerId = setInterval(_interpTick, 33);
-};
-
-const _flushInterp = (key) => {
-  const ip = _interpState.get(key);
-  if (!ip) return;
-  const buf = state.subjectHistory.get(key);
-  if (buf) {
-    buf.push({ t: ip.to.t, v: ip.to.v });
-    if (buf.length > 3600) buf.shift();
-  }
-  _interpState.delete(key);
-};
-
-const flushAllInterpolations = () => {
-  for (const [key, ip] of _interpState) {
-    const buf = state.subjectHistory.get(key);
-    if (buf) {
-      buf.push({ t: ip.to.t, v: ip.to.v });
-      if (buf.length > 3600) buf.shift();
-    }
-  }
-  _interpState.clear();
-  if (_interpTimerId) {
-    clearInterval(_interpTimerId);
-    _interpTimerId = null;
-  }
-};
-
 const cacheEvent = (event) => {
   if (!event || !Number.isInteger(event.subject_id)) {
     return;
@@ -91,36 +32,8 @@ const cacheEvent = (event) => {
     const key = `${event.subject_id}:${a.attribute}`;
     if (!state.subjectHistory.has(key)) state.subjectHistory.set(key, []);
     const buf = state.subjectHistory.get(key);
-    const newPoint = { t: now, v: a.value };
-
-    let smoothHz = state.plotSmooth;
-    if (state.activeView === 'compare') {
-      smoothHz = 0;
-      for (const g of state.compareGraphs) { if (g.smooth > smoothHz) smoothHz = g.smooth; }
-    }
-    if (smoothHz > 0 && (state.activeView === 'subjects' || state.activeView === 'compare') && buf.length > 0) {
-      _flushInterp(key);
-      const prev = buf[buf.length - 1];
-      const gapSecs = newPoint.t - prev.t;
-      const totalSteps = Math.max(1, Math.round(smoothHz * gapSecs));
-      if (totalSteps <= 1) {
-        buf.push(newPoint);
-        if (buf.length > 3600) buf.shift();
-      } else {
-        _interpState.set(key, {
-          from: prev,
-          to: newPoint,
-          step: 0,
-          totalSteps,
-          intervalMs: (gapSecs * 1000) / totalSteps,
-          lastPush: Date.now(),
-        });
-        _ensureInterpTimer();
-      }
-    } else {
-      buf.push(newPoint);
-      if (buf.length > 3600) buf.shift();
-    }
+    buf.push({ t: now, v: a.value });
+    if (buf.length > 3600) buf.shift();
   }
 };
 
@@ -249,10 +162,4 @@ const pruneNodeCache = () => {
     }
   }
 
-  for (const key of [..._interpState.keys()]) {
-    const sid = Number(key.split(':')[0]);
-    if (!knownSubjectIds.has(sid)) {
-      _interpState.delete(key);
-    }
-  }
 };
