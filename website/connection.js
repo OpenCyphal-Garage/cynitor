@@ -363,6 +363,7 @@ const disconnectAll = ({ persist = true } = {}) => {
   state.serviceCallHistory.length = 0;
   state.plotPaused = false;
   state.plotPausedAt = null;
+  for (const g of state.compareGraphs) { g.paused = false; g.pausedAt = null; }
   REG_CACHE.clear();
   stopStatusPolling();
   stopCanStartupDelay();

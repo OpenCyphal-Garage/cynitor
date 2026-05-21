@@ -69,6 +69,12 @@
           </svg>
           <span>Graph</span>
         </button>
+        <button class="view-graph-btn" data-view="compare" role="tab" aria-selected="false" id="viewTabCompare" aria-controls="compareContainer">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="4 18 8 10 12 14 16 6 20 12"/>
+          </svg>
+          <span>Compare</span>
+        </button>
       </div>
 
       <div class="sidebar-footer">
@@ -101,6 +107,7 @@
       <div id="nodesTable" role="tabpanel" aria-labelledby="viewTabNodes"></div>
       <div id="subjectsTable" class="hidden" role="tabpanel" aria-labelledby="viewTabSubjects"></div>
       <div id="graphContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabGraph"></div>
+      <div id="compareContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabCompare"></div>
       <div class="detail-resize-handle" id="detailResizeHandle">
         <button class="detail-collapse-btn" id="detailCollapseBtn" aria-label="Toggle detail panel">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -151,6 +158,7 @@
   <script src="./plot.js"></script>
   <script src="./detail-panel.js"></script>
   <script src="./nodes-table.js"></script>
+  <script src="./compare-view.js"></script>
   <script src="./subjects-panel.js"></script>
   <script src="./graph-view.js"></script>
   <script src="./connection.js"></script>

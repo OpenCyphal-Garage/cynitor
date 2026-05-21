@@ -3,6 +3,7 @@
 
 const PLOT_MARGIN = { top: 8, right: 12, bottom: 24, left: 48 };
 const PLOT_PANEL_GAP = 8;
+const _safeId = (s) => s.replace(/[^a-zA-Z0-9_-]/g, '_');
 const PLOT_TIME_WINDOWS = [
   { label: '30s', secs: 30 },
   { label: '1m', secs: 60 },
@@ -10,6 +11,51 @@ const PLOT_TIME_WINDOWS = [
   { label: '15m', secs: 900 },
   { label: 'All', secs: 0 },
 ];
+
+const _subjectsPlotCfg = {
+  get paused() { return state.plotPaused; },
+  set paused(v) { state.plotPaused = v; },
+  get pausedAt() { return state.plotPausedAt; },
+  set pausedAt(v) { state.plotPausedAt = v; },
+  get timeWindow() { return state.plotTimeWindow; },
+  set timeWindow(v) { state.plotTimeWindow = v; },
+  get smooth() { return state.plotSmooth; },
+  set smooth(v) { state.plotSmooth = v; },
+  get stroke() { return state.plotStroke; },
+  set stroke(v) { state.plotStroke = v; },
+  get disconnectPoints() { return state.plotDisconnectPoints; },
+  set disconnectPoints(v) { state.plotDisconnectPoints = v; },
+};
+
+const _colorToHex = (str) => {
+  if (!str) return '#58a6ff';
+  if (str.startsWith('#')) {
+    if (str.length === 4) return `#${str[1]}${str[1]}${str[2]}${str[2]}${str[3]}${str[3]}`;
+    return str;
+  }
+  const m = str.match(/\d+/g);
+  if (m && m.length >= 3) return '#' + m.slice(0, 3).map(n => (+n).toString(16).padStart(2, '0')).join('');
+  return '#58a6ff';
+};
+
+const _openSwatchPicker = (swatch, currentColor, onChange) => {
+  const existing = swatch.querySelector('input[type="color"]');
+  if (existing) { existing.remove(); return; }
+  const input = document.createElement('input');
+  input.type = 'color';
+  input.value = _colorToHex(currentColor);
+  input.style.cssText = 'position:absolute;opacity:0;width:0;height:0;pointer-events:none';
+  swatch.style.position = 'relative';
+  swatch.appendChild(input);
+  input.addEventListener('input', () => {
+    swatch.style.background = input.value;
+    onChange(input.value);
+  });
+  const cleanup = () => { if (input.parentNode) input.remove(); };
+  input.addEventListener('change', cleanup);
+  input.addEventListener('blur', cleanup);
+  input.click();
+};
 
 const collectPlotSeries = (sid) => {
   const allSeries = [];
@@ -21,9 +67,9 @@ const collectPlotSeries = (sid) => {
   return allSeries;
 };
 
-const computePlotScales = (visible, w, totalPanelsH) => {
+const computePlotScales = (visible, w, totalPanelsH, compareSeries = [], cfg = null) => {
   let tDataMin = Infinity, tDataMax = -Infinity;
-  for (const s of visible) {
+  for (const s of [...visible, ...compareSeries]) {
     for (const p of s.data) {
       if (p.t < tDataMin) tDataMin = p.t;
       if (p.t > tDataMax) tDataMax = p.t;
@@ -33,9 +79,17 @@ const computePlotScales = (visible, w, totalPanelsH) => {
   if (!isFinite(tDataMax)) tDataMax = now;
   if (!isFinite(tDataMin)) tDataMin = now - 60;
 
-  const isSubjects = state.activeView === 'subjects';
-  const windowSecs = isSubjects ? state.plotTimeWindow : 60;
-  const anchor = isSubjects && state.plotPaused && state.plotPausedAt ? state.plotPausedAt : now;
+  let windowSecs, anchor;
+  if (cfg) {
+    windowSecs = cfg.timeWindow;
+    anchor = cfg.paused && cfg.pausedAt ? cfg.pausedAt : now;
+  } else if (state.activeView === 'subjects') {
+    windowSecs = state.plotTimeWindow;
+    anchor = state.plotPaused && state.plotPausedAt ? state.plotPausedAt : now;
+  } else {
+    windowSecs = 60;
+    anchor = now;
+  }
 
   let domainLeft, domainRight;
   if (windowSecs === 0) {
@@ -51,7 +105,8 @@ const computePlotScales = (visible, w, totalPanelsH) => {
     .domain([domainLeft, domainRight])
     .range([0, w]);
 
-  const numPanels = Math.max(1, visible.length);
+  const extraPanels = compareSeries.length > 0 ? 1 : 0;
+  const numPanels = Math.max(1, visible.length + extraPanels);
   const panelH = (totalPanelsH - (numPanels - 1) * PLOT_PANEL_GAP) / numPanels;
   const yScales = visible.map((s) => {
     let min = Infinity, max = -Infinity;
@@ -67,39 +122,45 @@ const computePlotScales = (visible, w, totalPanelsH) => {
   return { xScale, yScales, panelH };
 };
 
-const buildPlotControls = () => {
+const buildPlotControls = (opts = {}) => {
   const wrap = document.createElement('div');
   wrap.className = 'plot-controls';
-  if (state.activeView !== 'subjects') return wrap;
+
+  const cfg = opts.cfg || (state.activeView === 'subjects' ? _subjectsPlotCfg : null);
+  if (!cfg) return wrap;
+
+  const invalidate = opts.invalidate || _plotInvalidate;
+  const rerender = opts.rerender || (() => renderPlot(el('selectedNodeContent')));
+  const restart = opts.restart || (() => startPlotAnim());
 
   const pauseBtn = document.createElement('button');
-  pauseBtn.className = `plot-pause-btn${state.plotPaused ? ' active' : ''}`;
+  pauseBtn.className = `plot-pause-btn${cfg.paused ? ' active' : ''}`;
   pauseBtn.type = 'button';
   pauseBtn.setAttribute('aria-label', 'Pause plot');
-  pauseBtn.textContent = state.plotPaused ? '▶' : '⏸';
+  pauseBtn.textContent = cfg.paused ? '▶' : '⏸';
   pauseBtn.addEventListener('click', () => {
-    state.plotPaused = !state.plotPaused;
-    state.plotPausedAt = state.plotPaused ? Date.now() / 1000 : null;
-    pauseBtn.textContent = state.plotPaused ? '▶' : '⏸';
-    pauseBtn.classList.toggle('active', state.plotPaused);
-    _lastPlotFingerprint = '';
-    if (!state.plotPaused) startPlotAnim();
+    cfg.paused = !cfg.paused;
+    cfg.pausedAt = cfg.paused ? Date.now() / 1000 : null;
+    pauseBtn.textContent = cfg.paused ? '▶' : '⏸';
+    pauseBtn.classList.toggle('active', cfg.paused);
+    invalidate();
+    if (!cfg.paused) restart();
   });
   wrap.appendChild(pauseBtn);
 
   for (const tw of PLOT_TIME_WINDOWS) {
     const btn = document.createElement('button');
-    btn.className = `plot-window-btn${state.plotTimeWindow === tw.secs ? ' active' : ''}`;
+    btn.className = `plot-window-btn${cfg.timeWindow === tw.secs ? ' active' : ''}`;
     btn.type = 'button';
     btn.textContent = tw.label;
     btn.dataset.secs = tw.secs;
     btn.addEventListener('click', () => {
-      state.plotTimeWindow = tw.secs;
+      cfg.timeWindow = tw.secs;
       wrap.querySelectorAll('.plot-window-btn').forEach((b) =>
         b.classList.toggle('active', Number(b.dataset.secs) === tw.secs));
-      _lastPlotFingerprint = '';
+      invalidate();
       saveSettings();
-      if (state.plotPaused) renderPlot(el('selectedNodeContent'));
+      if (cfg.paused) rerender();
     });
     wrap.appendChild(btn);
   }
@@ -120,14 +181,14 @@ const buildPlotControls = () => {
   smoothSlider.min = '0';
   smoothSlider.max = '30';
   smoothSlider.step = '5';
-  smoothSlider.value = String(state.plotSmooth);
+  smoothSlider.value = String(cfg.smooth);
   smoothSlider.setAttribute('aria-label', 'Interpolation frequency (Hz)');
   smoothSlider.addEventListener('input', () => {
-    state.plotSmooth = Number(smoothSlider.value);
-    if (state.plotSmooth === 0) flushAllInterpolations();
-    _lastPlotFingerprint = '';
+    cfg.smooth = Number(smoothSlider.value);
+    if (cfg.smooth === 0) flushAllInterpolations();
+    invalidate();
     saveSettings();
-    if (state.plotPaused) renderPlot(el('selectedNodeContent'));
+    if (cfg.paused) rerender();
   });
   smoothGroup.appendChild(smoothSlider);
   const smoothInfo = document.createElement('span');
@@ -138,21 +199,9 @@ const buildPlotControls = () => {
   smoothGroup.appendChild(smoothInfo);
   wrap.appendChild(smoothGroup);
 
-  const dotsLabel = document.createElement('label');
-  dotsLabel.className = 'plot-check-label';
-  const dotsCb = document.createElement('input');
-  dotsCb.type = 'checkbox';
-  dotsCb.checked = state.plotDisconnectPoints;
-  dotsCb.setAttribute('aria-label', 'Show disconnected points');
-  dotsCb.addEventListener('change', () => {
-    state.plotDisconnectPoints = dotsCb.checked;
-    _lastPlotFingerprint = '';
-    saveSettings();
-    if (state.plotPaused) renderPlot(el('selectedNodeContent'));
-  });
-  dotsLabel.appendChild(dotsCb);
-  dotsLabel.append(' Points');
-  wrap.appendChild(dotsLabel);
+  const sep2 = document.createElement('span');
+  sep2.className = 'plot-controls-sep';
+  wrap.appendChild(sep2);
 
   const strokeGroup = document.createElement('div');
   strokeGroup.className = 'plot-slider-group';
@@ -166,47 +215,280 @@ const buildPlotControls = () => {
   strokeSlider.min = '1';
   strokeSlider.max = '5';
   strokeSlider.step = '0.5';
-  strokeSlider.value = String(state.plotStroke);
+  strokeSlider.value = String(cfg.stroke);
   strokeSlider.setAttribute('aria-label', 'Line and point size');
   strokeSlider.addEventListener('input', () => {
-    state.plotStroke = Number(strokeSlider.value);
-    _lastPlotFingerprint = '';
+    cfg.stroke = Number(strokeSlider.value);
+    invalidate();
     saveSettings();
-    if (state.plotPaused) renderPlot(el('selectedNodeContent'));
+    if (cfg.paused) rerender();
   });
   strokeGroup.appendChild(strokeSlider);
   wrap.appendChild(strokeGroup);
 
+  const dotsLabel = document.createElement('label');
+  dotsLabel.className = 'plot-check-label';
+  const dotsCb = document.createElement('input');
+  dotsCb.type = 'checkbox';
+  dotsCb.checked = cfg.disconnectPoints;
+  dotsCb.setAttribute('aria-label', 'Show disconnected points');
+  dotsCb.addEventListener('change', () => {
+    cfg.disconnectPoints = dotsCb.checked;
+    invalidate();
+    saveSettings();
+    if (cfg.paused) rerender();
+  });
+  dotsLabel.appendChild(dotsCb);
+  dotsLabel.append(' Points');
+  wrap.appendChild(dotsLabel);
+
   return wrap;
 };
 
-const setupPlotSvg = (plotArea, margin) => {
+const _getCompareSubjects = () => {
+  const subjects = new Map();
+  for (const key of state.subjectHistory.keys()) {
+    const [sidStr, attr] = key.split(':');
+    const sid = Number(sidStr);
+    if (!subjects.has(sid)) subjects.set(sid, []);
+    subjects.get(sid).push(attr);
+  }
+  return subjects;
+};
+
+const _refreshCompareSubjects = (panel) => {
+  const sel = panel.querySelector('.plot-compare-subject');
+  if (!sel) return;
+  const prev = sel.value;
+  const subjects = _getCompareSubjects();
+  sel.innerHTML = '';
+  const def = document.createElement('option');
+  def.value = '';
+  def.textContent = 'Subject…';
+  sel.appendChild(def);
+  for (const [sid] of subjects) {
+    const event = state.latestBySubject.get(sid);
+    const label = event?.message_type ? `S${sid} · ${event.message_type}` : `Subject ${sid}`;
+    const opt = document.createElement('option');
+    opt.value = sid;
+    opt.textContent = label;
+    sel.appendChild(opt);
+  }
+  if (prev && sel.querySelector(`option[value="${prev}"]`)) sel.value = prev;
+};
+
+const _updateComparePanelList = (panel, graph, onUpdate) => {
+  const list = panel.querySelector('.plot-compare-list');
+  if (!list) return;
+  list.innerHTML = '';
+  graph.series.forEach((item, i) => {
+    const div = document.createElement('div');
+    div.className = 'plot-compare-item';
+    const swatchColor = item.color || PLOT_COLORS[i % PLOT_COLORS.length];
+    const swatch = document.createElement('span');
+    swatch.className = 'plot-compare-swatch';
+    swatch.style.background = swatchColor;
+    swatch.style.cursor = 'pointer';
+    swatch.setAttribute('aria-label', 'Click to change color');
+    swatch.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _openSwatchPicker(swatch, item.color || PLOT_COLORS[i % PLOT_COLORS.length], (newColor) => {
+        item.color = newColor;
+        onUpdate();
+      });
+    });
+    div.appendChild(swatch);
+    const name = document.createElement('span');
+    name.className = 'plot-compare-name';
+    name.textContent = `S${item.subjectId} · ${item.attribute}`;
+    div.appendChild(name);
+    const rm = document.createElement('button');
+    rm.className = 'plot-compare-remove';
+    rm.textContent = '×';
+    rm.setAttribute('aria-label', `Remove S${item.subjectId} ${item.attribute}`);
+    rm.addEventListener('click', () => {
+      graph.series.splice(i, 1);
+      onUpdate();
+    });
+    div.appendChild(rm);
+    list.appendChild(div);
+  });
+};
+
+const buildComparePanel = (graph, onUpdate) => {
+  const panel = document.createElement('div');
+  panel.className = 'plot-compare-panel';
+
+  const hdr = document.createElement('div');
+  hdr.className = 'plot-compare-hdr';
+  const title = document.createElement('span');
+  title.textContent = 'Series';
+  hdr.appendChild(title);
+  panel.appendChild(hdr);
+
+  const picker = document.createElement('div');
+  picker.className = 'plot-compare-picker';
+
+  const subjectSel = document.createElement('select');
+  subjectSel.className = 'plot-compare-subject';
+  subjectSel.setAttribute('aria-label', 'Subject to compare');
+  const defSubj = document.createElement('option');
+  defSubj.value = '';
+  defSubj.textContent = 'Subject…';
+  subjectSel.appendChild(defSubj);
+
+  const attrSel = document.createElement('select');
+  attrSel.className = 'plot-compare-attr';
+  attrSel.disabled = true;
+  attrSel.setAttribute('aria-label', 'Attribute to compare');
+  const defAttr = document.createElement('option');
+  defAttr.value = '';
+  defAttr.textContent = 'Attribute…';
+  attrSel.appendChild(defAttr);
+
+  const addBtn = document.createElement('button');
+  addBtn.className = 'plot-compare-add';
+  addBtn.type = 'button';
+  addBtn.textContent = 'Add';
+  addBtn.disabled = true;
+  addBtn.setAttribute('aria-label', 'Add comparison series');
+
+  subjectSel.addEventListener('mousedown', () => _refreshCompareSubjects(panel));
+
+  subjectSel.addEventListener('change', () => {
+    const sid = Number(subjectSel.value);
+    attrSel.innerHTML = '';
+    const def = document.createElement('option');
+    def.value = '';
+    def.textContent = 'Attribute…';
+    attrSel.appendChild(def);
+    if (sid) {
+      const subjects = _getCompareSubjects();
+      for (const a of subjects.get(sid) || []) {
+        const opt = document.createElement('option');
+        opt.value = a;
+        opt.textContent = a;
+        attrSel.appendChild(opt);
+      }
+      attrSel.disabled = false;
+    } else {
+      attrSel.disabled = true;
+    }
+    addBtn.disabled = true;
+  });
+
+  attrSel.addEventListener('mousedown', () => {
+    const sid = Number(subjectSel.value);
+    if (!sid) return;
+    const prev = attrSel.value;
+    attrSel.innerHTML = '';
+    const def = document.createElement('option');
+    def.value = '';
+    def.textContent = 'Attribute…';
+    attrSel.appendChild(def);
+    const subjects = _getCompareSubjects();
+    for (const a of subjects.get(sid) || []) {
+      const opt = document.createElement('option');
+      opt.value = a;
+      opt.textContent = a;
+      attrSel.appendChild(opt);
+    }
+    if (prev && attrSel.querySelector(`option[value="${prev}"]`)) attrSel.value = prev;
+  });
+
+  attrSel.addEventListener('change', () => {
+    addBtn.disabled = !attrSel.value;
+  });
+
+  addBtn.addEventListener('click', () => {
+    const sid = Number(subjectSel.value);
+    const attr = attrSel.value;
+    if (!sid || !attr) return;
+    if (graph.series.some((c) => c.subjectId === sid && c.attribute === attr)) return;
+    graph.series.push({ subjectId: sid, attribute: attr });
+    onUpdate();
+    _refreshCompareSubjects(panel);
+    subjectSel.value = '';
+    attrSel.innerHTML = '<option value="">Attribute…</option>';
+    attrSel.disabled = true;
+    addBtn.disabled = true;
+  });
+
+  picker.appendChild(subjectSel);
+  picker.appendChild(attrSel);
+  picker.appendChild(addBtn);
+  panel.appendChild(picker);
+
+  const list = document.createElement('div');
+  list.className = 'plot-compare-list';
+  panel.appendChild(list);
+
+  return panel;
+};
+
+const setupPlotSvg = (plotArea, margin, opts = {}) => {
   plotArea.innerHTML = '';
   const header = document.createElement('div');
   header.className = 'plot-header';
   const titleNode = document.createElement('div');
   titleNode.className = 'plot-title';
   header.appendChild(titleNode);
-  const controls = buildPlotControls();
+  const controls = buildPlotControls(opts);
   if (controls.childElementCount) header.appendChild(controls);
   const legendNode = document.createElement('div');
   legendNode.className = 'plot-legend';
   legendNode.addEventListener('click', (e) => {
+    const swatch = e.target.closest('.plot-legend-swatch');
+    if (swatch) {
+      const btn = swatch.closest('button[data-series]');
+      if (!btn) return;
+      e.preventDefault();
+      const seriesName = btn.dataset.series;
+      _openSwatchPicker(swatch, swatch.dataset.hex || '#58a6ff', (newColor) => {
+        swatch.dataset.hex = newColor;
+        if (opts.cfg && opts.cfg.series) {
+          const idx = opts.cfg.series.findIndex(s =>
+            `S${s.subjectId} · ${s.attribute}` === seriesName
+          );
+          if (idx >= 0) {
+            opts.cfg.series[idx].color = newColor;
+            const card = plotArea.closest('.compare-graph-card');
+            if (card) {
+              const panelSwatches = card.querySelectorAll('.plot-compare-swatch');
+              if (panelSwatches[idx]) panelSwatches[idx].style.background = newColor;
+            }
+          }
+        } else {
+          const sid = state.selectedPlotSubject;
+          if (sid != null) state.plotColorOverrides[`${sid}:${seriesName}`] = newColor;
+        }
+        if (opts.invalidate) opts.invalidate();
+        else _plotInvalidate();
+        saveSettings();
+        if (opts.restart) opts.restart();
+        else _plotRestart();
+      });
+      return;
+    }
     const btn = e.target.closest('button[data-series]');
     if (!btn) return;
-    const activeSid = state.selectedPlotSubject;
-    if (activeSid == null) return;
-    if (!state.hiddenPlotSeries.has(activeSid)) {
-      state.hiddenPlotSeries.set(activeSid, new Set());
+    let hiddenSet;
+    if (opts.cfg && opts.cfg._hidden) {
+      hiddenSet = opts.cfg._hidden;
+    } else {
+      const hiddenKey = state.selectedPlotSubject;
+      if (hiddenKey == null) return;
+      if (!state.hiddenPlotSeries.has(hiddenKey)) state.hiddenPlotSeries.set(hiddenKey, new Set());
+      hiddenSet = state.hiddenPlotSeries.get(hiddenKey);
     }
-    const activeHidden = state.hiddenPlotSeries.get(activeSid);
     const name = btn.dataset.series;
-    if (activeHidden.has(name)) activeHidden.delete(name);
-    else activeHidden.add(name);
-    const isActive = !activeHidden.has(name);
+    if (hiddenSet.has(name)) hiddenSet.delete(name);
+    else hiddenSet.add(name);
+    const isActive = !hiddenSet.has(name);
     btn.classList.toggle('active', isActive);
     btn.setAttribute('aria-pressed', String(isActive));
-    startPlotAnim();
+    if (opts.restart) opts.restart();
+    else _plotRestart();
   });
   header.appendChild(legendNode);
   plotArea.appendChild(header);
@@ -233,7 +515,7 @@ const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPane
   const panelsG = g.select('.plot-panels');
   const panels = panelsG.selectAll('.plot-panel').data(visible, (d) => d.name);
   const panelsEnter = panels.enter().append('g').attr('class', 'plot-panel');
-  panelsEnter.append('clipPath').attr('id', (d) => `panel-clip-${sid}-${d.name}`)
+  panelsEnter.append('clipPath').attr('id', (d) => `panel-clip-${sid}-${_safeId(d.name)}`)
     .append('rect');
   panelsEnter.append('g').attr('class', 'panel-y-axis');
   panelsEnter.append('g').attr('class', 'panel-line')
@@ -246,7 +528,7 @@ const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPane
 
   panelsG.selectAll('.plot-panel').each(function (d, i) {
     const yScale = yScales[i];
-    const color = PLOT_COLORS[i % PLOT_COLORS.length];
+    const color = d.color || PLOT_COLORS[i % PLOT_COLORS.length];
     const panel = d3.select(this);
     panel.attr('transform', `translate(0, ${i * (panelH + PLOT_PANEL_GAP)})`);
     panel.select('clipPath rect').attr('width', w).attr('height', panelH);
@@ -254,7 +536,7 @@ const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPane
     const lineGen = d3.line().x((p) => xScale(p.t)).y((p) => yScale(p.v)).curve(d3.curveLinear);
     const showLine = isSubjects ? !state.plotDisconnectPoints : true;
     panel.select('.panel-line')
-      .attr('clip-path', `url(#panel-clip-${sid}-${d.name})`)
+      .attr('clip-path', `url(#panel-clip-${sid}-${_safeId(d.name)})`)
       .select('path')
       .attr('stroke', color)
       .attr('stroke-width', isSubjects ? state.plotStroke : 1.5)
@@ -262,7 +544,7 @@ const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPane
       .attr('opacity', showLine && d.data.length >= 2 ? 1 : 0);
 
     const dotsG = panel.select('.panel-dots')
-      .attr('clip-path', `url(#panel-clip-${sid}-${d.name})`);
+      .attr('clip-path', `url(#panel-clip-${sid}-${_safeId(d.name)})`);
     if (isSubjects && state.plotDisconnectPoints) {
       const visibleData = d.data.filter((p) => xScale(p.t) >= 0 && xScale(p.t) <= w);
       const maxDots = 600;
@@ -286,6 +568,92 @@ const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPane
   g.select('.plot-x-axis').attr('transform', `translate(0, ${totalPanelsH})`).call(xAxis);
   g.select('.plot-overlay').attr('width', w).attr('height', totalPanelsH);
   g.select('.plot-crosshair').attr('y1', 0).attr('y2', totalPanelsH);
+};
+
+const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount, cfg = null) => {
+  let overlay = g.select('.plot-compare-overlay');
+
+  if (!compareSeries.length) {
+    if (!overlay.empty()) overlay.selectAll('*').remove();
+    return;
+  }
+
+  if (overlay.empty()) {
+    overlay = g.insert('g', '.plot-x-axis').attr('class', 'plot-compare-overlay');
+  }
+
+  const yOffset = primaryCount * (panelH + PLOT_PANEL_GAP);
+  overlay.attr('transform', `translate(0, ${yOffset})`);
+
+  let vMin = Infinity, vMax = -Infinity;
+  for (const s of compareSeries) {
+    for (const p of s.data) {
+      if (p.v < vMin) vMin = p.v;
+      if (p.v > vMax) vMax = p.v;
+    }
+  }
+  if (vMin === vMax) { vMin -= 1; vMax += 1; }
+  const pad = (vMax - vMin) * 0.05;
+  const yScale = d3.scaleLinear().domain([vMin - pad, vMax + pad]).range([panelH, 0]);
+
+  let clip = overlay.select('clipPath');
+  if (clip.empty()) {
+    clip = overlay.append('clipPath').attr('id', 'compare-panel-clip');
+    clip.append('rect');
+  }
+  clip.select('rect').attr('width', w).attr('height', panelH);
+
+  let yAxisG = overlay.select('.panel-y-axis');
+  if (yAxisG.empty()) yAxisG = overlay.append('g').attr('class', 'panel-y-axis');
+  yAxisG.call(d3.axisLeft(yScale).ticks(3).tickSize(2));
+
+  const strokeW = cfg ? cfg.stroke : 1.5;
+  const showDots = cfg ? cfg.disconnectPoints : false;
+  const lineGen = d3.line().x((p) => xScale(p.t)).y((p) => yScale(p.v)).curve(d3.curveLinear);
+  const showLine = !showDots;
+
+  const lines = overlay.selectAll('.compare-line').data(compareSeries, (d) => d.name);
+  lines.enter().append('path')
+    .attr('class', 'compare-line')
+    .attr('fill', 'none')
+    .attr('clip-path', 'url(#compare-panel-clip)')
+    .merge(lines)
+    .attr('stroke', (d, i) => d.color || PLOT_COLORS[(primaryCount + i) % PLOT_COLORS.length])
+    .attr('stroke-width', strokeW)
+    .attr('d', (d) => showLine && d.data.length >= 2 ? lineGen(d.data) : null)
+    .attr('opacity', (d) => showLine && d.data.length >= 2 ? 1 : 0);
+  lines.exit().remove();
+
+  if (showDots) {
+    compareSeries.forEach((s, i) => {
+      const color = s.color || PLOT_COLORS[(primaryCount + i) % PLOT_COLORS.length];
+      const safeN = _safeId(s.name);
+      let dotsG = overlay.select(`.compare-dots-${safeN}`);
+      if (dotsG.empty()) {
+        dotsG = overlay.append('g').attr('class', `compare-dots-${safeN}`)
+          .attr('clip-path', 'url(#compare-panel-clip)');
+      }
+      const vis = s.data.filter((p) => xScale(p.t) >= 0 && xScale(p.t) <= w);
+      const maxDots = 600;
+      const step = vis.length > maxDots ? Math.ceil(vis.length / maxDots) : 1;
+      const sampled = step > 1 ? vis.filter((_, j) => j % step === 0) : vis;
+      const dots = dotsG.selectAll('circle').data(sampled, (p) => p.t);
+      dots.enter().append('circle').attr('fill', color)
+        .merge(dots)
+        .attr('r', strokeW)
+        .attr('cx', (p) => xScale(p.t))
+        .attr('cy', (p) => yScale(p.v));
+      dots.exit().remove();
+    });
+  } else {
+    overlay.selectAll('[class^="compare-dots"]').remove();
+  }
+
+  let label = overlay.select('.compare-panel-label');
+  if (label.empty()) {
+    label = overlay.append('text').attr('class', 'panel-label compare-panel-label').attr('x', 4).attr('y', 11);
+  }
+  label.text('Compare').attr('fill', 'var(--muted)');
 };
 
 const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect) => {
@@ -317,7 +685,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect) => {
     const formattedT = formatPlotTime(samples[0].sample.t);
     const rows = samples.map((s) => {
       const idx = visible.findIndex((v) => v.name === s.name);
-      const color = PLOT_COLORS[idx % PLOT_COLORS.length];
+      const color = visible[idx]?.color || PLOT_COLORS[idx % PLOT_COLORS.length];
       const v = typeof s.sample.v === 'number' && !Number.isInteger(s.sample.v)
         ? s.sample.v.toFixed(2) : String(s.sample.v);
       return `<div class="plot-tooltip-row"><span class="plot-tooltip-swatch" style="background:${color}"></span><span class="plot-tooltip-name">${escapeHtml(s.name)}</span><span class="plot-tooltip-val">${escapeHtml(v)}</span></div>`;
@@ -360,13 +728,13 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect) => {
 const updatePlotLegend = (plotArea, allSeries, hidden) => {
   const legend = plotArea.querySelector('.plot-legend');
   if (!legend) return;
-  const seriesKey = allSeries.map((s) => s.name).join('|');
+  const seriesKey = allSeries.map((s) => `${s.name}:${s.color || ''}`).join('|');
   if (legend.dataset.seriesKey !== seriesKey) {
     legend.dataset.seriesKey = seriesKey;
     legend.innerHTML = allSeries.map((s, i) => {
       const isActive = !hidden.has(s.name);
-      const color = PLOT_COLORS[i % PLOT_COLORS.length];
-      return `<button type="button" class="plot-legend-item${isActive ? ' active' : ''}" data-series="${escapeHtml(s.name)}" aria-pressed="${isActive}"><span class="plot-legend-swatch" style="background:${color}"></span>${escapeHtml(s.name)}</button>`;
+      const color = s.color || PLOT_COLORS[i % PLOT_COLORS.length];
+      return `<button type="button" class="plot-legend-item${isActive ? ' active' : ''}" data-series="${escapeHtml(s.name)}" aria-pressed="${isActive}"><span class="plot-legend-swatch" style="background:${color}" data-hex="${escapeHtml(color)}"></span>${escapeHtml(s.name)}</button>`;
     }).join('');
   } else {
     for (const btn of legend.querySelectorAll('button[data-series]')) {
@@ -378,6 +746,10 @@ const updatePlotLegend = (plotArea, allSeries, hidden) => {
 };
 
 let _lastPlotFingerprint = '';
+
+const _plotInvalidate = () => { _lastPlotFingerprint = ''; };
+const _plotRerender = () => { renderPlot(el('selectedNodeContent')); };
+const _plotRestart = () => { startPlotAnim(); };
 
 const renderPlot = (container) => {
   const plotArea = container.querySelector('.detail-plot-area');
@@ -391,6 +763,9 @@ const renderPlot = (container) => {
   }
 
   const allSeries = collectPlotSeries(sid);
+  allSeries.forEach((s, i) => {
+    s.color = state.plotColorOverrides[`${sid}:${s.name}`] || PLOT_COLORS[i % PLOT_COLORS.length];
+  });
   if (!allSeries.length) {
     plotArea.innerHTML = '<div class="plot-empty">No numeric data to plot</div>';
     _lastPlotFingerprint = '';

@@ -668,6 +668,7 @@ const switchView = (view) => {
   const nodesEl = el('nodesTable');
   const subjectsEl = el('subjectsTable');
   const graphEl = el('graphContainer');
+  const compareEl = el('compareContainer');
   const detailHandle = el('detailResizeHandle');
   const detailPanel = el('detailPanel');
 
@@ -685,6 +686,8 @@ const switchView = (view) => {
     _suppressReattach = true;
   } else if (prevView === 'nodes') {
     state._nodesPlotSubject = state.selectedPlotSubject;
+  } else if (prevView === 'compare') {
+    stopCompareAnim();
   } else if (prevView === 'graph') {
     GraphView.hide();
   }
@@ -693,6 +696,7 @@ const switchView = (view) => {
   nodesEl.classList.add('hidden');
   subjectsEl.classList.add('hidden');
   graphEl.classList.add('hidden');
+  compareEl.classList.add('hidden');
 
   // Activate target view
   if (view === 'subjects') {
@@ -716,6 +720,12 @@ const switchView = (view) => {
       _highlightSubjectRow(state.selectedPlotSubject);
       startPlotAnim();
     }
+  } else if (view === 'compare') {
+    detailHandle.classList.add('hidden');
+    detailPanel.classList.add('hidden');
+    compareEl.classList.remove('hidden');
+    initCompareView();
+    startCompareAnim();
   } else if (view === 'graph') {
     detailHandle.classList.add('hidden');
     detailPanel.classList.add('hidden');

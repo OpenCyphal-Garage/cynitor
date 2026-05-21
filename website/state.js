@@ -37,6 +37,9 @@ const state = {
   plotSmooth: 0,
   plotDisconnectPoints: false,
   plotStroke: 1.5,
+  plotColorOverrides: {},
+  compareGraphs: [],
+  savedCompareConfigs: [],
   wsBytesAccum: 0,
   wsThroughput: 0,
   busUtilization: null,
@@ -362,6 +365,12 @@ const _writeSettingsNow = () => {
     plotSmooth: state.plotSmooth,
     plotDisconnectPoints: state.plotDisconnectPoints,
     plotStroke: state.plotStroke,
+    plotColorOverrides: state.plotColorOverrides,
+    compareGraphs: state.compareGraphs.map(g => ({
+      id: g.id, name: g.name, series: g.series,
+      timeWindow: g.timeWindow, smooth: g.smooth, stroke: g.stroke, disconnectPoints: g.disconnectPoints,
+    })),
+    savedCompareConfigs: state.savedCompareConfigs,
     favouriteNodeIds: [...state.favouriteNodeIds],
     hiddenNodeIds: [...state.hiddenNodeIds],
     nodeAliases: state.nodeAliases,
@@ -461,7 +470,7 @@ const loadSettings = () => {
   if (settings.nodeAliases && typeof settings.nodeAliases === 'object') {
     state.nodeAliases = settings.nodeAliases;
   }
-  if (settings.activeView === 'subjects' || settings.activeView === 'graph') {
+  if (settings.activeView === 'subjects' || settings.activeView === 'graph' || settings.activeView === 'compare') {
     state.activeView = settings.activeView;
   }
   if (Array.isArray(settings.favouriteSubjectIds)) {
@@ -484,5 +493,43 @@ const loadSettings = () => {
   }
   if (typeof settings.plotStroke === 'number' && settings.plotStroke >= 1 && settings.plotStroke <= 5) {
     state.plotStroke = settings.plotStroke;
+  }
+  if (settings.plotColorOverrides && typeof settings.plotColorOverrides === 'object') {
+    state.plotColorOverrides = settings.plotColorOverrides;
+  }
+  if (Array.isArray(settings.compareGraphs)) {
+    state.compareGraphs = settings.compareGraphs
+      .filter(g => g && typeof g.id === 'string' && Array.isArray(g.series))
+      .map(g => ({
+        id: g.id, name: g.name || '',
+        series: g.series.filter(s => Number.isInteger(s?.subjectId) && typeof s?.attribute === 'string'),
+        paused: false, pausedAt: null,
+        timeWindow: typeof g.timeWindow === 'number' ? g.timeWindow : 60,
+        smooth: typeof g.smooth === 'number' ? g.smooth : 0,
+        stroke: typeof g.stroke === 'number' ? g.stroke : 1.5,
+        disconnectPoints: g.disconnectPoints === true,
+        _timer: null, _fingerprint: '', _hidden: new Set(),
+      }));
+  }
+  if (Array.isArray(settings.savedCompareConfigs)) {
+    state.savedCompareConfigs = settings.savedCompareConfigs
+      .filter(c => c && typeof c.name === 'string' && Array.isArray(c.series))
+      .map(c => ({
+        name: c.name,
+        series: c.series.filter(s => Number.isInteger(s?.subjectId) && typeof s?.attribute === 'string'),
+      }));
+  }
+  if (!state.compareGraphs.length && Array.isArray(settings.plotCompareList)) {
+    const migrated = settings.plotCompareList.filter(
+      item => Number.isInteger(item?.subjectId) && typeof item?.attribute === 'string'
+    );
+    if (migrated.length) {
+      state.compareGraphs.push({
+        id: 'cg_migrated', name: '', series: migrated,
+        paused: false, pausedAt: null,
+        timeWindow: 60, smooth: 0, stroke: 1.5, disconnectPoints: false,
+        _timer: null, _fingerprint: '', _hidden: new Set(),
+      });
+    }
   }
 };

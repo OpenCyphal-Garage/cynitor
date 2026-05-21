@@ -93,11 +93,16 @@ const cacheEvent = (event) => {
     const buf = state.subjectHistory.get(key);
     const newPoint = { t: now, v: a.value };
 
-    if (state.plotSmooth > 0 && state.activeView === 'subjects' && buf.length > 0) {
+    let smoothHz = state.plotSmooth;
+    if (state.activeView === 'compare') {
+      smoothHz = 0;
+      for (const g of state.compareGraphs) { if (g.smooth > smoothHz) smoothHz = g.smooth; }
+    }
+    if (smoothHz > 0 && (state.activeView === 'subjects' || state.activeView === 'compare') && buf.length > 0) {
       _flushInterp(key);
       const prev = buf[buf.length - 1];
       const gapSecs = newPoint.t - prev.t;
-      const totalSteps = Math.max(1, Math.round(state.plotSmooth * gapSecs));
+      const totalSteps = Math.max(1, Math.round(smoothHz * gapSecs));
       if (totalSteps <= 1) {
         buf.push(newPoint);
         if (buf.length > 3600) buf.shift();
