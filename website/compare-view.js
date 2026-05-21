@@ -14,6 +14,7 @@ const _newGraph = (preset = null) => ({
   smooth: 0,
   stroke: 1.5,
   disconnectPoints: false,
+  grid: false,
   _timer: null,
   _fingerprint: '',
   _hidden: new Set(),
@@ -130,6 +131,7 @@ const _buildGraphCard = (graph) => {
   card.className = 'compare-graph-card';
   card.dataset.graphId = graph.id;
 
+  // Zone 1: Header — name, save, delete
   const header = document.createElement('div');
   header.className = 'compare-graph-header';
 
@@ -175,12 +177,8 @@ const _buildGraphCard = (graph) => {
   header.appendChild(deleteBtn);
   card.appendChild(header);
 
-  const layout = document.createElement('div');
-  layout.className = 'compare-layout';
-
   const plotArea = document.createElement('div');
   plotArea.className = 'detail-plot-area';
-  layout.appendChild(plotArea);
 
   const onUpdate = () => {
     graph._fingerprint = '';
@@ -189,12 +187,40 @@ const _buildGraphCard = (graph) => {
     _renderCompareGraphNow(graph, plotArea);
   };
 
+  // Zone 2: Series — what data am I comparing
   const panel = buildComparePanel(graph, onUpdate);
-  layout.appendChild(panel);
-  card.appendChild(layout);
+  card.appendChild(panel);
 
   _refreshCompareSubjects(panel);
   _updateComparePanelList(panel, graph, onUpdate);
+
+  // Zone 3 + 4: Time controls + visual tuning (split from buildPlotControls)
+  const opts = {
+    cfg: graph,
+    invalidate: () => { graph._fingerprint = ''; },
+    rerender: () => _renderCompareGraphNow(graph, plotArea),
+    restart: () => _startGraphAnim(graph, plotArea),
+  };
+  const allControls = buildPlotControls(opts);
+  const timeControls = document.createElement('div');
+  timeControls.className = 'compare-time-controls';
+  const visualControls = document.createElement('div');
+  visualControls.className = 'compare-visual-controls';
+  let pastFirstSep = false;
+  while (allControls.firstChild) {
+    const child = allControls.firstChild;
+    if (!pastFirstSep && child.classList?.contains('plot-controls-sep')) {
+      child.remove();
+      pastFirstSep = true;
+      continue;
+    }
+    (pastFirstSep ? visualControls : timeControls).appendChild(child);
+  }
+  card.appendChild(timeControls);
+  card.appendChild(visualControls);
+
+  // Zone 5: Plot area
+  card.appendChild(plotArea);
 
   return card;
 };
@@ -225,7 +251,7 @@ const _renderCompareGraphNow = (graph, plotArea) => {
 
   const lastPts = compareSeries.map(s => s.data.length ? s.data[s.data.length - 1].t : 0);
   const hiddenKey = [...graph._hidden].sort().join(',');
-  const fp = `cg:${graph.id}:${compareSeries.length}:${lastPts.join(',')}:w${graph.timeWindow}:p${graph.paused ? graph.pausedAt : 0}:s${graph.smooth}:d${graph.disconnectPoints}:k${graph.stroke}:h${hiddenKey}`;
+  const fp = `cg:${graph.id}:${compareSeries.length}:${lastPts.join(',')}:w${graph.timeWindow}:p${graph.paused ? graph.pausedAt : 0}:s${graph.smooth}:d${graph.disconnectPoints}:k${graph.stroke}:g${graph.grid}:h${hiddenKey}`;
   const rect = plotArea.getBoundingClientRect();
   const sizeKey = `${Math.round(rect.width)}x${Math.round(rect.height)}`;
   const fullFp = `${fp}:${sizeKey}`;
@@ -234,6 +260,7 @@ const _renderCompareGraphNow = (graph, plotArea) => {
 
   const opts = {
     cfg: graph,
+    noControls: true,
     invalidate: () => { graph._fingerprint = ''; },
     rerender: () => _renderCompareGraphNow(graph, plotArea),
     restart: () => _startGraphAnim(graph, plotArea),
@@ -255,10 +282,7 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   if (svgEl) svgEl.setAttribute('height', String(rect.height - HEADER_H));
 
   const titleEl = plotArea.querySelector('.plot-title');
-  if (titleEl) {
-    const next = graph.name || `Compare · ${compareSeries.length} series`;
-    if (titleEl.textContent !== next) titleEl.textContent = next;
-  }
+  if (titleEl) titleEl.style.display = 'none';
 
   const { xScale, panelH } = computePlotScales([], w, totalPanelsH, visibleSeries, graph);
 

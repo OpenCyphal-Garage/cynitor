@@ -25,6 +25,8 @@ const _subjectsPlotCfg = {
   set stroke(v) { state.plotStroke = v; },
   get disconnectPoints() { return state.plotDisconnectPoints; },
   set disconnectPoints(v) { state.plotDisconnectPoints = v; },
+  get grid() { return state.plotGrid; },
+  set grid(v) { state.plotGrid = v; },
 };
 
 const _colorToHex = (str) => {
@@ -39,21 +41,35 @@ const _colorToHex = (str) => {
 };
 
 const _openSwatchPicker = (swatch, currentColor, onChange) => {
-  const existing = swatch.querySelector('input[type="color"]');
-  if (existing) { existing.remove(); return; }
+  if (swatch._pickerOpen) return;
+  swatch._pickerOpen = true;
   const input = document.createElement('input');
   input.type = 'color';
   input.value = _colorToHex(currentColor);
   input.style.cssText = 'position:absolute;opacity:0;width:0;height:0;pointer-events:none';
   swatch.style.position = 'relative';
   swatch.appendChild(input);
+  let committed = false;
   input.addEventListener('input', () => {
     swatch.style.background = input.value;
-    onChange(input.value);
   });
-  const cleanup = () => { if (input.parentNode) input.remove(); };
-  input.addEventListener('change', cleanup);
-  input.addEventListener('blur', cleanup);
+  input.addEventListener('change', () => {
+    committed = true;
+    const val = input.value;
+    if (input.parentNode) input.remove();
+    swatch._pickerOpen = false;
+    onChange(val);
+  });
+  input.addEventListener('blur', () => {
+    if (committed) return;
+    setTimeout(() => {
+      if (!committed && input.parentNode) {
+        input.remove();
+        swatch._pickerOpen = false;
+        swatch.style.background = currentColor;
+      }
+    }, 300);
+  });
   input.click();
 };
 
@@ -241,6 +257,22 @@ const buildPlotControls = (opts = {}) => {
   dotsLabel.appendChild(dotsCb);
   dotsLabel.append(' Points');
   wrap.appendChild(dotsLabel);
+
+  const gridLabel = document.createElement('label');
+  gridLabel.className = 'plot-check-label';
+  const gridCb = document.createElement('input');
+  gridCb.type = 'checkbox';
+  gridCb.checked = cfg.grid;
+  gridCb.setAttribute('aria-label', 'Show grid lines');
+  gridCb.addEventListener('change', () => {
+    cfg.grid = gridCb.checked;
+    invalidate();
+    saveSettings();
+    if (cfg.paused) rerender();
+  });
+  gridLabel.appendChild(gridCb);
+  gridLabel.append(' Grid');
+  wrap.appendChild(gridLabel);
 
   return wrap;
 };
@@ -433,8 +465,10 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
   const titleNode = document.createElement('div');
   titleNode.className = 'plot-title';
   header.appendChild(titleNode);
-  const controls = buildPlotControls(opts);
-  if (controls.childElementCount) header.appendChild(controls);
+  if (!opts.noControls) {
+    const controls = buildPlotControls(opts);
+    if (controls.childElementCount) header.appendChild(controls);
+  }
   const legendNode = document.createElement('div');
   legendNode.className = 'plot-legend';
   legendNode.addEventListener('click', (e) => {
@@ -511,6 +545,26 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
 };
 
 
+const _renderGrid = (container, xScale, yScale, w, h) => {
+  let gridG = container.select('.plot-grid');
+  if (gridG.empty()) gridG = container.insert('g', ':first-child').attr('class', 'plot-grid');
+  gridG.selectAll('*').remove();
+  const yTicks = yScale.ticks(3);
+  for (const t of yTicks) {
+    gridG.append('line')
+      .attr('x1', 0).attr('x2', w)
+      .attr('y1', yScale(t)).attr('y2', yScale(t))
+      .attr('class', 'plot-grid-line');
+  }
+  const xTicks = xScale.ticks(5);
+  for (const t of xTicks) {
+    gridG.append('line')
+      .attr('x1', xScale(t)).attr('x2', xScale(t))
+      .attr('y1', 0).attr('y2', h)
+      .attr('class', 'plot-grid-line');
+  }
+};
+
 const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPanelsH) => {
   const panelsG = g.select('.plot-panels');
   const panels = panelsG.selectAll('.plot-panel').data(visible, (d) => d.name);
@@ -533,6 +587,8 @@ const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPane
     panel.attr('transform', `translate(0, ${i * (panelH + PLOT_PANEL_GAP)})`);
     panel.select('clipPath rect').attr('width', w).attr('height', panelH);
     panel.select('.panel-y-axis').call(d3.axisLeft(yScale).ticks(3).tickSize(2));
+    if (state.plotGrid) _renderGrid(panel, xScale, yScale, w, panelH);
+    else panel.select('.plot-grid').remove();
     const lineGen = d3.line().x((p) => xScale(p.t)).y((p) => yScale(p.v)).curve(d3.curveLinear);
     const showLine = isSubjects ? !state.plotDisconnectPoints : true;
     panel.select('.panel-line')
@@ -606,6 +662,10 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
   let yAxisG = overlay.select('.panel-y-axis');
   if (yAxisG.empty()) yAxisG = overlay.append('g').attr('class', 'panel-y-axis');
   yAxisG.call(d3.axisLeft(yScale).ticks(3).tickSize(2));
+
+  const showGrid = cfg ? cfg.grid : false;
+  if (showGrid) _renderGrid(overlay, xScale, yScale, w, panelH);
+  else overlay.select('.plot-grid').remove();
 
   const strokeW = cfg ? cfg.stroke : 1.5;
   const showDots = cfg ? cfg.disconnectPoints : false;
@@ -775,7 +835,7 @@ const renderPlot = (container) => {
   const lastPts = allSeries.map((s) => s.data.length ? s.data[s.data.length - 1].t : 0);
   const isSubjects = state.activeView === 'subjects';
   const fp = isSubjects
-    ? `${sid}:${allSeries.length}:${lastPts.join(',')}:v:s:w${state.plotTimeWindow}:p${state.plotPaused ? state.plotPausedAt : 0}:s${state.plotSmooth}:d${state.plotDisconnectPoints}:k${state.plotStroke}`
+    ? `${sid}:${allSeries.length}:${lastPts.join(',')}:v:s:w${state.plotTimeWindow}:p${state.plotPaused ? state.plotPausedAt : 0}:s${state.plotSmooth}:d${state.plotDisconnectPoints}:k${state.plotStroke}:g${state.plotGrid}`
     : `${sid}:${allSeries.length}:${lastPts.join(',')}:v:n`;
   const rect = plotArea.getBoundingClientRect();
   const sizeKey = `${Math.round(rect.width)}x${Math.round(rect.height)}`;

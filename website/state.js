@@ -37,6 +37,7 @@ const state = {
   plotSmooth: 0,
   plotDisconnectPoints: false,
   plotStroke: 1.5,
+  plotGrid: false,
   plotColorOverrides: {},
   compareGraphs: [],
   savedCompareConfigs: [],
@@ -365,10 +366,11 @@ const _writeSettingsNow = () => {
     plotSmooth: state.plotSmooth,
     plotDisconnectPoints: state.plotDisconnectPoints,
     plotStroke: state.plotStroke,
+    plotGrid: state.plotGrid,
     plotColorOverrides: state.plotColorOverrides,
     compareGraphs: state.compareGraphs.map(g => ({
       id: g.id, name: g.name, series: g.series,
-      timeWindow: g.timeWindow, smooth: g.smooth, stroke: g.stroke, disconnectPoints: g.disconnectPoints,
+      timeWindow: g.timeWindow, smooth: g.smooth, stroke: g.stroke, disconnectPoints: g.disconnectPoints, grid: g.grid,
     })),
     savedCompareConfigs: state.savedCompareConfigs,
     favouriteNodeIds: [...state.favouriteNodeIds],
@@ -494,6 +496,9 @@ const loadSettings = () => {
   if (typeof settings.plotStroke === 'number' && settings.plotStroke >= 1 && settings.plotStroke <= 5) {
     state.plotStroke = settings.plotStroke;
   }
+  if (settings.plotGrid === true) {
+    state.plotGrid = true;
+  }
   if (settings.plotColorOverrides && typeof settings.plotColorOverrides === 'object') {
     state.plotColorOverrides = settings.plotColorOverrides;
   }
@@ -508,6 +513,7 @@ const loadSettings = () => {
         smooth: typeof g.smooth === 'number' ? g.smooth : 0,
         stroke: typeof g.stroke === 'number' ? g.stroke : 1.5,
         disconnectPoints: g.disconnectPoints === true,
+        grid: g.grid === true,
         _timer: null, _fingerprint: '', _hidden: new Set(),
       }));
   }
