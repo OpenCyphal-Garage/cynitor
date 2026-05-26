@@ -293,7 +293,7 @@ const buildTableData = () => {
       _ghost: isGhost,
       name: alias || node.name || '-',
       state: nodeState,
-      health: isGhost ? '-' : (getNodeHealthValue(node.node_id) || '-'),
+      health: (isGhost || node.has_disappeared) ? '-' : (getNodeHealthValue(node.node_id) || '-'),
       rate: isGhost ? 0 : getNodeRate(node.node_id),
       uptime: isGhost ? formatLastSeen(node.last_seen) : (node.has_disappeared ? formatLastSeen(node.last_seen) : formatUptime(node.uptime)),
       publishers: portsToString(node.publishers),

@@ -3,6 +3,7 @@
 
 const PLOT_MARGIN = { top: 8, right: 12, bottom: 24, left: 48 };
 const PLOT_PANEL_GAP = 8;
+const PLOT_GAP_THRESHOLD = 3;
 const _safeId = (s) => s.replace(/[^a-zA-Z0-9_-]/g, '_');
 const _safeColor = (c) => /^#[0-9a-fA-F]{3,8}$/.test(c) ? c : '#888';
 const PLOT_TIME_WINDOWS = [
@@ -145,6 +146,12 @@ const _getSmoothBuf = (cfg, key) => {
   return state.subjectHistory.get(key);
 };
 
+const _tagGaps = (data) => {
+  for (let i = 0; i < data.length; i++) {
+    data[i]._gap = i > 0 && data[i].t - data[i - 1].t > PLOT_GAP_THRESHOLD;
+  }
+};
+
 const collectPlotSeries = (sid, cfg = null) => {
   const keys = [];
   for (const key of state.subjectHistory.keys()) {
@@ -155,6 +162,7 @@ const collectPlotSeries = (sid, cfg = null) => {
   for (const key of keys) {
     const buf = cfg ? _getSmoothBuf(cfg, key) : state.subjectHistory.get(key);
     if (!buf || buf.length < 2) continue;
+    _tagGaps(buf);
     allSeries.push({ name: key.split(':')[1], data: buf });
   }
   return allSeries;
@@ -652,21 +660,6 @@ const _updateThresholdList = (container, graph, onUpdate) => {
     name.className = 'plot-compare-name';
     name.textContent = `${th.label || th.value} = ${th.value}`;
     row.appendChild(name);
-    const styleSel = document.createElement('select');
-    styleSel.className = 'plot-threshold-style-mini';
-    for (const s of ['dashed', 'solid', 'dotted']) {
-      const opt = document.createElement('option');
-      opt.value = s;
-      opt.textContent = s;
-      if ((th.style || 'dashed') === s) opt.selected = true;
-      styleSel.appendChild(opt);
-    }
-    styleSel.addEventListener('change', () => {
-      th.style = styleSel.value;
-      line.style.borderTopStyle = styleSel.value;
-      onUpdate();
-    });
-    row.appendChild(styleSel);
     const rm = document.createElement('button');
     rm.className = 'plot-compare-remove';
     rm.textContent = '×';
@@ -841,7 +834,7 @@ const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPane
     panel.select('.panel-y-axis').call(d3.axisLeft(yScale).ticks(3).tickSize(2));
     if (state.plotGrid) _renderGrid(panel, xScale, yScale, w, panelH);
     else panel.select('.plot-grid').remove();
-    const lineGen = d3.line().x((p) => xScale(p.t)).y((p) => yScale(p.v)).curve(d3.curveLinear);
+    const lineGen = d3.line().defined((p) => !p._gap).x((p) => xScale(p.t)).y((p) => yScale(p.v)).curve(d3.curveLinear);
     const showLine = isSubjects ? !state.plotDisconnectPoints : true;
     panel.select('.panel-line')
       .attr('clip-path', `url(#panel-clip-${sid}-${_safeId(d.name)})`)
@@ -923,7 +916,7 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
 
   const strokeW = cfg ? cfg.stroke : 1.5;
   const showDots = cfg ? cfg.disconnectPoints : false;
-  const lineGen = d3.line().x((p) => xScale(p.t)).y((p) => yScale(p.v)).curve(d3.curveLinear);
+  const lineGen = d3.line().defined((p) => !p._gap).x((p) => xScale(p.t)).y((p) => yScale(p.v)).curve(d3.curveLinear);
   const showLine = !showDots;
 
   const lines = overlay.selectAll('.compare-line').data(compareSeries, (d) => d.name);
@@ -1118,7 +1111,8 @@ const renderPlot = (container) => {
     return;
   }
 
-  const allSeries = collectPlotSeries(sid, _subjectsPlotCfg);
+  const isSubjects = state.activeView === 'subjects';
+  const allSeries = collectPlotSeries(sid, isSubjects ? _subjectsPlotCfg : null);
   allSeries.forEach((s, i) => {
     s.color = state.plotColorOverrides[`${sid}:${s.name}`] || PLOT_COLORS[i % PLOT_COLORS.length];
   });
@@ -1129,7 +1123,6 @@ const renderPlot = (container) => {
   }
 
   const lastPts = allSeries.map((s) => s.data.length ? s.data[s.data.length - 1].t : 0);
-  const isSubjects = state.activeView === 'subjects';
   const fp = isSubjects
     ? `${sid}:${allSeries.length}:${lastPts.join(',')}:v:s:w${state.plotTimeWindow}:p${state.plotPaused ? state.plotPausedAt : 0}:s${state.plotSmooth}:d${state.plotDisconnectPoints}:k${state.plotStroke}:g${state.plotGrid}`
     : `${sid}:${allSeries.length}:${lastPts.join(',')}:v:n`;

@@ -61,12 +61,12 @@ const initCompareView = () => {
   toolbar.appendChild(addBtn);
 
   const pauseAllBtn = document.createElement('button');
-  pauseAllBtn.className = 'compare-add-btn';
+  pauseAllBtn.className = 'compare-add-btn compare-pause-all';
   pauseAllBtn.type = 'button';
   pauseAllBtn.setAttribute('aria-label', 'Pause/resume all graphs');
   const _updatePauseAllLabel = () => {
     const allPaused = state.compareGraphs.length > 0 && state.compareGraphs.every(g => g.paused);
-    pauseAllBtn.textContent = allPaused ? '▶ All' : '⏸ All';
+    pauseAllBtn.textContent = allPaused ? 'Resume All' : 'Pause All';
   };
   _updatePauseAllLabel();
   pauseAllBtn.addEventListener('click', () => {
@@ -383,6 +383,7 @@ const _renderCompareGraphNow = (graph, plotArea) => {
     const key = seriesKeys[i];
     const buf = _getSmoothBuf(graph, key);
     if (buf && buf.length >= 2) {
+      _tagGaps(buf);
       compareSeries.push({
         name: `S${cmp.subjectId} · ${cmp.attribute}`,
         data: buf,

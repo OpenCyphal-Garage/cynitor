@@ -1419,7 +1419,9 @@ button:focus-visible,
   font-family: var(--mono);
   font-size: 0.6875rem;
   font-weight: 600;
-  padding: 0.25rem 0.5rem;
+  height: 1.625rem;
+  line-height: 1;
+  padding: 0 0.5rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
@@ -1432,6 +1434,11 @@ button:focus-visible,
   background: var(--accent-muted);
 }
 
+.compare-pause-all {
+  min-width: 5.5rem;
+  text-align: center;
+}
+
 .compare-saved-wrap {
   position: relative;
 }
@@ -1439,7 +1446,9 @@ button:focus-visible,
 .compare-saved-btn {
   font-family: var(--mono);
   font-size: 0.6875rem;
-  padding: 0.25rem 0.5rem;
+  height: 1.625rem;
+  line-height: 1;
+  padding: 0 0.5rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
@@ -1810,11 +1819,11 @@ button:focus-visible,
   border-radius: var(--radius);
   background: var(--surface);
   color: var(--text);
-  width: 4rem;
+  width: 8rem;
 }
 
 .plot-threshold-name-input {
-  width: 5rem;
+  width: 10rem;
 }
 
 .plot-threshold-list {
