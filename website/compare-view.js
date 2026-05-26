@@ -2,6 +2,12 @@
 // controls and animation. Uses plot.js utilities for rendering.
 
 let _compareGraphIdCounter = 0;
+const _seedGraphIdCounter = () => {
+  for (const g of state.compareGraphs) {
+    const m = g.id && g.id.match(/^cg_(\d+)$/);
+    if (m) _compareGraphIdCounter = Math.max(_compareGraphIdCounter, Number(m[1]));
+  }
+};
 const _nextGraphId = () => `cg_${++_compareGraphIdCounter}`;
 
 const _newGraph = (preset = null) => ({
@@ -22,6 +28,7 @@ const _newGraph = (preset = null) => ({
 });
 
 const initCompareView = () => {
+  _seedGraphIdCounter();
   const container = el('compareContainer');
   if (container.querySelector('.compare-toolbar')) {
     for (const graph of state.compareGraphs) {
@@ -49,7 +56,7 @@ const initCompareView = () => {
     saveSettings();
     const card = _buildGraphCard(graph);
     cardsContainer.appendChild(card);
-    _startGraphAnim(graph, card.querySelector('.detail-plot-area'));
+    _renderOneGraph(graph);
   });
   toolbar.appendChild(addBtn);
 
@@ -84,7 +91,7 @@ const initCompareView = () => {
       }
       if (!graph.paused) {
         const plotArea = card.querySelector('.detail-plot-area');
-        _startGraphAnim(graph, plotArea);
+        _renderOneGraph(graph);
       }
     }
   });
@@ -149,7 +156,7 @@ const initCompareView = () => {
         try {
           const data = JSON.parse(reader.result);
           if (!Array.isArray(data.graphs)) throw new Error('Invalid format');
-          for (const g of state.compareGraphs) _stopGraphAnim(g);
+          stopCompareAnim();
           state.compareGraphs.length = 0;
           for (const g of data.graphs) {
             const graph = _newGraph(g);
@@ -180,6 +187,9 @@ const initCompareView = () => {
   toolbar.appendChild(importBtn);
 
   document.addEventListener('click', () => savedMenu.classList.add('hidden'));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') savedMenu.classList.add('hidden');
+  });
 
   container.appendChild(toolbar);
 
@@ -218,7 +228,7 @@ const _refreshSavedMenu = (menu, cardsContainer) => {
       saveSettings();
       const card = _buildGraphCard(graph);
       cardsContainer.appendChild(card);
-      _startGraphAnim(graph, card.querySelector('.detail-plot-area'));
+      _renderOneGraph(graph);
     });
     item.appendChild(nameSpan);
     const delBtn = document.createElement('button');
@@ -292,7 +302,7 @@ const _buildGraphCard = (graph) => {
     saveSettings();
     const cloneCard = _buildGraphCard(clone);
     card.parentElement.appendChild(cloneCard);
-    _startGraphAnim(clone, cloneCard.querySelector('.detail-plot-area'));
+    _renderOneGraph(clone);
   });
   header.appendChild(cloneBtn);
 
@@ -302,7 +312,7 @@ const _buildGraphCard = (graph) => {
   deleteBtn.textContent = '×';
   deleteBtn.setAttribute('aria-label', 'Remove graph');
   deleteBtn.addEventListener('click', () => {
-    _stopGraphAnim(graph);
+    graph._fingerprint = '';
     const idx = state.compareGraphs.indexOf(graph);
     if (idx !== -1) state.compareGraphs.splice(idx, 1);
     saveSettings();
@@ -335,7 +345,7 @@ const _buildGraphCard = (graph) => {
     cfg: graph,
     invalidate: () => { graph._fingerprint = ''; },
     rerender: () => _renderCompareGraphNow(graph, plotArea),
-    restart: () => _startGraphAnim(graph, plotArea),
+    restart: () => _renderOneGraph(graph),
   };
   const allControls = buildPlotControls(opts);
   const timeControls = document.createElement('div');
@@ -405,7 +415,7 @@ const _renderCompareGraphNow = (graph, plotArea) => {
     noControls: true,
     invalidate: () => { graph._fingerprint = ''; },
     rerender: () => _renderCompareGraphNow(graph, plotArea),
-    restart: () => _startGraphAnim(graph, plotArea),
+    restart: () => _renderOneGraph(graph),
   };
 
   let gNode = plotArea.querySelector('.plot-root');
@@ -441,41 +451,37 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   updatePlotLegend(plotArea, compareSeries, graph._hidden);
 };
 
-const _startGraphAnim = (graph, plotArea) => {
-  _stopGraphAnim(graph);
-  if (graph.paused) {
-    _renderCompareGraphNow(graph, plotArea);
-    return;
-  }
-  const tick = () => {
-    if (state.activeView !== 'compare') { graph._timer = null; return; }
-    if (graph.paused) { graph._timer = null; return; }
-    _renderCompareGraphNow(graph, plotArea);
-    graph._timer = window.setTimeout(tick, PLOT_TICK_MS);
-  };
-  graph._timer = window.setTimeout(tick, PLOT_TICK_MS);
+let _compareAnimTimer = null;
+
+const _renderOneGraph = (graph) => {
+  const container = el('compareContainer');
+  const card = container?.querySelector(`[data-graph-id="${graph.id}"]`);
+  if (!card) return;
+  const plotArea = card.querySelector('.detail-plot-area');
+  if (plotArea) _renderCompareGraphNow(graph, plotArea);
 };
 
-const _stopGraphAnim = (graph) => {
-  if (graph._timer) {
-    clearTimeout(graph._timer);
-    graph._timer = null;
+const _compareAnimTick = () => {
+  if (state.activeView !== 'compare') { _compareAnimTimer = null; return; }
+  for (const graph of state.compareGraphs) {
+    if (!graph.paused) _renderOneGraph(graph);
   }
-  graph._fingerprint = '';
+  _compareAnimTimer = window.setTimeout(_compareAnimTick, PLOT_TICK_MS);
 };
 
 const startCompareAnim = () => {
-  const container = el('compareContainer');
   for (const graph of state.compareGraphs) {
-    const card = container.querySelector(`[data-graph-id="${graph.id}"]`);
-    if (!card) continue;
-    const plotArea = card.querySelector('.detail-plot-area');
-    _startGraphAnim(graph, plotArea);
+    if (graph.paused) _renderOneGraph(graph);
+  }
+  if (!_compareAnimTimer) {
+    _compareAnimTimer = window.setTimeout(_compareAnimTick, PLOT_TICK_MS);
   }
 };
 
 const stopCompareAnim = () => {
-  for (const graph of state.compareGraphs) {
-    _stopGraphAnim(graph);
+  if (_compareAnimTimer) {
+    clearTimeout(_compareAnimTimer);
+    _compareAnimTimer = null;
   }
+  for (const graph of state.compareGraphs) graph._fingerprint = '';
 };

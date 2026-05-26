@@ -564,7 +564,7 @@ class TestServiceCall:
         session.event_logger = MagicMock()
         session.event_logger.log_node_event = AsyncMock()
         resp = await client.post("/api/services/42/100/call", json={"attributes": {}})
-        assert resp.status == 200
+        assert resp.status == 504
         data = await resp.json()
         assert data["status"] == "timeout"
 

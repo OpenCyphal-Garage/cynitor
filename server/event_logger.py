@@ -537,10 +537,15 @@ class EventLogger:
     def _save_identity_map_sync(self, records: list[dict[str, Any]]) -> None:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM identity_map")
+            current_ids = [rec["unique_id"] for rec in records]
+            if current_ids:
+                placeholders = ",".join("?" * len(current_ids))
+                cursor.execute(f"DELETE FROM identity_map WHERE unique_id NOT IN ({placeholders})", current_ids)
+            else:
+                cursor.execute("DELETE FROM identity_map")
             for rec in records:
                 cursor.execute(
-                    "INSERT INTO identity_map (unique_id, current_node_id, last_seen_unix, node_name, previous_node_ids) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT OR REPLACE INTO identity_map (unique_id, current_node_id, last_seen_unix, node_name, previous_node_ids) VALUES (?, ?, ?, ?, ?)",
                     (rec["unique_id"], rec.get("current_node_id"), rec.get("last_seen_unix"), rec.get("node_name"), json.dumps(rec.get("previous_node_ids", []))),
                 )
         logger.debug(f"Saved {len(records)} identity map entries")

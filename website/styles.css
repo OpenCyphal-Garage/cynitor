@@ -31,6 +31,10 @@
   --plot-4: #cf222e;
   --plot-5: #8250df;
   --plot-6: #0e8a6d;
+  --fg: #1f2328;
+  --on-accent: #ffffff;
+  --surface-hover: #e8ecf0;
+  --surface-1: #eaeef2;
   --row-bg: var(--surface);
   --row-alt-bg: #f6f8fa;
   --row-hover-bg: #e8ecf0;
@@ -66,6 +70,10 @@
   --plot-4: #f85149;
   --plot-5: #bc8cff;
   --plot-6: #39d2c0;
+  --fg: #d0d4dc;
+  --on-accent: #ffffff;
+  --surface-hover: rgba(255, 255, 255, 0.06);
+  --surface-1: #2a2f38;
   --row-bg: var(--bg);
   --row-alt-bg: #262b33;
   --row-hover-bg: rgba(255, 255, 255, 0.06);

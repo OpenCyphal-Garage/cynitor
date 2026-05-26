@@ -121,8 +121,8 @@ const startNameEdit = (cell) => {
   input.addEventListener('blur', discard);
 };
 
-const EYE_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
-const EYE_OFF_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+const EYE_ICON = '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF_ICON = '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
 
 const actionsFormatter = () => {
   return `<button type="button" class="action-hide" aria-label="Hide node">${EYE_ICON}</button>`;
@@ -220,9 +220,7 @@ const populateHiddenPopover = () => {
     return;
   }
 
-  const rect = chip.getBoundingClientRect();
-  popover.style.top = (rect.bottom + 4) + 'px';
-  popover.style.right = (window.innerWidth - rect.right) + 'px';
+  positionPopover(popover, chip);
 
   let html = '<div class="hidden-popover-header"><span>Hidden nodes</span>'
     + '<button type="button" class="hidden-unhide-all" aria-label="Unhide all nodes">Unhide all</button></div>'
@@ -273,19 +271,8 @@ const toggleHiddenPopover = () => {
 };
 
 const tablePlaceholder = () => {
-  if (!state.dashboardConnected) {
-    if (state.pendingReconnect) {
-      return svcStateMsg('<span class="svc-spinner"></span>', 'Reconnecting to backend…', 'Restoring previous session.');
-    }
-    return svcStateMsg('⏻', 'Not connected to backend', 'Connect to the backend server to discover CAN nodes.');
-  }
-  if (state.canState === CONN.CONNECTING) {
-    return svcStateMsg('<span class="svc-spinner"></span>', 'Connecting to CAN interface…', 'Establishing CAN bus connection. Nodes will appear shortly.');
-  }
-  if (state.canState !== CONN.CONNECTED) {
-    return svcStateMsg('⛓', 'CAN bus not connected', 'Connect a CAN interface to start discovering nodes.');
-  }
-  return svcStateMsg('<span class="svc-spinner"></span>', 'Waiting for nodes…', 'Listening on the CAN bus. Nodes will appear as they send heartbeats.');
+  return connectionPlaceholder('discover CAN nodes')
+    || svcStateMsg('<span class="svc-spinner"></span>', 'Waiting for nodes…', 'Listening on the CAN bus. Nodes will appear as they send heartbeats.');
 };
 
 const buildTableData = () => {
@@ -416,30 +403,7 @@ const renderNodesTable = () => {
     return;
   }
 
-  const currentRowMap = new Map();
-  for (const row of nodesTabulator.getRows()) {
-    currentRowMap.set(row.getData().id, row);
-  }
-
-  const newRows = [];
-  const newIds = new Set();
-  for (const d of data) {
-    newIds.add(d.id);
-    const existing = currentRowMap.get(d.id);
-    if (!existing) { newRows.push(d); continue; }
-    const cur = existing.getData();
-    const diff = {};
-    for (const k of Object.keys(d)) {
-      if (d[k] !== cur[k]) diff[k] = d[k];
-    }
-    if (Object.keys(diff).length) existing.update(diff);
-  }
-
-  for (const [id, row] of currentRowMap) {
-    if (!newIds.has(id)) row.delete();
-  }
-
-  if (newRows.length) nodesTabulator.addData(newRows);
+  diffUpdateTable(nodesTabulator, data, 'id');
 
   for (const row of nodesTabulator.getRows()) {
     row.getElement().classList.toggle('selected-row', row.getData().id === state.selectedNodeId);

@@ -321,7 +321,7 @@ class WebSocketServer:
                 "status": "timeout",
                 "latency_ms": latency_ms,
                 "error": f"Service {service_id} on node {node_id} timed out",
-            })
+            }, status=504)
         except ValueError as e:
             return web.json_response({"status": "error", "error": str(e)}, status=400)
         except Exception as e:
@@ -401,7 +401,11 @@ class WebSocketServer:
             return web.json_response({"error": "Invalid limit parameter"}, status=400)
 
         node_id_str = request.query.get("node_id")
-        node_id = int(node_id_str) if node_id_str else None
+        node_id = None
+        if node_id_str:
+            node_id, err = _parse_int(node_id_str, 'node_id', 0, MAX_NODE_ID)
+            if err:
+                return err
         unique_id = request.query.get("unique_id")
 
         history = await self.session.event_logger.get_service_call_history(
@@ -662,7 +666,9 @@ class WebSocketServer:
             return web.json_response({"error": "CAN not connected"}, status=503)
 
         try:
-            node_id = int(request.match_info['node_id'])
+            node_id, err = _parse_int(request.match_info.get('node_id'), 'node_id', 0, MAX_NODE_ID)
+            if err:
+                return err
             events = telemetry.get_latest_node(node_id)
 
             if not events:
@@ -684,8 +690,6 @@ class WebSocketServer:
                 "node_id": node_id,
                 "events": events
             })
-        except ValueError:
-            return web.json_response({"error": "Invalid node_id"}, status=400)
         except Exception as e:
             logger.error(f"Error in GET /api/latest/node: {e}")
             return web.json_response({"error": str(e)}, status=500)

@@ -1,7 +1,8 @@
 // Global state, constants, foundational helpers, API, and settings persistence.
 // Loaded first; everything below depends on what's declared here.
 
-const STORAGE_KEY = 'pycyphal.dashboard.settings.v2';
+const STORAGE_KEY = 'cynitor.dashboard.settings.v1';
+const _LEGACY_STORAGE_KEY = 'pycyphal.dashboard.settings.v2';
 
 // Connection state enums — prevent impossible flag combinations
 const CONN = Object.freeze({ IDLE: 'idle', CONNECTING: 'connecting', CONNECTED: 'connected', DISCONNECTING: 'disconnecting' });
@@ -64,7 +65,6 @@ const state = {
   _subjectExpandedServiceId: null,
   nodeAliases: {},
   historyTimeRange: '1h',
-  historyChangesOnly: true,
   activeView: 'nodes',
   favouriteSubjectIds: new Set(),
   hiddenSubjectIds: new Set(),
@@ -210,6 +210,52 @@ const HEALTH_CSS_COLOR = { ok: 'var(--ok)', warn: 'var(--warn)', err: 'var(--err
 const getHealthCssClass = (health) => HEALTH_CSS_CLASS[classifyHealth(health)] || '';
 const getHealthColor = (health) => HEALTH_CSS_COLOR[classifyHealth(health)] || 'var(--muted)';
 
+const connectionPlaceholder = (context) => {
+  if (!state.dashboardConnected) {
+    if (state.pendingReconnect) {
+      return svcStateMsg('<span class="svc-spinner"></span>', 'Reconnecting to backend…', 'Restoring previous session.');
+    }
+    return svcStateMsg('⏻', 'Not connected to backend', `Connect to the backend server to ${context}.`);
+  }
+  if (state.canState === CONN.CONNECTING) {
+    return svcStateMsg('<span class="svc-spinner"></span>', 'Connecting to CAN interface…', 'Establishing CAN bus connection.');
+  }
+  if (state.canState !== CONN.CONNECTED) {
+    return svcStateMsg('⛓', 'CAN bus not connected', `Connect a CAN interface to ${context}.`);
+  }
+  return null;
+};
+
+const diffUpdateTable = (tabulator, data, keyField) => {
+  const currentRowMap = new Map();
+  for (const row of tabulator.getRows()) {
+    currentRowMap.set(row.getData()[keyField], row);
+  }
+  const newRows = [];
+  const newIds = new Set();
+  for (const d of data) {
+    newIds.add(d[keyField]);
+    const existing = currentRowMap.get(d[keyField]);
+    if (!existing) { newRows.push(d); continue; }
+    const cur = existing.getData();
+    const diff = {};
+    for (const k of Object.keys(d)) {
+      if (d[k] !== cur[k]) diff[k] = d[k];
+    }
+    if (Object.keys(diff).length) existing.update(diff);
+  }
+  for (const [id, row] of currentRowMap) {
+    if (!newIds.has(id)) row.delete();
+  }
+  if (newRows.length) tabulator.addData(newRows);
+};
+
+const positionPopover = (popover, anchorEl) => {
+  const rect = anchorEl.getBoundingClientRect();
+  popover.style.top = (rect.bottom + 4) + 'px';
+  popover.style.right = (window.innerWidth - rect.right) + 'px';
+};
+
 const getStatusClass = (attr, value) => {
   const v = String(value).toUpperCase();
   switch (attr) {
@@ -324,7 +370,12 @@ const requestJson = async (path, options = {}) => {
 
 const readSettings = () => {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+    let raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw && (raw = localStorage.getItem(_LEGACY_STORAGE_KEY))) {
+      localStorage.setItem(STORAGE_KEY, raw);
+      localStorage.removeItem(_LEGACY_STORAGE_KEY);
+    }
+    return JSON.parse(raw || '{}');
   } catch {
     return {};
   }

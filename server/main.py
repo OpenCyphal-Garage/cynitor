@@ -272,6 +272,9 @@ class CANSession:
 
     def schedule_fatal_disconnect(self, error_msg: str) -> None:
         """Schedule a disconnect due to a fatal CAN error (safe to call from background tasks)."""
+        if self._disconnect_task and not self._disconnect_task.done():
+            logger.warning("Disconnect already in progress, ignoring duplicate")
+            return
         logger.error(f"CAN fatal error: {error_msg}")
         self.last_error = error_msg
         self._disconnect_task = asyncio.create_task(self._deferred_disconnect())

@@ -48,34 +48,8 @@ class PublisherInfo:
     publish_times: Deque[datetime.datetime] = field(default_factory=lambda: collections.deque(maxlen=10))
 
 
-@dataclass
 class NodeInfo:
-    node_id: int
-    unique_id: numpy.typing.NDArray[numpy.uint8]
-    uptime: int
-    has_appeared: bool
-    has_disappeared: bool
-    first_seen: datetime.datetime
-    last_seen: Deque[datetime.datetime]
-    has_responded_to_getInfo: bool
-    info_response: uavcan.node.GetInfo_1_0.Response
-    transfer_from: pycyphal.transport.TransferFrom
-    has_published_port_list: bool
-    port_list: uavcan.node.port.List_1_0
-    has_registered_ports: bool
-    has_subscribers: bool
-    subscriber_SubjectIDs: List[int]
-    has_publishers: bool
-    publisher_SubjectIDs: List[int]
-    has_clients: bool
-    client_ServiceIDs: List[int]
-    has_servers: bool
-    server_ServiceIDs: List[int]
-
     OFFLINE_THRESHOLD_S: float = 3.0
-    _online_time: Optional[NodeTime] = None
-    _offline_time: Optional[NodeTime] = None
-    publishers_info: Dict[int, PublisherInfo] = field(default_factory=dict)
 
     def __init__(self, node_id: int):
         self.node_id = node_id

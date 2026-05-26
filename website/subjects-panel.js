@@ -14,19 +14,8 @@ const _fmtDate = (unix) => {
 };
 
 const subjectsPlaceholder = () => {
-  if (!state.dashboardConnected) {
-    if (state.pendingReconnect) {
-      return svcStateMsg('<span class="svc-spinner"></span>', 'Reconnecting to backend…', 'Restoring previous session.');
-    }
-    return svcStateMsg('⏻', 'Not connected to backend', 'Connect to the backend server to browse subjects and services.');
-  }
-  if (state.canState === CONN.CONNECTING) {
-    return svcStateMsg('<span class="svc-spinner"></span>', 'Connecting to CAN interface…', 'Establishing CAN bus connection.');
-  }
-  if (state.canState !== CONN.CONNECTED) {
-    return svcStateMsg('⛓', 'CAN bus not connected', 'Connect a CAN interface to discover subjects and services.');
-  }
-  return svcStateMsg('<span class="svc-spinner"></span>', 'Waiting for traffic…', 'Listening on the CAN bus. Subjects and services will appear as nodes communicate.');
+  return connectionPlaceholder('browse subjects and services')
+    || svcStateMsg('<span class="svc-spinner"></span>', 'Waiting for traffic…', 'Listening on the CAN bus. Subjects and services will appear as nodes communicate.');
 };
 
 const _lookupServiceType = (serviceId) => {
@@ -198,9 +187,7 @@ const populateHiddenSubjectsPopover = () => {
     return;
   }
 
-  const rect = chip.getBoundingClientRect();
-  popover.style.top = (rect.bottom + 4) + 'px';
-  popover.style.right = (window.innerWidth - rect.right) + 'px';
+  positionPopover(popover, chip);
 
   let html = '<div class="hidden-popover-header"><span>Hidden subjects</span>'
     + '<button type="button" class="hidden-unhide-all" aria-label="Unhide all">Unhide all</button></div>'
@@ -358,30 +345,7 @@ const refreshSubjectsTable = () => {
 
   _suppressReattach = true;
 
-  const currentRowMap = new Map();
-  for (const row of subjectsTabulator.getRows()) {
-    currentRowMap.set(row.getData()._rowId, row);
-  }
-
-  const newRows = [];
-  const newIds = new Set();
-  for (const d of data) {
-    newIds.add(d._rowId);
-    const existing = currentRowMap.get(d._rowId);
-    if (!existing) { newRows.push(d); continue; }
-    const cur = existing.getData();
-    const diff = {};
-    for (const k of Object.keys(d)) {
-      if (d[k] !== cur[k]) diff[k] = d[k];
-    }
-    if (Object.keys(diff).length) existing.update(diff);
-  }
-
-  for (const [id, row] of currentRowMap) {
-    if (!newIds.has(id)) row.delete();
-  }
-
-  if (newRows.length) subjectsTabulator.addData(newRows);
+  diffUpdateTable(subjectsTabulator, data, '_rowId');
 
   _suppressReattach = false;
   _unstashInlineDetail();

@@ -4,6 +4,7 @@
 const PLOT_MARGIN = { top: 8, right: 12, bottom: 24, left: 48 };
 const PLOT_PANEL_GAP = 8;
 const _safeId = (s) => s.replace(/[^a-zA-Z0-9_-]/g, '_');
+const _safeColor = (c) => /^#[0-9a-fA-F]{3,8}$/.test(c) ? c : '#888';
 const PLOT_TIME_WINDOWS = [
   { label: '30s', secs: 30 },
   { label: '1m', secs: 60 },
@@ -970,6 +971,7 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
 };
 
 const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect) => {
+  plotArea._plotCtx = { visible, xScale, w };
   const tooltipEl = plotArea.querySelector('.plot-tooltip');
   const overlay = g.select('.plot-overlay');
   const crosshair = g.select('.plot-crosshair');
@@ -1003,7 +1005,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect) => {
       const color = visible[idx]?.color || PLOT_COLORS[idx % PLOT_COLORS.length];
       const v = typeof s.sample.v === 'number' && !Number.isInteger(s.sample.v)
         ? s.sample.v.toFixed(2) : String(s.sample.v);
-      return `<div class="plot-tooltip-row"><span class="plot-tooltip-swatch" style="background:${color}"></span><span class="plot-tooltip-name">${escapeHtml(s.name)}</span><span class="plot-tooltip-val">${escapeHtml(v)}</span></div>`;
+      return `<div class="plot-tooltip-row"><span class="plot-tooltip-swatch" style="background:${_safeColor(color)}"></span><span class="plot-tooltip-name">${escapeHtml(s.name)}</span><span class="plot-tooltip-val">${escapeHtml(v)}</span></div>`;
     }).join('');
     tooltipEl.innerHTML = `<div class="plot-tooltip-time">${formattedT}</div>${rows}`;
     tooltipEl.style.display = 'block';
@@ -1061,15 +1063,18 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect) => {
     svgEl._kbBound = true;
     let kbPos = w / 2;
     svgEl.addEventListener('keydown', (e) => {
-      const step = w / 20;
+      const ctx = plotArea._plotCtx || {};
+      const curW = ctx.w || w;
+      const step = curW / 20;
       if (e.key === 'ArrowLeft') { kbPos = Math.max(0, kbPos - step); }
-      else if (e.key === 'ArrowRight') { kbPos = Math.min(w, kbPos + step); }
+      else if (e.key === 'ArrowRight') { kbPos = Math.min(curW, kbPos + step); }
       else if (e.key === 'Escape') { hideCrosshair(); return; }
       else return;
       e.preventDefault();
       showCrosshairAt(kbPos);
       if (syncContainer) {
-        const t0 = xScale.invert(kbPos);
+        const curXScale = ctx.xScale || xScale;
+        const t0 = curXScale.invert(kbPos);
         syncContainer.dispatchEvent(new CustomEvent('crosshair-sync', { detail: { t: t0, source: plotArea } }));
       }
     });
@@ -1085,7 +1090,7 @@ const updatePlotLegend = (plotArea, allSeries, hidden) => {
     legend.innerHTML = allSeries.map((s, i) => {
       const isActive = !hidden.has(s.name);
       const color = s.color || PLOT_COLORS[i % PLOT_COLORS.length];
-      return `<button type="button" class="plot-legend-item${isActive ? ' active' : ''}" data-series="${escapeHtml(s.name)}" aria-pressed="${isActive}"><span class="plot-legend-swatch" style="background:${color}" data-hex="${escapeHtml(color)}"></span>${escapeHtml(s.name)}</button>`;
+      return `<button type="button" class="plot-legend-item${isActive ? ' active' : ''}" data-series="${escapeHtml(s.name)}" aria-pressed="${isActive}"><span class="plot-legend-swatch" style="background:${_safeColor(color)}" data-hex="${escapeHtml(color)}"></span>${escapeHtml(s.name)}</button>`;
     }).join('');
   } else {
     for (const btn of legend.querySelectorAll('button[data-series]')) {
