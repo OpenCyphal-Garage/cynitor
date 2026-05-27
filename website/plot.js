@@ -550,6 +550,69 @@ const buildPlotControls = (opts = {}) => {
   gridLabel.append(' Grid');
   wrap.appendChild(gridLabel);
 
+  const drawSep = document.createElement('span');
+  drawSep.className = 'plot-controls-sep';
+  wrap.appendChild(drawSep);
+
+  const drawGroup = document.createElement('div');
+  drawGroup.className = 'plot-draw-group';
+
+  const drawIcon = document.createElement('span');
+  drawIcon.className = 'plot-draw-icon';
+  drawIcon.textContent = '✎';
+  drawGroup.appendChild(drawIcon);
+
+  const drawInfo = document.createElement('span');
+  drawInfo.className = 'plot-info-icon';
+  drawInfo.textContent = '?';
+  const drawTip = 'Shift+click: add/edit marker · Click on marker: edit · Alt+drag: freehand draw · Alt+dblclick: clear drawings · Click: pause/resume · Dblclick: reset zoom';
+  drawInfo.title = drawTip;
+  drawInfo.setAttribute('aria-label', drawTip);
+  drawGroup.appendChild(drawInfo);
+
+  const drawColorWrap = document.createElement('div');
+  drawColorWrap.className = 'plot-draw-color-wrap';
+  const drawSwatch = document.createElement('span');
+  drawSwatch.className = 'plot-draw-swatch';
+  drawSwatch.style.background = cfg._drawColor || 'var(--accent)';
+  const drawColorInput = document.createElement('input');
+  drawColorInput.type = 'color';
+  drawColorInput.value = _colorToHex(cfg._drawColor || '#0969da');
+  drawColorInput.setAttribute('aria-label', 'Drawing color');
+  drawColorInput.addEventListener('input', () => {
+    cfg._drawColor = drawColorInput.value;
+    drawSwatch.style.background = drawColorInput.value;
+  });
+  drawColorWrap.appendChild(drawSwatch);
+  drawColorWrap.appendChild(drawColorInput);
+  drawGroup.appendChild(drawColorWrap);
+
+  const drawStyleSel = document.createElement('select');
+  drawStyleSel.className = 'plot-draw-style';
+  drawStyleSel.setAttribute('aria-label', 'Drawing line style');
+  for (const key of ['solid', 'dashed', 'dotted']) {
+    const opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = key;
+    drawStyleSel.appendChild(opt);
+  }
+  drawStyleSel.value = cfg._drawStyle || 'solid';
+  drawStyleSel.addEventListener('change', () => { cfg._drawStyle = drawStyleSel.value; });
+  drawGroup.appendChild(drawStyleSel);
+
+  const drawSizeSlider = document.createElement('input');
+  drawSizeSlider.type = 'range';
+  drawSizeSlider.className = 'plot-slider plot-draw-size';
+  drawSizeSlider.min = '1';
+  drawSizeSlider.max = '6';
+  drawSizeSlider.step = '0.5';
+  drawSizeSlider.value = String(cfg._drawWidth || 2);
+  drawSizeSlider.setAttribute('aria-label', 'Drawing line size');
+  drawSizeSlider.addEventListener('input', () => { cfg._drawWidth = Number(drawSizeSlider.value); });
+  drawGroup.appendChild(drawSizeSlider);
+
+  wrap.appendChild(drawGroup);
+
   return wrap;
 };
 
@@ -1080,6 +1143,34 @@ const _renderMarkers = (container, markers, xScale, h) => {
   items.exit().remove();
 };
 
+const _renderDrawings = (container, drawings, xScale, panelH) => {
+  let dG = container.select('.plot-drawings');
+  if (!drawings || !drawings.length) {
+    if (!dG.empty()) dG.remove();
+    return;
+  }
+  if (dG.empty()) dG = container.append('g').attr('class', 'plot-drawings').attr('pointer-events', 'none');
+  const paths = dG.selectAll('path').data(drawings);
+  const DRAW_DASH_RENDER = { solid: 'none', dashed: '6 3', dotted: '2 3' };
+  paths.enter().append('path')
+    .attr('fill', 'none')
+    .merge(paths)
+    .attr('stroke', d => d.color || 'var(--accent)')
+    .attr('stroke-width', d => d.width || 2)
+    .attr('stroke-dasharray', d => DRAW_DASH_RENDER[d.dash] || 'none')
+    .attr('stroke-linecap', 'round')
+    .attr('stroke-linejoin', 'round')
+    .attr('d', d => {
+      if (!d.points || d.points.length < 2) return null;
+      return d.points.map((p, i) => {
+        const px = xScale(p.t);
+        const py = p.y * panelH;
+        return `${i === 0 ? 'M' : 'L'}${px},${py}`;
+      }).join('');
+    });
+  paths.exit().remove();
+};
+
 const _openMarkerForm = (plotArea, cfg, marker, isNew, onDone) => {
   const old = plotArea.querySelector('.plot-marker-form');
   if (old) old.remove();
@@ -1291,6 +1382,7 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
 
   _renderThresholds(overlay, cfg?.thresholds, yScale, w);
   _renderMarkers(overlay, cfg?.markers, xScale, panelH);
+  _renderDrawings(overlay, cfg?.drawings, xScale, panelH);
 
   const strokeW = cfg ? cfg.stroke : 1.5;
   const showDots = cfg ? cfg.disconnectPoints : false;
@@ -1532,16 +1624,56 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
 
     let downMx = 0;
     let downShift = false;
+    let drawingStroke = null;
+
     svgEl.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
+      const [mx, my] = d3.pointer(e, overlay.node());
+      if (e.altKey) {
+        e.preventDefault();
+        const ctx = plotArea._plotCtx || {};
+        const curXScale = ctx.xScale || xScale;
+        const totalH = parseFloat(g.select('.plot-overlay').attr('height')) || 200;
+        const DRAW_DASH = { solid: 'none', dashed: '6 3', dotted: '2 3' };
+        drawingStroke = {
+          points: [{ t: curXScale.invert(mx), y: my / totalH }],
+          color: cfg._drawColor || 'var(--accent)',
+          width: cfg._drawWidth || 2,
+          dash: cfg._drawStyle || 'solid',
+          _totalH: totalH,
+          _dashArray: DRAW_DASH[cfg._drawStyle] || 'none',
+        };
+        svgEl.style.cursor = 'crosshair';
+        return;
+      }
       dragStart = e.clientX;
       dragPanStart = cfg._panOffset || 0;
       didDrag = false;
       downShift = e.shiftKey;
-      const [mx] = d3.pointer(e, overlay.node());
       downMx = mx;
     });
     window.addEventListener('mousemove', (e) => {
+      if (drawingStroke) {
+        const [mx, my] = d3.pointer(e, overlay.node());
+        const ctx = plotArea._plotCtx || {};
+        const curXScale = ctx.xScale || xScale;
+        drawingStroke.points.push({ t: curXScale.invert(mx), y: my / drawingStroke._totalH });
+        const tempPath = g.select('.plot-drawing-temp');
+        const pts = drawingStroke.points;
+        const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${curXScale(p.t)},${p.y * drawingStroke._totalH}`).join('');
+        if (tempPath.empty()) {
+          const ov = g.select('.plot-compare-overlay');
+          (ov.empty() ? g : ov).append('path').attr('class', 'plot-drawing-temp')
+            .attr('fill', 'none').attr('stroke', drawingStroke.color)
+            .attr('stroke-width', drawingStroke.width)
+            .attr('stroke-dasharray', drawingStroke._dashArray)
+            .attr('stroke-linecap', 'round').attr('stroke-linejoin', 'round').attr('pointer-events', 'none')
+            .attr('d', d);
+        } else {
+          tempPath.attr('d', d);
+        }
+        return;
+      }
       if (dragStart === null) return;
       if (!didDrag && Math.abs(e.clientX - dragStart) < DRAG_THRESHOLD) return;
       if (!didDrag) {
@@ -1558,6 +1690,20 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
       if (plotArea._zoomRestart) plotArea._zoomRestart();
     });
     window.addEventListener('mouseup', (e) => {
+      if (drawingStroke) {
+        g.select('.plot-drawing-temp').remove();
+        if (drawingStroke.points.length >= 2) {
+          if (!cfg.drawings) cfg.drawings = [];
+          const { _totalH, _dashArray, ...stroke } = drawingStroke;
+          cfg.drawings.push(stroke);
+          cfg._fingerprint = '';
+          saveSettings();
+          if (plotArea._zoomRestart) plotArea._zoomRestart();
+        }
+        drawingStroke = null;
+        svgEl.style.cursor = '';
+        return;
+      }
       if (dragStart === null) return;
       const wasDrag = didDrag;
       const wasShift = downShift;
@@ -1622,6 +1768,13 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
 
     svgEl.addEventListener('dblclick', (e) => {
       e.preventDefault();
+      if (e.altKey && cfg.drawings?.length) {
+        cfg.drawings = [];
+        cfg._fingerprint = '';
+        saveSettings();
+        if (plotArea._zoomRestart) plotArea._zoomRestart();
+        return;
+      }
       if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
       cfg._zoom = 1;
       cfg._panOffset = 0;
