@@ -1302,9 +1302,12 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
     syncContainer.addEventListener('crosshair-hide', plotArea._crosshairHide);
   }
 
+  if (plotArea._cursorMx != null) showCrosshairAt(plotArea._cursorMx);
+
   overlay
     .on('mousemove', (event) => {
       const [mx] = d3.pointer(event);
+      plotArea._cursorMx = mx;
       showCrosshairAt(mx);
       if (syncContainer) {
         const t0 = xScale.invert(mx);
@@ -1312,6 +1315,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
       }
     })
     .on('mouseleave', () => {
+      plotArea._cursorMx = null;
       hideCrosshair();
       if (syncContainer) {
         syncContainer.dispatchEvent(new CustomEvent('crosshair-hide', { detail: { source: plotArea } }));
@@ -1366,14 +1370,31 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
 
     let dragStart = null;
     let dragPanStart = 0;
+    let didDrag = false;
+    let clickTimer = null;
+    const DRAG_THRESHOLD = 3;
+
+    const _syncPauseBtn = () => {
+      const pb = plotArea.querySelector('.plot-pause-btn');
+      if (pb) {
+        pb.textContent = cfg.paused ? '▶' : '⏸';
+        pb.classList.toggle('active', cfg.paused);
+      }
+    };
+
     svgEl.addEventListener('mousedown', (e) => {
-      if (e.button !== 0 || (cfg._zoom || 1) <= 1) return;
+      if (e.button !== 0) return;
       dragStart = e.clientX;
       dragPanStart = cfg._panOffset || 0;
-      svgEl.style.cursor = 'grabbing';
+      didDrag = false;
     });
     window.addEventListener('mousemove', (e) => {
       if (dragStart === null) return;
+      if (!didDrag && Math.abs(e.clientX - dragStart) < DRAG_THRESHOLD) return;
+      if (!didDrag) {
+        didDrag = true;
+        svgEl.style.cursor = 'grabbing';
+      }
       const ctx = plotArea._plotCtx || {};
       const curXScale = ctx.xScale || xScale;
       const domain = curXScale.domain();
@@ -1383,14 +1404,36 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
       cfg._fingerprint = '';
       if (plotArea._zoomRestart) plotArea._zoomRestart();
     });
-    window.addEventListener('mouseup', () => {
+    window.addEventListener('mouseup', (e) => {
       if (dragStart === null) return;
+      const wasDrag = didDrag;
       dragStart = null;
       svgEl.style.cursor = '';
+      if (!wasDrag) {
+        if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; return; }
+        clickTimer = setTimeout(() => {
+          clickTimer = null;
+          if (cfg.paused) {
+            cfg._resumeFrom = cfg.pausedAt;
+            cfg._resumeStart = Date.now() / 1000;
+          }
+          cfg.paused = !cfg.paused;
+          cfg.pausedAt = cfg.paused ? Date.now() / 1000 : null;
+          _syncPauseBtn();
+          cfg._fingerprint = '';
+          if (!cfg.paused) {
+            if (plotArea._zoomRestart) plotArea._zoomRestart();
+          } else {
+            cfg._fingerprint = '';
+            if (plotArea._zoomRestart) plotArea._zoomRestart();
+          }
+        }, 250);
+      }
     });
 
     svgEl.addEventListener('dblclick', (e) => {
       e.preventDefault();
+      if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
       cfg._zoom = 1;
       cfg._panOffset = 0;
       cfg._fingerprint = '';
