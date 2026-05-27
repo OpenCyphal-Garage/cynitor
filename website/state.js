@@ -422,6 +422,7 @@ const _writeSettingsNow = () => {
     compareGraphs: state.compareGraphs.map(g => ({
       id: g.id, name: g.name, series: g.series, thresholds: g.thresholds || [],
       derivedSeries: g.derivedSeries || [],
+      markers: g.markers || [],
       timeWindow: g.timeWindow, smooth: g.smooth, stroke: g.stroke, disconnectPoints: g.disconnectPoints, grid: g.grid,
     })),
     savedCompareConfigs: state.savedCompareConfigs,
@@ -568,6 +569,7 @@ const loadSettings = () => {
         grid: g.grid === true,
         thresholds: Array.isArray(g.thresholds) ? g.thresholds.filter(t => typeof t.value === 'number') : [],
         derivedSeries: Array.isArray(g.derivedSeries) ? g.derivedSeries.filter(d => d?.id && d?.type && d?.sourceA) : [],
+        markers: Array.isArray(g.markers) ? g.markers.filter(m => typeof m.t === 'number') : [],
         _timer: null, _fingerprint: '', _hidden: new Set(),
       }));
   }
@@ -578,6 +580,7 @@ const loadSettings = () => {
         name: c.name,
         series: c.series.filter(s => Number.isInteger(s?.subjectId) && typeof s?.attribute === 'string'),
         derivedSeries: Array.isArray(c.derivedSeries) ? c.derivedSeries.filter(d => d?.id && d?.type && d?.sourceA) : [],
+        markers: Array.isArray(c.markers) ? c.markers.filter(m => typeof m.t === 'number') : [],
       }));
   }
   if (!state.compareGraphs.length && Array.isArray(settings.plotCompareList)) {

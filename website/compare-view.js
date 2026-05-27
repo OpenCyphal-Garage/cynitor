@@ -16,6 +16,7 @@ const _newGraph = (preset = null) => ({
   series: preset?.series ? preset.series.map(s => ({ ...s })) : [],
   thresholds: preset?.thresholds ? preset.thresholds.map(t => ({ ...t })) : [],
   derivedSeries: preset?.derivedSeries ? preset.derivedSeries.map(d => ({ ...d })) : [],
+  markers: preset?.markers ? preset.markers.map(m => ({ ...m })) : [],
   paused: false,
   pausedAt: null,
   timeWindow: 60,
@@ -131,6 +132,7 @@ const initCompareView = () => {
       graphs: state.compareGraphs.map(g => ({
         name: g.name, series: g.series, thresholds: g.thresholds || [],
         derivedSeries: g.derivedSeries || [],
+        markers: g.markers || [],
         timeWindow: g.timeWindow, smooth: g.smooth, stroke: g.stroke,
         disconnectPoints: g.disconnectPoints, grid: g.grid,
       })),
@@ -297,6 +299,7 @@ const _buildGraphCard = (graph) => {
       name,
       series: graph.series.map(s => ({ ...s })),
       derivedSeries: (graph.derivedSeries || []).map(d => ({ ...d })),
+      markers: (graph.markers || []).map(m => ({ ...m })),
     };
     const existing = state.savedCompareConfigs.findIndex(c => c.name === name);
     if (existing !== -1) state.savedCompareConfigs[existing] = config;
@@ -443,8 +446,9 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   const lastPts = compareSeries.map(s => s.data.length ? s.data[s.data.length - 1].t : 0);
   const hiddenKey = [...graph._hidden].sort().join(',');
   const thKey = (graph.thresholds || []).map(t => `${t.value}:${t.label || ''}:${t.color || ''}:${t.style || ''}`).join(';');
+  const mkKey = (graph.markers || []).map(m => `${m.t}:${m.label}:${m.color || ''}:${m.lineStyle || ''}`).join(';');
   const styleKey = compareSeries.map(s => s._lineStyle || '').join(',');
-  const fp = `cg:${graph.id}:${compareSeries.length}:${lastPts.join(',')}:w${graph.timeWindow}:p${graph.paused ? graph.pausedAt : 0}:s${graph.smooth}:d${graph.disconnectPoints}:k${graph.stroke}:g${graph.grid}:t${thKey}:h${hiddenKey}:ls${styleKey}:z${graph._zoom || 1}:pan${graph._panOffset || 0}`;
+  const fp = `cg:${graph.id}:${compareSeries.length}:${lastPts.join(',')}:w${graph.timeWindow}:p${graph.paused ? graph.pausedAt : 0}:s${graph.smooth}:d${graph.disconnectPoints}:k${graph.stroke}:g${graph.grid}:t${thKey}:m${mkKey}:h${hiddenKey}:ls${styleKey}:z${graph._zoom || 1}:pan${graph._panOffset || 0}`;
   const rect = plotArea.getBoundingClientRect();
   const sizeKey = `${Math.round(rect.width)}x${Math.round(rect.height)}`;
   const fullFp = `${fp}:${sizeKey}`;

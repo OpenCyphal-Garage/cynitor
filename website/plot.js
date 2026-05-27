@@ -1050,6 +1050,143 @@ const _renderThresholds = (container, thresholds, yScale, w) => {
   lines.exit().remove();
 };
 
+const MARKER_LINE_STYLES = { solid: 'none', dashed: '6 3', dotted: '2 3', dashdot: '6 3 2 3' };
+
+const _renderMarkers = (container, markers, xScale, h) => {
+  let mG = container.select('.plot-markers');
+  if (!markers || !markers.length) {
+    if (!mG.empty()) mG.remove();
+    return;
+  }
+  if (mG.empty()) mG = container.append('g').attr('class', 'plot-markers');
+  const items = mG.selectAll('.plot-marker').data(markers, d => `${d.t}:${d.label}`);
+  const enter = items.enter().append('g').attr('class', 'plot-marker');
+  enter.append('line');
+  enter.append('text');
+  enter.append('title');
+  const merged = enter.merge(items);
+  merged.select('line')
+    .attr('x1', d => xScale(d.t)).attr('x2', d => xScale(d.t))
+    .attr('y1', 0).attr('y2', h)
+    .attr('stroke', d => d.color || 'var(--accent)')
+    .attr('stroke-width', 1)
+    .attr('stroke-dasharray', d => MARKER_LINE_STYLES[d.lineStyle] || MARKER_LINE_STYLES.dashed);
+  merged.select('text')
+    .attr('x', d => xScale(d.t) + 4).attr('y', 11)
+    .attr('class', 'plot-marker-label')
+    .attr('fill', d => d.color || 'var(--accent)')
+    .text(d => d.label);
+  merged.select('title').text(d => d.note || '');
+  items.exit().remove();
+};
+
+const _openMarkerForm = (plotArea, cfg, marker, isNew, onDone) => {
+  const old = plotArea.querySelector('.plot-marker-form');
+  if (old) old.remove();
+
+  const form = document.createElement('div');
+  form.className = 'plot-marker-form';
+
+  const labelInput = document.createElement('input');
+  labelInput.type = 'text';
+  labelInput.placeholder = 'Label *';
+  labelInput.value = marker.label || '';
+  labelInput.setAttribute('aria-label', 'Marker label');
+
+  const noteInput = document.createElement('input');
+  noteInput.type = 'text';
+  noteInput.placeholder = 'Note (optional)';
+  noteInput.value = marker.note || '';
+  noteInput.setAttribute('aria-label', 'Marker note');
+
+  const colorWrap = document.createElement('div');
+  colorWrap.className = 'plot-marker-form-color';
+  const colorSwatch = document.createElement('span');
+  colorSwatch.className = 'plot-marker-form-swatch';
+  colorSwatch.style.background = marker.color || 'var(--accent)';
+  const colorInput = document.createElement('input');
+  colorInput.type = 'color';
+  colorInput.value = _colorToHex(marker.color || '#0969da');
+  colorInput.setAttribute('aria-label', 'Marker color');
+  colorInput.addEventListener('input', () => {
+    colorSwatch.style.background = colorInput.value;
+  });
+  colorWrap.appendChild(colorSwatch);
+  colorWrap.appendChild(colorInput);
+
+  const styleSel = document.createElement('select');
+  styleSel.setAttribute('aria-label', 'Marker line style');
+  for (const key of Object.keys(MARKER_LINE_STYLES)) {
+    const opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = key;
+    styleSel.appendChild(opt);
+  }
+  styleSel.value = marker.lineStyle || 'dashed';
+
+  const btnRow = document.createElement('div');
+  btnRow.className = 'plot-marker-form-btns';
+
+  const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.textContent = 'Save';
+  saveBtn.addEventListener('click', () => {
+    const label = labelInput.value.trim();
+    if (!label) { labelInput.focus(); return; }
+    marker.label = label;
+    marker.note = noteInput.value.trim() || '';
+    marker.color = colorInput.value;
+    marker.lineStyle = styleSel.value;
+    if (isNew) {
+      if (!cfg.markers) cfg.markers = [];
+      cfg.markers.push(marker);
+    }
+    form.remove();
+    onDone();
+  });
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.addEventListener('click', () => form.remove());
+
+  btnRow.appendChild(saveBtn);
+  if (!isNew) {
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'plot-marker-form-delete';
+    delBtn.textContent = 'Delete';
+    delBtn.addEventListener('click', () => {
+      const idx = cfg.markers.indexOf(marker);
+      if (idx >= 0) cfg.markers.splice(idx, 1);
+      form.remove();
+      onDone();
+    });
+    btnRow.appendChild(delBtn);
+  }
+  btnRow.appendChild(cancelBtn);
+
+  form.appendChild(labelInput);
+  form.appendChild(noteInput);
+  const row2 = document.createElement('div');
+  row2.className = 'plot-marker-form-row';
+  row2.appendChild(colorWrap);
+  row2.appendChild(styleSel);
+  form.appendChild(row2);
+  form.appendChild(btnRow);
+
+  plotArea.appendChild(form);
+  labelInput.focus();
+
+  const close = (e) => {
+    if (!form.contains(e.target) && form.parentNode) {
+      form.remove();
+      document.removeEventListener('mousedown', close);
+    }
+  };
+  setTimeout(() => document.addEventListener('mousedown', close), 0);
+};
+
 const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPanelsH) => {
   const panelsG = g.select('.plot-panels');
   const panels = panelsG.selectAll('.plot-panel').data(visible, (d) => d.name);
@@ -1153,6 +1290,7 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
   else overlay.select('.plot-grid').remove();
 
   _renderThresholds(overlay, cfg?.thresholds, yScale, w);
+  _renderMarkers(overlay, cfg?.markers, xScale, panelH);
 
   const strokeW = cfg ? cfg.stroke : 1.5;
   const showDots = cfg ? cfg.disconnectPoints : false;
@@ -1292,17 +1430,27 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
     if (plotArea._crosshairHide) syncContainer.removeEventListener('crosshair-hide', plotArea._crosshairHide);
     plotArea._crosshairSync = (e) => {
       if (e.detail.source === plotArea) return;
+      plotArea._syncedT = e.detail.t;
       showAtTimestamp(e.detail.t);
     };
     plotArea._crosshairHide = (e) => {
       if (e.detail.source === plotArea) return;
+      plotArea._syncedT = null;
       hideCrosshair();
     };
     syncContainer.addEventListener('crosshair-sync', plotArea._crosshairSync);
     syncContainer.addEventListener('crosshair-hide', plotArea._crosshairHide);
   }
 
-  if (plotArea._cursorMx != null) showCrosshairAt(plotArea._cursorMx);
+  if (plotArea._cursorMx != null) {
+    showCrosshairAt(plotArea._cursorMx);
+    if (syncContainer) {
+      const t0 = xScale.invert(plotArea._cursorMx);
+      syncContainer.dispatchEvent(new CustomEvent('crosshair-sync', { detail: { t: t0, source: plotArea } }));
+    }
+  } else if (plotArea._syncedT != null) {
+    showAtTimestamp(plotArea._syncedT);
+  }
 
   overlay
     .on('mousemove', (event) => {
@@ -1382,11 +1530,16 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
       }
     };
 
+    let downMx = 0;
+    let downShift = false;
     svgEl.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
       dragStart = e.clientX;
       dragPanStart = cfg._panOffset || 0;
       didDrag = false;
+      downShift = e.shiftKey;
+      const [mx] = d3.pointer(e, overlay.node());
+      downMx = mx;
     });
     window.addEventListener('mousemove', (e) => {
       if (dragStart === null) return;
@@ -1407,9 +1560,50 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
     window.addEventListener('mouseup', (e) => {
       if (dragStart === null) return;
       const wasDrag = didDrag;
+      const wasShift = downShift;
+      const mx = downMx;
       dragStart = null;
       svgEl.style.cursor = '';
+      const _markerDone = () => {
+        cfg._fingerprint = '';
+        saveSettings();
+        if (plotArea._zoomRestart) plotArea._zoomRestart();
+      };
+      const _findNearMarker = (t) => {
+        if (!cfg.markers?.length) return null;
+        const ctx2 = plotArea._plotCtx || {};
+        const xs = ctx2.xScale || xScale;
+        const SNAP_PX = 8;
+        const pxPerSec = (ctx2.w || w) / (xs.domain()[1] - xs.domain()[0]);
+        const snapSec = SNAP_PX / pxPerSec;
+        let best = null, bestDist = Infinity;
+        for (const m of cfg.markers) {
+          const d = Math.abs(m.t - t);
+          if (d < snapSec && d < bestDist) { best = m; bestDist = d; }
+        }
+        return best;
+      };
+      if (!wasDrag && wasShift) {
+        const ctx = plotArea._plotCtx || {};
+        const curXScale = ctx.xScale || xScale;
+        const t = curXScale.invert(mx);
+        const near = _findNearMarker(t);
+        if (near) {
+          _openMarkerForm(plotArea, cfg, near, false, _markerDone);
+        } else {
+          _openMarkerForm(plotArea, cfg, { t, label: '', note: '', color: '', lineStyle: 'dashed' }, true, _markerDone);
+        }
+        return;
+      }
       if (!wasDrag) {
+        const ctx = plotArea._plotCtx || {};
+        const curXScale = ctx.xScale || xScale;
+        const t = curXScale.invert(mx);
+        const near = _findNearMarker(t);
+        if (near) {
+          _openMarkerForm(plotArea, cfg, near, false, _markerDone);
+          return;
+        }
         if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; return; }
         clickTimer = setTimeout(() => {
           clickTimer = null;
@@ -1421,12 +1615,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
           cfg.pausedAt = cfg.paused ? Date.now() / 1000 : null;
           _syncPauseBtn();
           cfg._fingerprint = '';
-          if (!cfg.paused) {
-            if (plotArea._zoomRestart) plotArea._zoomRestart();
-          } else {
-            cfg._fingerprint = '';
-            if (plotArea._zoomRestart) plotArea._zoomRestart();
-          }
+          if (plotArea._zoomRestart) plotArea._zoomRestart();
         }, 250);
       }
     });
