@@ -14,6 +14,14 @@ const PLOT_TIME_WINDOWS = [
   { label: 'All', secs: 0 },
 ];
 
+const DERIVED_TYPES = {
+  delta:       { label: 'Delta (A−B)',   sources: 2, hasWindow: false },
+  rolling_avg: { label: 'Rolling Avg',        sources: 1, hasWindow: true  },
+  min_max:     { label: 'Min/Max',             sources: 1, hasWindow: false },
+  rate:        { label: 'Rate (dv/dt)',       sources: 1, hasWindow: false },
+  ratio:       { label: 'Ratio (A/B)',        sources: 2, hasWindow: false },
+};
+
 const _subjectsPlotCfg = {
   get paused() { return state.plotPaused; },
   set paused(v) { state.plotPaused = v; },
@@ -52,8 +60,7 @@ const _openSwatchPicker = (swatch, currentColor, onChange) => {
   const input = document.createElement('input');
   input.type = 'color';
   input.value = _colorToHex(currentColor);
-  input.style.cssText = 'position:absolute;opacity:0;width:0;height:0;pointer-events:none';
-  swatch.style.position = 'relative';
+  input.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;border:none;padding:0';
   swatch.appendChild(input);
   let committed = false;
   input.addEventListener('input', () => {
@@ -66,7 +73,7 @@ const _openSwatchPicker = (swatch, currentColor, onChange) => {
     swatch._pickerOpen = false;
     onChange(val);
   });
-  input.addEventListener('blur', () => {
+  const cleanup = () => {
     if (committed) return;
     setTimeout(() => {
       if (!committed && input.parentNode) {
@@ -75,8 +82,13 @@ const _openSwatchPicker = (swatch, currentColor, onChange) => {
         swatch.style.background = currentColor;
       }
     }, 300);
-  });
-  input.click();
+  };
+  input.addEventListener('blur', cleanup);
+  if (input.showPicker) {
+    try { input.showPicker(); } catch (_) { input.click(); }
+  } else {
+    input.click();
+  }
 };
 
 const _processSmooth = (cfg, keys) => {
@@ -152,6 +164,107 @@ const _tagGaps = (data) => {
   }
 };
 
+const _ALIGN_TOLERANCE = 2;
+
+const _alignSeries = (dataA, dataB) => {
+  if (!dataA?.length || !dataB?.length) return [];
+  const result = [];
+  let j = 0;
+  for (const a of dataA) {
+    while (j < dataB.length - 1 && dataB[j + 1].t <= a.t) j++;
+    let best = dataB[j];
+    if (j + 1 < dataB.length && Math.abs(dataB[j + 1].t - a.t) < Math.abs(best.t - a.t)) {
+      best = dataB[j + 1];
+    }
+    if (Math.abs(best.t - a.t) <= _ALIGN_TOLERANCE) {
+      result.push({ t: a.t, vA: a.v, vB: best.v });
+    }
+  }
+  return result;
+};
+
+const _computeDerived = (type, dataA, dataB, windowSize) => {
+  switch (type) {
+    case 'delta': {
+      const aligned = _alignSeries(dataA, dataB);
+      return [aligned.map(p => ({ t: p.t, v: p.vA - p.vB }))];
+    }
+    case 'ratio': {
+      const aligned = _alignSeries(dataA, dataB);
+      return [aligned.filter(p => p.vB !== 0).map(p => ({ t: p.t, v: p.vA / p.vB }))];
+    }
+    case 'rate': {
+      if (!dataA || dataA.length < 2) return [[]];
+      const result = [];
+      for (let i = 1; i < dataA.length; i++) {
+        const dt = dataA[i].t - dataA[i - 1].t;
+        if (dt > 0 && dt <= PLOT_GAP_THRESHOLD) {
+          result.push({ t: dataA[i].t, v: (dataA[i].v - dataA[i - 1].v) / dt });
+        }
+      }
+      return [result];
+    }
+    case 'rolling_avg': {
+      if (!dataA || dataA.length < 2) return [[]];
+      const w = Math.max(2, windowSize || 10);
+      const result = [];
+      let sum = 0;
+      for (let i = 0; i < dataA.length; i++) {
+        sum += dataA[i].v;
+        if (i >= w) sum -= dataA[i - w].v;
+        const count = Math.min(i + 1, w);
+        result.push({ t: dataA[i].t, v: sum / count });
+      }
+      return [result];
+    }
+    case 'min_max': {
+      if (!dataA || dataA.length < 2) return [[], []];
+      const tMin = windowSize > 0 ? dataA[dataA.length - 1].t - windowSize : -Infinity;
+      let lo = Infinity, hi = -Infinity;
+      for (const p of dataA) {
+        if (p.t < tMin) continue;
+        if (p.v < lo) lo = p.v;
+        if (p.v > hi) hi = p.v;
+      }
+      if (!isFinite(lo)) return [[], []];
+      const t0 = Math.max(dataA[0].t, tMin === -Infinity ? dataA[0].t : tMin);
+      const t1 = dataA[dataA.length - 1].t;
+      return [
+        [{ t: t0, v: lo }, { t: t1, v: lo }],
+        [{ t: t0, v: hi }, { t: t1, v: hi }],
+      ];
+    }
+    default:
+      return [];
+  }
+};
+
+const _derivedLabel = (d) => {
+  const nameA = d.sourceA ? `S${d.sourceA.split(':')[0]} · ${d.sourceA.split(':')[1]}` : '?';
+  const nameB = d.sourceB ? `S${d.sourceB.split(':')[0]} · ${d.sourceB.split(':')[1]}` : '';
+  switch (d.type) {
+    case 'delta': return `Δ(${nameA} − ${nameB})`;
+    case 'ratio': return `${nameA} / ${nameB}`;
+    case 'rolling_avg': return `Avg${d.window || 10}(${nameA})`;
+    case 'rate': return `d/dt(${nameA})`;
+    default: return '?';
+  }
+};
+
+const _derivedMinMaxLabels = (d) => {
+  const nameA = d.sourceA ? `S${d.sourceA.split(':')[0]} · ${d.sourceA.split(':')[1]}` : '?';
+  return [`Min(${nameA})`, `Max(${nameA})`];
+};
+
+const _nextDerivedId = (graph) => {
+  let max = 0;
+  for (const d of graph.derivedSeries || []) {
+    const m = d.id?.match(/^ds_(\d+)$/);
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return `ds_${max + 1}`;
+};
+
 const collectPlotSeries = (sid, cfg = null) => {
   const keys = [];
   for (const key of state.subjectHistory.keys()) {
@@ -225,6 +338,17 @@ const computePlotScales = (visible, w, totalPanelsH, compareSeries = [], cfg = n
     domainLeft = anchor - windowSecs;
   }
 
+  if (cfg && cfg._zoom && cfg._zoom !== 1) {
+    const span = domainRight - domainLeft;
+    const center = (domainLeft + domainRight) / 2 + (cfg._panOffset || 0);
+    const zoomedSpan = span / cfg._zoom;
+    domainLeft = center - zoomedSpan / 2;
+    domainRight = center + zoomedSpan / 2;
+  } else if (cfg && cfg._panOffset) {
+    domainLeft += cfg._panOffset;
+    domainRight += cfg._panOffset;
+  }
+
   const xScale = d3.scaleLinear()
     .domain([domainLeft, domainRight])
     .range([0, w]);
@@ -244,6 +368,30 @@ const computePlotScales = (visible, w, totalPanelsH, compareSeries = [], cfg = n
   });
 
   return { xScale, yScales, panelH };
+};
+
+const _estimateMaxHz = (cfg) => {
+  let keys;
+  if (cfg.series) {
+    keys = cfg.series.map(s => `${s.subjectId}:${s.attribute}`);
+  } else {
+    const sid = state.selectedPlotSubject;
+    if (sid == null) return 0;
+    keys = [];
+    for (const key of state.subjectHistory.keys()) {
+      if (key.startsWith(sid + ':')) keys.push(key);
+    }
+  }
+  let maxHz = 0;
+  for (const key of keys) {
+    const buf = state.subjectHistory.get(key);
+    if (!buf || buf.length < 3) continue;
+    const n = Math.min(20, buf.length);
+    const start = buf.length - n;
+    const dt = buf[buf.length - 1].t - buf[start].t;
+    if (dt > 0) maxHz = Math.max(maxHz, (n - 1) / dt);
+  }
+  return maxHz;
 };
 
 const buildPlotControls = (opts = {}) => {
@@ -284,7 +432,9 @@ const buildPlotControls = (opts = {}) => {
     btn.dataset.secs = tw.secs;
     btn.addEventListener('click', () => {
       cfg.timeWindow = tw.secs;
-      wrap.querySelectorAll('.plot-window-btn').forEach((b) =>
+      cfg._zoom = 1;
+      cfg._panOffset = 0;
+      (btn.parentElement || wrap).querySelectorAll('.plot-window-btn').forEach((b) =>
         b.classList.toggle('active', Number(b.dataset.secs) === tw.secs));
       invalidate();
       saveSettings();
@@ -297,22 +447,14 @@ const buildPlotControls = (opts = {}) => {
   sep.className = 'plot-controls-sep';
   wrap.appendChild(sep);
 
-  const smoothGroup = document.createElement('div');
-  smoothGroup.className = 'plot-slider-group';
-  const smoothLbl = document.createElement('span');
-  smoothLbl.className = 'plot-slider-label';
-  smoothLbl.textContent = 'Smooth';
-  smoothGroup.appendChild(smoothLbl);
-  const smoothSlider = document.createElement('input');
-  smoothSlider.type = 'range';
-  smoothSlider.className = 'plot-slider';
-  smoothSlider.min = '0';
-  smoothSlider.max = '30';
-  smoothSlider.step = '5';
-  smoothSlider.value = String(cfg.smooth);
-  smoothSlider.setAttribute('aria-label', 'Interpolation frequency (Hz)');
-  smoothSlider.addEventListener('input', () => {
-    cfg.smooth = Number(smoothSlider.value);
+  const fillLabel = document.createElement('label');
+  fillLabel.className = 'plot-check-label';
+  const fillCb = document.createElement('input');
+  fillCb.type = 'checkbox';
+  fillCb.checked = cfg.smooth > 0;
+  fillCb.setAttribute('aria-label', 'Fill rate interpolation');
+  fillCb.addEventListener('change', () => {
+    cfg.smooth = fillCb.checked ? 20 : 0;
     cfg._smoothBufs = null;
     cfg._rawCursors = null;
     cfg._activeInterps = null;
@@ -320,14 +462,34 @@ const buildPlotControls = (opts = {}) => {
     saveSettings();
     if (cfg.paused) rerender();
   });
-  smoothGroup.appendChild(smoothSlider);
-  const smoothInfo = document.createElement('span');
-  smoothInfo.className = 'plot-info-icon';
-  smoothInfo.textContent = '?';
-  smoothInfo.title = 'Feeds interpolated points between samples at the selected Hz rate — one sample period delay';
-  smoothInfo.setAttribute('aria-label', 'Feeds interpolated points between samples at the selected Hz rate — one sample period delay');
-  smoothGroup.appendChild(smoothInfo);
-  wrap.appendChild(smoothGroup);
+  fillLabel.appendChild(fillCb);
+  fillLabel.append(' Fill Rate');
+  const fillInfo = document.createElement('span');
+  fillInfo.className = 'plot-info-icon';
+  fillInfo.textContent = '?';
+  const fillTip = 'Interpolates to 20 Hz for slow signals — disabled when signal is already fast enough';
+  fillInfo.title = fillTip;
+  fillInfo.setAttribute('aria-label', fillTip);
+  cfg._updateFillRate = () => {
+    const now = Date.now();
+    if (cfg._lastFillCheck && now - cfg._lastFillCheck < 2000) return;
+    cfg._lastFillCheck = now;
+    const maxHz = _estimateMaxHz(cfg);
+    const tooFast = maxHz >= 20;
+    fillCb.disabled = tooFast;
+    if (tooFast && cfg.smooth > 0) {
+      cfg.smooth = 0;
+      fillCb.checked = false;
+      cfg._smoothBufs = null;
+      cfg._rawCursors = null;
+      cfg._activeInterps = null;
+      invalidate();
+      saveSettings();
+    }
+  };
+  cfg._updateFillRate();
+  wrap.appendChild(fillLabel);
+  wrap.appendChild(fillInfo);
 
   const sep2 = document.createElement('span');
   sep2.className = 'plot-controls-sep';
@@ -421,44 +583,6 @@ const _refreshCompareSubjects = (panel) => {
     sel.appendChild(opt);
   }
   if (prev && sel.querySelector(`option[value="${prev}"]`)) sel.value = prev;
-};
-
-const _updateComparePanelList = (panel, graph, onUpdate) => {
-  const list = panel.querySelector('.plot-compare-list');
-  if (!list) return;
-  list.innerHTML = '';
-  graph.series.forEach((item, i) => {
-    const div = document.createElement('div');
-    div.className = 'plot-compare-item';
-    const swatchColor = item.color || PLOT_COLORS[i % PLOT_COLORS.length];
-    const swatch = document.createElement('span');
-    swatch.className = 'plot-compare-swatch';
-    swatch.style.background = swatchColor;
-    swatch.style.cursor = 'pointer';
-    swatch.setAttribute('aria-label', 'Click to change color');
-    swatch.addEventListener('click', (e) => {
-      e.stopPropagation();
-      _openSwatchPicker(swatch, item.color || PLOT_COLORS[i % PLOT_COLORS.length], (newColor) => {
-        item.color = newColor;
-        onUpdate();
-      });
-    });
-    div.appendChild(swatch);
-    const name = document.createElement('span');
-    name.className = 'plot-compare-name';
-    name.textContent = `S${item.subjectId} · ${item.attribute}`;
-    div.appendChild(name);
-    const rm = document.createElement('button');
-    rm.className = 'plot-compare-remove';
-    rm.textContent = '×';
-    rm.setAttribute('aria-label', `Remove S${item.subjectId} ${item.attribute}`);
-    rm.addEventListener('click', () => {
-      graph.series.splice(i, 1);
-      onUpdate();
-    });
-    div.appendChild(rm);
-    list.appendChild(div);
-  });
 };
 
 const buildComparePanel = (graph, onUpdate) => {
@@ -565,9 +689,110 @@ const buildComparePanel = (graph, onUpdate) => {
   picker.appendChild(addBtn);
   panel.appendChild(picker);
 
-  const list = document.createElement('div');
-  list.className = 'plot-compare-list';
-  panel.appendChild(list);
+  const derivedSection = document.createElement('div');
+  derivedSection.className = 'plot-derived-section';
+  const derivedHdr = document.createElement('span');
+  derivedHdr.className = 'plot-threshold-hdr';
+  derivedHdr.textContent = 'Derived';
+  derivedSection.appendChild(derivedHdr);
+
+  const derivedPicker = document.createElement('div');
+  derivedPicker.className = 'plot-compare-picker';
+
+  const typeSel = document.createElement('select');
+  typeSel.className = 'plot-derived-type';
+  typeSel.setAttribute('aria-label', 'Derived series type');
+  for (const [key, info] of Object.entries(DERIVED_TYPES)) {
+    const opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = info.label;
+    typeSel.appendChild(opt);
+  }
+
+  const srcASel = document.createElement('select');
+  srcASel.className = 'plot-derived-source';
+  srcASel.setAttribute('aria-label', 'Source A');
+
+  const srcBSel = document.createElement('select');
+  srcBSel.className = 'plot-derived-source';
+  srcBSel.setAttribute('aria-label', 'Source B');
+
+  const windowInput = document.createElement('input');
+  windowInput.type = 'number';
+  windowInput.className = 'plot-threshold-input';
+  windowInput.placeholder = 'Window';
+  windowInput.value = '10';
+  windowInput.min = '2';
+  windowInput.max = '200';
+  windowInput.setAttribute('aria-label', 'Window size (samples)');
+
+  const _refreshDerivedSources = () => {
+    const buildOpts = (sel, label) => {
+      const prev = sel.value;
+      sel.innerHTML = '';
+      const def = document.createElement('option');
+      def.value = '';
+      def.textContent = label;
+      sel.appendChild(def);
+      for (const s of graph.series) {
+        const key = `${s.subjectId}:${s.attribute}`;
+        const opt = document.createElement('option');
+        opt.value = key;
+        opt.textContent = `S${s.subjectId} · ${s.attribute}`;
+        sel.appendChild(opt);
+      }
+      if (prev && sel.querySelector(`option[value="${prev}"]`)) sel.value = prev;
+    };
+    buildOpts(srcASel, 'Source A…');
+    buildOpts(srcBSel, 'Source B…');
+  };
+
+  const _updateDerivedVisibility = () => {
+    const info = DERIVED_TYPES[typeSel.value];
+    srcBSel.style.display = info?.sources === 2 ? '' : 'none';
+    windowInput.style.display = info?.hasWindow ? '' : 'none';
+  };
+
+  typeSel.addEventListener('change', _updateDerivedVisibility);
+
+  const derivedAddBtn = document.createElement('button');
+  derivedAddBtn.className = 'plot-compare-add';
+  derivedAddBtn.type = 'button';
+  derivedAddBtn.textContent = 'Add';
+  derivedAddBtn.setAttribute('aria-label', 'Add derived series');
+  derivedAddBtn.addEventListener('click', () => {
+    const type = typeSel.value;
+    const info = DERIVED_TYPES[type];
+    if (!info) return;
+    const srcA = srcASel.value;
+    if (!srcA) return;
+    if (info.sources === 2 && !srcBSel.value) return;
+    const srcB = info.sources === 2 ? srcBSel.value : '';
+    const win = info.hasWindow ? Math.max(2, parseInt(windowInput.value) || 10) : 0;
+    if (!graph.derivedSeries) graph.derivedSeries = [];
+    graph.derivedSeries.push({
+      id: _nextDerivedId(graph),
+      type,
+      sourceA: srcA,
+      sourceB: srcB,
+      window: win,
+      color: '',
+    });
+    onUpdate();
+  });
+
+  derivedPicker.appendChild(typeSel);
+  derivedPicker.appendChild(srcASel);
+  derivedPicker.appendChild(srcBSel);
+  derivedPicker.appendChild(windowInput);
+  derivedPicker.appendChild(derivedAddBtn);
+  derivedSection.appendChild(derivedPicker);
+
+  panel.appendChild(derivedSection);
+
+  panel._refreshDerivedSources = _refreshDerivedSources;
+  _refreshDerivedSources();
+  _updateDerivedVisibility();
 
   const thSection = document.createElement('div');
   thSection.className = 'plot-threshold-section';
@@ -587,22 +812,6 @@ const buildComparePanel = (graph, onUpdate) => {
   thNameInput.className = 'plot-threshold-name-input';
   thNameInput.placeholder = 'Label';
   thNameInput.setAttribute('aria-label', 'Threshold label');
-  const thColorInput = document.createElement('input');
-  thColorInput.type = 'color';
-  thColorInput.className = 'plot-threshold-color';
-  thColorInput.value = '#ef4444';
-  thColorInput.setAttribute('aria-label', 'Threshold color');
-
-  const thStyleSel = document.createElement('select');
-  thStyleSel.className = 'plot-threshold-style';
-  thStyleSel.setAttribute('aria-label', 'Threshold line style');
-  for (const s of ['dashed', 'solid', 'dotted']) {
-    const opt = document.createElement('option');
-    opt.value = s;
-    opt.textContent = s;
-    thStyleSel.appendChild(opt);
-  }
-
   const thAddBtn = document.createElement('button');
   thAddBtn.className = 'plot-compare-add';
   thAddBtn.type = 'button';
@@ -614,64 +823,20 @@ const buildComparePanel = (graph, onUpdate) => {
     graph.thresholds.push({
       value: val,
       label: thNameInput.value.trim() || String(val),
-      color: thColorInput.value,
-      style: thStyleSel.value,
+      color: '#ef4444',
+      style: 'dashed',
     });
     thInput.value = '';
     thNameInput.value = '';
     onUpdate();
-    _updateThresholdList(thList, graph, onUpdate);
   });
   thPicker.appendChild(thInput);
   thPicker.appendChild(thNameInput);
-  thPicker.appendChild(thColorInput);
-  thPicker.appendChild(thStyleSel);
   thPicker.appendChild(thAddBtn);
   thSection.appendChild(thPicker);
-  const thList = document.createElement('div');
-  thList.className = 'plot-threshold-list';
-  thSection.appendChild(thList);
   panel.appendChild(thSection);
 
   return panel;
-};
-
-const _updateThresholdList = (container, graph, onUpdate) => {
-  container.innerHTML = '';
-  for (let i = 0; i < graph.thresholds.length; i++) {
-    const th = graph.thresholds[i];
-    const row = document.createElement('div');
-    row.className = 'plot-threshold-item';
-    const line = document.createElement('span');
-    line.className = 'plot-threshold-line-preview';
-    line.style.borderColor = th.color || '#ef4444';
-    line.style.borderTopStyle = th.style || 'dashed';
-    line.style.cursor = 'pointer';
-    line.addEventListener('click', (e) => {
-      e.stopPropagation();
-      _openSwatchPicker(line, th.color || '#ef4444', (newColor) => {
-        th.color = newColor;
-        line.style.borderColor = newColor;
-        onUpdate();
-      });
-    });
-    row.appendChild(line);
-    const name = document.createElement('span');
-    name.className = 'plot-compare-name';
-    name.textContent = `${th.label || th.value} = ${th.value}`;
-    row.appendChild(name);
-    const rm = document.createElement('button');
-    rm.className = 'plot-compare-remove';
-    rm.textContent = '×';
-    rm.setAttribute('aria-label', `Remove threshold ${th.label || th.value}`);
-    rm.addEventListener('click', () => {
-      graph.thresholds.splice(i, 1);
-      onUpdate();
-      _updateThresholdList(container, graph, onUpdate);
-    });
-    row.appendChild(rm);
-    container.appendChild(row);
-  }
 };
 
 const setupPlotSvg = (plotArea, margin, opts = {}) => {
@@ -687,40 +852,108 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
   }
   const legendNode = document.createElement('div');
   legendNode.className = 'plot-legend';
+  const _legendCommit = () => {
+    if (opts.invalidate) opts.invalidate();
+    else _plotInvalidate();
+    saveSettings();
+    if (opts.restart) opts.restart();
+    else _plotRestart();
+  };
+  const _legendGetThreshold = (btn) => {
+    const ti = btn?.dataset.thresholdIdx;
+    if (ti != null && opts.cfg?.thresholds) return opts.cfg.thresholds[Number(ti)];
+    return null;
+  };
   legendNode.addEventListener('click', (e) => {
     const swatch = e.target.closest('.plot-legend-swatch');
     if (swatch) {
-      const btn = swatch.closest('button[data-series]');
+      const btn = swatch.closest('.plot-legend-item[data-series]');
       if (!btn) return;
       e.preventDefault();
+      e.stopPropagation();
       const seriesName = btn.dataset.series;
+      const th = _legendGetThreshold(btn);
       _openSwatchPicker(swatch, swatch.dataset.hex || '#58a6ff', (newColor) => {
         swatch.dataset.hex = newColor;
-        if (opts.cfg && opts.cfg.series) {
+        if (th) {
+          th.color = newColor;
+        } else if (opts.cfg && opts.cfg.series) {
           const idx = opts.cfg.series.findIndex(s =>
             `S${s.subjectId} · ${s.attribute}` === seriesName
           );
           if (idx >= 0) {
             opts.cfg.series[idx].color = newColor;
-            const card = plotArea.closest('.compare-graph-card');
-            if (card) {
-              const panelSwatches = card.querySelectorAll('.plot-compare-swatch');
-              if (panelSwatches[idx]) panelSwatches[idx].style.background = newColor;
-            }
+          } else if (opts.cfg.derivedSeries) {
+            const di = opts.cfg.derivedSeries.findIndex(d => {
+              if (d.type === 'min_max') {
+                const [minL, maxL] = _derivedMinMaxLabels(d);
+                return seriesName === minL || seriesName === maxL;
+              }
+              return _derivedLabel(d) === seriesName;
+            });
+            if (di >= 0) opts.cfg.derivedSeries[di].color = newColor;
           }
         } else {
           const sid = state.selectedPlotSubject;
           if (sid != null) state.plotColorOverrides[`${sid}:${seriesName}`] = newColor;
         }
-        if (opts.invalidate) opts.invalidate();
-        else _plotInvalidate();
-        saveSettings();
-        if (opts.restart) opts.restart();
-        else _plotRestart();
+        _legendCommit();
       });
       return;
     }
-    const btn = e.target.closest('button[data-series]');
+    const removeEl = e.target.closest('.plot-legend-remove');
+    if (removeEl) {
+      e.preventDefault();
+      e.stopPropagation();
+      const rbtn = removeEl.closest('.plot-legend-item[data-series]');
+      const ti = rbtn?.dataset.thresholdIdx;
+      if (ti != null && opts.cfg?.thresholds) {
+        opts.cfg.thresholds.splice(Number(ti), 1);
+        _legendCommit();
+        return;
+      }
+      const seriesName = rbtn?.dataset.series;
+      const did = rbtn?.dataset.derivedId;
+      let removed = false;
+      if (did && opts.cfg?.derivedSeries) {
+        const idx = opts.cfg.derivedSeries.findIndex(d => d.id === did);
+        if (idx >= 0) { opts.cfg.derivedSeries.splice(idx, 1); removed = true; }
+      } else if (seriesName && opts.cfg?.series) {
+        const idx = opts.cfg.series.findIndex(s => `S${s.subjectId} · ${s.attribute}` === seriesName);
+        if (idx >= 0) { opts.cfg.series.splice(idx, 1); removed = true; }
+        const card = plotArea.closest('.compare-graph-card');
+        const panel = card?.querySelector('.plot-compare-panel');
+        if (panel?._refreshDerivedSources) panel._refreshDerivedSources();
+      }
+      if (removed) _legendCommit();
+      return;
+    }
+    const styleEl = e.target.closest('.plot-legend-style');
+    if (styleEl) {
+      e.preventDefault();
+      e.stopPropagation();
+      const sbtn = styleEl.closest('.plot-legend-item[data-series]');
+      const styles = LINE_STYLES;
+      const th = _legendGetThreshold(sbtn);
+      if (th) {
+        th.style = styles[(styles.indexOf(th.style || 'dashed') + 1) % styles.length];
+        _legendCommit();
+        return;
+      }
+      const seriesName = sbtn?.dataset.series;
+      const did = sbtn?.dataset.derivedId;
+      let changed = false;
+      if (did && opts.cfg?.derivedSeries) {
+        const d = opts.cfg.derivedSeries.find(d => d.id === did);
+        if (d) { d.lineStyle = styles[(styles.indexOf(d.lineStyle || 'solid') + 1) % styles.length]; changed = true; }
+      } else if (seriesName && opts.cfg?.series) {
+        const s = opts.cfg.series.find(s => `S${s.subjectId} · ${s.attribute}` === seriesName);
+        if (s) { s.lineStyle = styles[(styles.indexOf(s.lineStyle || 'solid') + 1) % styles.length]; changed = true; }
+      }
+      if (changed) _legendCommit();
+      return;
+    }
+    const btn = e.target.closest('.plot-legend-item[data-series]');
     if (!btn) return;
     let hiddenSet;
     if (opts.cfg && opts.cfg._hidden) {
@@ -781,7 +1014,14 @@ const _renderGrid = (container, xScale, yScale, w, h) => {
   }
 };
 
-const THRESHOLD_STYLES = { solid: 'none', dashed: '6 3', dotted: '2 3' };
+const THRESHOLD_STYLES = { solid: 'none', dashed: '6 3', dotted: '2 3', dashdot: '6 3 2 3', longdash: '12 4' };
+const MARKER_SHAPES = {
+  circle: (x, y, r) => `M${x - r},${y}a${r},${r} 0 1,0 ${r * 2},0a${r},${r} 0 1,0 -${r * 2},0`,
+  square: (x, y, r) => `M${x - r},${y - r}h${r * 2}v${r * 2}h-${r * 2}Z`,
+  triangle: (x, y, r) => `M${x},${y - r}L${x + r},${y + r}L${x - r},${y + r}Z`,
+  diamond: (x, y, r) => `M${x},${y - r}L${x + r},${y}L${x},${y + r}L${x - r},${y}Z`,
+};
+const LINE_STYLES = ['solid', 'dashed', 'dotted', 'dashdot', 'longdash', 'circle', 'square', 'triangle', 'diamond'];
 
 const _renderThresholds = (container, thresholds, yScale, w) => {
   let thG = container.select('.plot-thresholds');
@@ -927,34 +1167,60 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
     .merge(lines)
     .attr('stroke', (d, i) => d.color || PLOT_COLORS[(primaryCount + i) % PLOT_COLORS.length])
     .attr('stroke-width', strokeW)
+    .attr('stroke-dasharray', (d) => {
+      const st = d._lineStyle || 'solid';
+      if (MARKER_SHAPES[st]) return null;
+      return THRESHOLD_STYLES[st] || null;
+    })
     .attr('d', (d) => showLine && d.data.length >= 2 ? lineGen(d.data) : null)
     .attr('opacity', (d) => showLine && d.data.length >= 2 ? 1 : 0);
   lines.exit().remove();
 
-  if (showDots) {
-    compareSeries.forEach((s, i) => {
-      const color = s.color || PLOT_COLORS[(primaryCount + i) % PLOT_COLORS.length];
-      const safeN = _safeId(s.name);
-      let dotsG = overlay.select(`.compare-dots-${safeN}`);
-      if (dotsG.empty()) {
-        dotsG = overlay.append('g').attr('class', `compare-dots-${safeN}`)
-          .attr('clip-path', 'url(#compare-panel-clip)');
-      }
-      const vis = s.data.filter((p) => xScale(p.t) >= 0 && xScale(p.t) <= w);
-      const maxDots = 600;
-      const step = vis.length > maxDots ? Math.ceil(vis.length / maxDots) : 1;
-      const sampled = step > 1 ? vis.filter((_, j) => j % step === 0) : vis;
-      const dots = dotsG.selectAll('circle').data(sampled, (p) => p.t);
+  const markerR = Math.max(2, strokeW);
+  const maxMarkers = 200;
+  compareSeries.forEach((s, i) => {
+    const color = s.color || PLOT_COLORS[(primaryCount + i) % PLOT_COLORS.length];
+    const safeN = _safeId(s.name);
+    const shape = MARKER_SHAPES[s._lineStyle];
+    const needMarkers = showLine && shape;
+    const needDots = showDots && !shape;
+    const cls = `compare-markers-${safeN}`;
+    let mG = overlay.select(`.${cls}`);
+    if (!needMarkers && !needDots) {
+      if (!mG.empty()) mG.remove();
+      return;
+    }
+    if (mG.empty()) {
+      mG = overlay.append('g').attr('class', cls)
+        .attr('clip-path', 'url(#compare-panel-clip)');
+    }
+    const vis = s.data.filter((p) => !p._gap && xScale(p.t) >= 0 && xScale(p.t) <= w);
+    const step = vis.length > maxMarkers ? Math.ceil(vis.length / maxMarkers) : 1;
+    const sampled = step > 1 ? vis.filter((_, j) => j % step === 0) : vis;
+    if (needMarkers) {
+      mG.selectAll('circle').remove();
+      const paths = mG.selectAll('path').data(sampled, (p) => p.t);
+      paths.enter().append('path')
+        .merge(paths)
+        .attr('d', (p) => shape(xScale(p.t), yScale(p.v), markerR))
+        .attr('fill', color)
+        .attr('stroke', 'none');
+      paths.exit().remove();
+    } else {
+      mG.selectAll('path').remove();
+      const dots = mG.selectAll('circle').data(sampled, (p) => p.t);
       dots.enter().append('circle').attr('fill', color)
         .merge(dots)
         .attr('r', strokeW)
         .attr('cx', (p) => xScale(p.t))
         .attr('cy', (p) => yScale(p.v));
       dots.exit().remove();
-    });
-  } else {
-    overlay.selectAll('[class^="compare-dots"]').remove();
-  }
+    }
+  });
+  const activeMarkerClasses = new Set(compareSeries.map(s => `compare-markers-${_safeId(s.name)}`));
+  overlay.selectAll('[class^="compare-markers-"]').each(function () {
+    if (!activeMarkerClasses.has(this.getAttribute('class'))) d3.select(this).remove();
+  });
 
   let label = overlay.select('.compare-panel-label');
   if (label.empty()) {
@@ -963,8 +1229,9 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
   label.text('Compare').attr('fill', 'var(--muted)');
 };
 
-const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect) => {
+const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = null, restart = null) => {
   plotArea._plotCtx = { visible, xScale, w };
+  if (restart) plotArea._zoomRestart = restart;
   const tooltipEl = plotArea.querySelector('.plot-tooltip');
   const overlay = g.select('.plot-overlay');
   const crosshair = g.select('.plot-crosshair');
@@ -1072,24 +1339,93 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect) => {
       }
     });
   }
+
+  if (cfg && svgEl && !svgEl._zoomBound) {
+    svgEl._zoomBound = true;
+    svgEl.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const [mx] = d3.pointer(e, overlay.node());
+      const ctx = plotArea._plotCtx || {};
+      const curXScale = ctx.xScale || xScale;
+      const curW = ctx.w || w;
+      const tAtCursor = curXScale.invert(mx);
+      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      const oldZoom = cfg._zoom || 1;
+      cfg._zoom = Math.max(0.1, Math.min(100, oldZoom * factor));
+      const domain = curXScale.domain();
+      const span = domain[1] - domain[0];
+      const newSpan = span * oldZoom / cfg._zoom;
+      const ratio = mx / curW;
+      const newLeft = tAtCursor - newSpan * ratio;
+      const newCenter = newLeft + newSpan / 2;
+      const baseCenter = (domain[1] + domain[0]) / 2 - (cfg._panOffset || 0);
+      cfg._panOffset = newCenter - baseCenter;
+      cfg._fingerprint = '';
+      if (plotArea._zoomRestart) plotArea._zoomRestart();
+    }, { passive: false });
+
+    let dragStart = null;
+    let dragPanStart = 0;
+    svgEl.addEventListener('mousedown', (e) => {
+      if (e.button !== 0 || (cfg._zoom || 1) <= 1) return;
+      dragStart = e.clientX;
+      dragPanStart = cfg._panOffset || 0;
+      svgEl.style.cursor = 'grabbing';
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (dragStart === null) return;
+      const ctx = plotArea._plotCtx || {};
+      const curXScale = ctx.xScale || xScale;
+      const domain = curXScale.domain();
+      const pxPerSec = (ctx.w || w) / (domain[1] - domain[0]);
+      const dx = e.clientX - dragStart;
+      cfg._panOffset = dragPanStart - dx / pxPerSec;
+      cfg._fingerprint = '';
+      if (plotArea._zoomRestart) plotArea._zoomRestart();
+    });
+    window.addEventListener('mouseup', () => {
+      if (dragStart === null) return;
+      dragStart = null;
+      svgEl.style.cursor = '';
+    });
+
+    svgEl.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      cfg._zoom = 1;
+      cfg._panOffset = 0;
+      cfg._fingerprint = '';
+      if (plotArea._zoomRestart) plotArea._zoomRestart();
+    });
+  }
 };
 
 const updatePlotLegend = (plotArea, allSeries, hidden) => {
   const legend = plotArea.querySelector('.plot-legend');
   if (!legend) return;
-  const seriesKey = allSeries.map((s) => `${s.name}:${s.color || ''}`).join('|');
+  const isCompare = !!plotArea.closest('.compare-graph-card');
+  const seriesKey = allSeries.map((s) => `${s.name}:${s.color || ''}:${s._lineStyle || ''}:${s._derivedId || ''}:${s._thresholdIdx ?? ''}`).join('|');
   if (legend.dataset.seriesKey !== seriesKey) {
     legend.dataset.seriesKey = seriesKey;
     legend.innerHTML = allSeries.map((s, i) => {
       const isActive = !hidden.has(s.name);
       const color = s.color || PLOT_COLORS[i % PLOT_COLORS.length];
-      return `<button type="button" class="plot-legend-item${isActive ? ' active' : ''}" data-series="${escapeHtml(s.name)}" aria-pressed="${isActive}"><span class="plot-legend-swatch" style="background:${_safeColor(color)}" data-hex="${escapeHtml(color)}"></span>${escapeHtml(s.name)}</button>`;
+      const derivedAttr = s._derivedId ? ` data-derived-id="${escapeHtml(s._derivedId)}"` : '';
+      const threshAttr = s._threshold ? ` data-threshold-idx="${s._thresholdIdx}"` : '';
+      let styleHtml = '';
+      let removeHtml = '';
+      if (s._derived || s._threshold || isCompare) {
+        const st = s._lineStyle || 'solid';
+        styleHtml = `<span class="plot-legend-style" data-style="${st}" title="Click to change line style"></span>`;
+        removeHtml = `<span class="plot-legend-remove" aria-label="Remove series">×</span>`;
+      }
+      const cls = s._derived ? ' plot-legend-derived' : s._threshold ? ' plot-legend-threshold' : '';
+      return `<div class="plot-legend-item${isActive ? ' active' : ''}${cls}" data-series="${escapeHtml(s.name)}"${derivedAttr}${threshAttr} aria-pressed="${isActive}"><span class="plot-legend-swatch" style="background:${_safeColor(color)}" data-hex="${escapeHtml(color)}"></span>${styleHtml}<span class="plot-legend-label">${escapeHtml(s.name)}</span>${removeHtml}</div>`;
     }).join('');
   } else {
-    for (const btn of legend.querySelectorAll('button[data-series]')) {
-      const isActive = !hidden.has(btn.dataset.series);
-      btn.classList.toggle('active', isActive);
-      btn.setAttribute('aria-pressed', String(isActive));
+    for (const item of legend.querySelectorAll('.plot-legend-item[data-series]')) {
+      const isActive = !hidden.has(item.dataset.series);
+      item.classList.toggle('active', isActive);
+      item.setAttribute('aria-pressed', String(isActive));
     }
   }
 };
@@ -1103,6 +1439,7 @@ const _plotRestart = () => { startPlotAnim(); };
 const renderPlot = (container) => {
   const plotArea = container.querySelector('.detail-plot-area');
   if (!plotArea) return;
+  _subjectsPlotCfg._updateFillRate?.();
 
   const sid = state.selectedPlotSubject;
   if (sid == null) {

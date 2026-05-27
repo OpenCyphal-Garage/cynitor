@@ -15,6 +15,7 @@ const _newGraph = (preset = null) => ({
   name: preset?.name || '',
   series: preset?.series ? preset.series.map(s => ({ ...s })) : [],
   thresholds: preset?.thresholds ? preset.thresholds.map(t => ({ ...t })) : [],
+  derivedSeries: preset?.derivedSeries ? preset.derivedSeries.map(d => ({ ...d })) : [],
   paused: false,
   pausedAt: null,
   timeWindow: 60,
@@ -25,6 +26,8 @@ const _newGraph = (preset = null) => ({
   _timer: null,
   _fingerprint: '',
   _hidden: new Set(),
+  _zoom: 1,
+  _panOffset: 0,
 });
 
 const initCompareView = () => {
@@ -102,7 +105,7 @@ const initCompareView = () => {
   const savedBtn = document.createElement('button');
   savedBtn.className = 'compare-saved-btn';
   savedBtn.type = 'button';
-  savedBtn.textContent = 'Saved ▾';
+  savedBtn.textContent = 'Presets ▾';
   savedBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     _refreshSavedMenu(savedMenu, cardsContainer);
@@ -114,15 +117,20 @@ const initCompareView = () => {
   savedWrap.appendChild(savedMenu);
   toolbar.appendChild(savedWrap);
 
+  const sep = document.createElement('div');
+  sep.className = 'compare-toolbar-sep';
+  toolbar.appendChild(sep);
+
   const exportBtn = document.createElement('button');
   exportBtn.className = 'compare-add-btn';
   exportBtn.type = 'button';
-  exportBtn.textContent = 'Export';
-  exportBtn.setAttribute('aria-label', 'Export compare session');
+  exportBtn.textContent = 'Export Workspace';
+  exportBtn.setAttribute('aria-label', 'Export all graphs to file');
   exportBtn.addEventListener('click', () => {
     const data = {
       graphs: state.compareGraphs.map(g => ({
         name: g.name, series: g.series, thresholds: g.thresholds || [],
+        derivedSeries: g.derivedSeries || [],
         timeWindow: g.timeWindow, smooth: g.smooth, stroke: g.stroke,
         disconnectPoints: g.disconnectPoints, grid: g.grid,
       })),
@@ -142,8 +150,8 @@ const initCompareView = () => {
   const importBtn = document.createElement('button');
   importBtn.className = 'compare-add-btn';
   importBtn.type = 'button';
-  importBtn.textContent = 'Import';
-  importBtn.setAttribute('aria-label', 'Import compare session');
+  importBtn.textContent = 'Import Workspace';
+  importBtn.setAttribute('aria-label', 'Import graphs from file');
   importBtn.addEventListener('click', () => {
     const input = document.createElement('input');
     input.type = 'file';
@@ -220,7 +228,7 @@ const _refreshSavedMenu = (menu, cardsContainer) => {
     item.className = 'compare-saved-item';
     const nameSpan = document.createElement('span');
     nameSpan.className = 'compare-saved-name';
-    nameSpan.textContent = `${config.name || 'Untitled'} (${config.series.length})`;
+    nameSpan.textContent = config.name || 'Untitled';
     nameSpan.addEventListener('click', () => {
       menu.classList.add('hidden');
       const graph = _newGraph(config);
@@ -251,9 +259,21 @@ const _buildGraphCard = (graph) => {
   card.className = 'compare-graph-card';
   card.dataset.graphId = graph.id;
 
-  // Zone 1: Header — name, save, delete
-  const header = document.createElement('div');
-  header.className = 'compare-graph-header';
+  const plotArea = document.createElement('div');
+  plotArea.className = 'detail-plot-area';
+
+  const onUpdate = () => {
+    graph._fingerprint = '';
+    saveSettings();
+    if (panel._refreshDerivedSources) panel._refreshDerivedSources();
+    _renderCompareGraphNow(graph, plotArea);
+  };
+
+  // Zone 1: Series panel + card actions (name, save, clone, delete)
+  const panel = buildComparePanel(graph, onUpdate);
+
+  const cardActions = document.createElement('div');
+  cardActions.className = 'compare-card-actions';
 
   const nameInput = document.createElement('input');
   nameInput.type = 'text';
@@ -264,7 +284,7 @@ const _buildGraphCard = (graph) => {
     graph.name = nameInput.value;
     saveSettings();
   });
-  header.appendChild(nameInput);
+  cardActions.appendChild(nameInput);
 
   const saveBtn = document.createElement('button');
   saveBtn.className = 'compare-graph-save';
@@ -273,14 +293,18 @@ const _buildGraphCard = (graph) => {
   saveBtn.setAttribute('aria-label', 'Save configuration');
   saveBtn.addEventListener('click', () => {
     const name = graph.name.trim() || 'Untitled';
-    const config = { name, series: graph.series.map(s => ({ ...s })) };
+    const config = {
+      name,
+      series: graph.series.map(s => ({ ...s })),
+      derivedSeries: (graph.derivedSeries || []).map(d => ({ ...d })),
+    };
     const existing = state.savedCompareConfigs.findIndex(c => c.name === name);
     if (existing !== -1) state.savedCompareConfigs[existing] = config;
     else state.savedCompareConfigs.push(config);
     saveSettings();
     showToast(`Saved "${name}"`, 'info', 2000);
   });
-  header.appendChild(saveBtn);
+  cardActions.appendChild(saveBtn);
 
   const cloneBtn = document.createElement('button');
   cloneBtn.className = 'compare-graph-clone';
@@ -291,6 +315,7 @@ const _buildGraphCard = (graph) => {
     const clone = _newGraph({
       name: graph.name ? `${graph.name} (copy)` : '',
       series: graph.series,
+      derivedSeries: graph.derivedSeries,
     });
     clone.timeWindow = graph.timeWindow;
     clone.smooth = graph.smooth;
@@ -304,7 +329,7 @@ const _buildGraphCard = (graph) => {
     card.parentElement.appendChild(cloneCard);
     _renderOneGraph(clone);
   });
-  header.appendChild(cloneBtn);
+  cardActions.appendChild(cloneBtn);
 
   const deleteBtn = document.createElement('button');
   deleteBtn.className = 'compare-graph-delete';
@@ -318,27 +343,12 @@ const _buildGraphCard = (graph) => {
     saveSettings();
     card.remove();
   });
-  header.appendChild(deleteBtn);
-  card.appendChild(header);
+  cardActions.appendChild(deleteBtn);
 
-  const plotArea = document.createElement('div');
-  plotArea.className = 'detail-plot-area';
-
-  const onUpdate = () => {
-    graph._fingerprint = '';
-    saveSettings();
-    _updateComparePanelList(panel, graph, onUpdate);
-    _renderCompareGraphNow(graph, plotArea);
-  };
-
-  // Zone 2: Series — what data am I comparing
-  const panel = buildComparePanel(graph, onUpdate);
+  panel.appendChild(cardActions);
   card.appendChild(panel);
 
   _refreshCompareSubjects(panel);
-  _updateComparePanelList(panel, graph, onUpdate);
-  const thList = panel.querySelector('.plot-threshold-list');
-  if (thList) _updateThresholdList(thList, graph, onUpdate);
 
   // Zone 3 + 4: Time controls + visual tuning (split from buildPlotControls)
   const opts = {
@@ -373,6 +383,7 @@ const _buildGraphCard = (graph) => {
 
 const _renderCompareGraphNow = (graph, plotArea) => {
   if (!plotArea) return;
+  graph._updateFillRate?.();
 
   const seriesKeys = graph.series.map(cmp => `${cmp.subjectId}:${cmp.attribute}`);
   _processSmooth(graph, seriesKeys);
@@ -388,7 +399,35 @@ const _renderCompareGraphNow = (graph, plotArea) => {
         name: `S${cmp.subjectId} · ${cmp.attribute}`,
         data: buf,
         color: cmp.color || PLOT_COLORS[compareSeries.length % PLOT_COLORS.length],
+        _lineStyle: cmp.lineStyle || 'solid',
       });
+    }
+  }
+
+  if (graph.derivedSeries?.length) {
+    const _getRawData = (key) => key ? state.subjectHistory.get(key) : null;
+    for (let di = 0; di < graph.derivedSeries.length; di++) {
+      const d = graph.derivedSeries[di];
+      const dataA = _getRawData(d.sourceA);
+      const dataB = _getRawData(d.sourceB);
+      if (!dataA || dataA.length < 2) continue;
+      if (DERIVED_TYPES[d.type]?.sources === 2 && (!dataB || dataB.length < 2)) continue;
+      const win = d.type === 'min_max' ? (graph.timeWindow || 0) : d.window;
+      const outputs = _computeDerived(d.type, dataA, dataB, win);
+      const baseColor = d.color || PLOT_COLORS[(graph.series.length + di) % PLOT_COLORS.length];
+      const style = d.lineStyle || 'dashed';
+      if (d.type === 'min_max' && outputs.length === 2) {
+        const [minLabel, maxLabel] = _derivedMinMaxLabels(d);
+        if (outputs[0].length >= 2) {
+          compareSeries.push({ name: minLabel, data: outputs[0], color: baseColor, _derived: true, _derivedId: d.id, _lineStyle: style });
+        }
+        if (outputs[1].length >= 2) {
+          compareSeries.push({ name: maxLabel, data: outputs[1], color: baseColor, _derived: true, _derivedId: d.id, _lineStyle: style });
+        }
+      } else if (outputs[0]?.length >= 2) {
+        _tagGaps(outputs[0]);
+        compareSeries.push({ name: _derivedLabel(d), data: outputs[0], color: baseColor, _derived: true, _derivedId: d.id, _lineStyle: style });
+      }
     }
   }
 
@@ -403,8 +442,9 @@ const _renderCompareGraphNow = (graph, plotArea) => {
 
   const lastPts = compareSeries.map(s => s.data.length ? s.data[s.data.length - 1].t : 0);
   const hiddenKey = [...graph._hidden].sort().join(',');
-  const thKey = (graph.thresholds || []).map(t => `${t.value}:${t.label || ''}`).join(';');
-  const fp = `cg:${graph.id}:${compareSeries.length}:${lastPts.join(',')}:w${graph.timeWindow}:p${graph.paused ? graph.pausedAt : 0}:s${graph.smooth}:d${graph.disconnectPoints}:k${graph.stroke}:g${graph.grid}:t${thKey}:h${hiddenKey}`;
+  const thKey = (graph.thresholds || []).map(t => `${t.value}:${t.label || ''}:${t.color || ''}:${t.style || ''}`).join(';');
+  const styleKey = compareSeries.map(s => s._lineStyle || '').join(',');
+  const fp = `cg:${graph.id}:${compareSeries.length}:${lastPts.join(',')}:w${graph.timeWindow}:p${graph.paused ? graph.pausedAt : 0}:s${graph.smooth}:d${graph.disconnectPoints}:k${graph.stroke}:g${graph.grid}:t${thKey}:h${hiddenKey}:ls${styleKey}:z${graph._zoom || 1}:pan${graph._panOffset || 0}`;
   const rect = plotArea.getBoundingClientRect();
   const sizeKey = `${Math.round(rect.width)}x${Math.round(rect.height)}`;
   const fullFp = `${fp}:${sizeKey}`;
@@ -448,8 +488,21 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   g.select('.plot-overlay').attr('width', w).attr('height', totalPanelsH);
   g.select('.plot-crosshair').attr('y1', 0).attr('y2', totalPanelsH);
 
-  bindPlotTooltip(g, plotArea, visibleSeries, xScale, w, HEADER_H, rect);
-  updatePlotLegend(plotArea, compareSeries, graph._hidden);
+  bindPlotTooltip(g, plotArea, visibleSeries, xScale, w, HEADER_H, rect, graph, () => _renderOneGraph(graph));
+  const legendSeries = [...compareSeries];
+  if (graph.thresholds?.length) {
+    for (let i = 0; i < graph.thresholds.length; i++) {
+      const th = graph.thresholds[i];
+      legendSeries.push({
+        name: `${th.label || th.value}`,
+        color: th.color || '#ef4444',
+        _threshold: true,
+        _thresholdIdx: i,
+        _lineStyle: th.style || 'dashed',
+      });
+    }
+  }
+  updatePlotLegend(plotArea, legendSeries, graph._hidden);
 };
 
 let _compareAnimTimer = null;
