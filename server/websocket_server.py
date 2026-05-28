@@ -41,11 +41,13 @@ class WebSocketServer:
         host: str = "0.0.0.0",
         port: int = 8080,
         log_store: Optional[Any] = None,
+        dsdl_manager: Optional[Any] = None,
     ) -> None:
         self.session = session
         self.host = host
         self.port = port
         self.log_store = log_store
+        self.dsdl_manager = dsdl_manager
 
         # Client management
         self.clients: Set[web.WebSocketResponse] = set()
@@ -96,6 +98,10 @@ class WebSocketServer:
         self.app.router.add_delete('/api/identity/{unique_id}', self._delete_identity)
         self.app.router.add_post('/api/can/connect', self._can_connect)
         self.app.router.add_post('/api/can/disconnect', self._can_disconnect)
+
+        self.app.router.add_get('/api/dsdl/status', self._dsdl_status)
+        self.app.router.add_get('/api/dsdl/namespaces', self._dsdl_namespaces)
+        self.app.router.add_get('/api/dsdl/type/{full_name:.+}', self._dsdl_type_detail)
 
     async def start(self) -> None:
         """Start the WebSocket server."""
@@ -733,3 +739,28 @@ class WebSocketServer:
         except Exception as e:
             logger.error(f"Error in GET /api/nodes: {e}", exc_info=True)
             return web.json_response({"error": str(e)}, status=500)
+
+    # ------------------------------------------------------------------
+    # DSDL introspection
+    # ------------------------------------------------------------------
+
+    async def _dsdl_status(self, request: web.Request) -> web.Response:
+        if not self.dsdl_manager:
+            return web.json_response({"error": "DSDL manager not available"}, status=503)
+        data = await asyncio.to_thread(self.dsdl_manager.get_status)
+        return web.json_response(data)
+
+    async def _dsdl_namespaces(self, request: web.Request) -> web.Response:
+        if not self.dsdl_manager:
+            return web.json_response({"error": "DSDL manager not available"}, status=503)
+        data = await asyncio.to_thread(self.dsdl_manager.get_namespaces)
+        return web.json_response(data)
+
+    async def _dsdl_type_detail(self, request: web.Request) -> web.Response:
+        if not self.dsdl_manager:
+            return web.json_response({"error": "DSDL manager not available"}, status=503)
+        full_name = request.match_info["full_name"]
+        data = await asyncio.to_thread(self.dsdl_manager.get_type_detail, full_name)
+        if data is None:
+            return web.json_response({"error": f"Type not found: {full_name}"}, status=404)
+        return web.json_response(data)

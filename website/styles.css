@@ -3919,3 +3919,581 @@ details.svc-history-entry[open] > summary::before {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ── DSDL View ── */
+
+#dsdlContainer {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dsdl-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.dsdl-split {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Tree panel ── */
+
+.dsdl-tree-panel {
+  width: 17rem;
+  min-width: 11rem;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-2);
+}
+
+.dsdl-split-handle {
+  width: 0.25rem;
+  cursor: col-resize;
+  background: var(--border);
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.dsdl-split-handle:hover,
+.dsdl-split-handle.dragging {
+  background: var(--accent);
+}
+
+.dsdl-tree-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.625rem 0.75rem;
+  font-size: 0.6875rem;
+  border-bottom: 0.0625rem solid var(--border);
+}
+
+.dsdl-tree-count {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dsdl-tree-status {
+  display: flex;
+  align-items: center;
+  gap: 0.3125rem;
+  color: var(--muted);
+}
+
+.dsdl-dot {
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dsdl-dot-ok   { background: var(--ok); }
+.dsdl-dot-warn { background: var(--warn); }
+
+.dsdl-search-wrap {
+  padding: 0.5rem 0.625rem;
+}
+
+.dsdl-search {
+  width: 100%;
+  padding: 0.4375rem 0.625rem;
+  border: 0.0625rem solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+
+.dsdl-search:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 0.125rem var(--accent-muted);
+}
+
+.dsdl-tree {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.375rem 0;
+}
+
+.dsdl-tree-empty {
+  padding: 2rem 1rem;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+/* ── Tree nodes ── */
+
+.dsdl-ns-row {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.625rem;
+  cursor: pointer;
+  user-select: none;
+  border-radius: var(--radius);
+  margin: 0 0.375rem;
+}
+
+.dsdl-ns-row:hover {
+  background: var(--surface-hover);
+}
+
+.dsdl-ns-label {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dsdl-chev {
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.dsdl-chev.open {
+  transform: rotate(90deg);
+}
+
+.dsdl-chev-spacer {
+  width: 0.625rem;
+  flex-shrink: 0;
+}
+
+.dsdl-type-row {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.3125rem 0.625rem;
+  margin: 0.0625rem 0.375rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--text);
+  transition: background 0.1s;
+  position: relative;
+}
+
+.dsdl-type-row:hover {
+  background: var(--surface-hover);
+}
+
+.dsdl-type-row.dsdl-type-selected {
+  background: var(--accent-muted);
+  box-shadow: inset 0.1875rem 0 0 var(--accent);
+}
+
+.dsdl-kind {
+  font-size: 0.5625rem;
+  font-weight: 700;
+  font-family: var(--mono);
+  padding: 0.0625rem 0.3125rem;
+  border-radius: 0.1875rem;
+  text-transform: uppercase;
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+}
+
+.dsdl-kind-message {
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
+.dsdl-kind-service {
+  background: var(--ok-muted);
+  color: var(--ok);
+}
+
+.dsdl-type-name {
+  font-family: var(--mono);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.dsdl-type-ver {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+}
+
+.dsdl-port-id {
+  font-size: 0.625rem;
+  font-family: var(--mono);
+  color: var(--muted);
+  margin-left: auto;
+  opacity: 0.7;
+}
+
+/* ── Detail panel ── */
+
+.dsdl-detail-panel {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--bg);
+  min-width: 0;
+}
+
+.dsdl-detail-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 0.75rem;
+  color: var(--muted);
+}
+
+.dsdl-detail-placeholder-icon {
+  font-family: var(--mono);
+  font-size: 2.5rem;
+  font-weight: 300;
+  opacity: 0.25;
+}
+
+.dsdl-detail-placeholder-text {
+  font-size: 0.875rem;
+}
+
+/* ── Document layout ── */
+
+.dsdl-doc {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.dsdl-doc-head {
+  padding: 1.25rem 1.5rem 1rem;
+  background: var(--surface);
+  border-bottom: 0.0625rem solid var(--border);
+}
+
+.dsdl-doc-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.625rem;
+  margin-bottom: 0.625rem;
+}
+
+.dsdl-doc-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--text-bright);
+  line-height: 1.3;
+}
+
+.dsdl-doc-ns {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.dsdl-doc-ver {
+  font-size: 0.8125rem;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-weight: 400;
+}
+
+/* ── Badge row ── */
+
+.dsdl-badge-row {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+}
+
+.dsdl-badge {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  font-family: var(--mono);
+  padding: 0.125rem 0.5rem;
+  border-radius: 1rem;
+  line-height: 1.4;
+}
+
+.dsdl-badge-message {
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
+.dsdl-badge-service {
+  background: var(--ok-muted);
+  color: var(--ok);
+}
+
+.dsdl-badge-regulated {
+  background: var(--surface-2);
+  color: var(--muted);
+  border: 0.0625rem solid var(--border);
+}
+
+.dsdl-badge-custom {
+  background: var(--warn-muted);
+  color: var(--warn);
+}
+
+.dsdl-badge-ok {
+  background: var(--ok-muted);
+  color: var(--ok);
+}
+
+.dsdl-badge-warn {
+  background: var(--warn-muted);
+  color: var(--warn);
+}
+
+.dsdl-badge-port {
+  background: var(--surface-3);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ── Document body ── */
+
+.dsdl-doc-body {
+  padding: 1.25rem 1.5rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* ── Cards ── */
+
+.dsdl-card {
+  background: var(--surface);
+  border: 0.0625rem solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.dsdl-card-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  padding: 0.5rem 0.875rem 0.375rem;
+  border-bottom: 0.0625rem solid var(--border-subtle);
+  background: var(--surface-2);
+}
+
+/* ── Field table ── */
+
+.dsdl-ftable {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+.dsdl-frow {
+  border-bottom: 0.0625rem solid var(--border-subtle);
+}
+
+.dsdl-frow:last-child {
+  border-bottom: none;
+}
+
+.dsdl-frow:hover {
+  background: var(--surface-hover);
+}
+
+.dsdl-fcol-type {
+  padding: 0.375rem 0.875rem;
+  color: var(--accent);
+  white-space: nowrap;
+  width: 40%;
+  max-width: 16rem;
+}
+
+.dsdl-fcol-name {
+  padding: 0.375rem 0.875rem;
+  color: var(--text-bright);
+  font-weight: 500;
+}
+
+.dsdl-fcol-val {
+  padding: 0.375rem 0.875rem;
+  color: var(--warn);
+}
+
+.dsdl-const-eq {
+  color: var(--muted);
+  margin-right: 0.25rem;
+}
+
+.dsdl-field-empty {
+  padding: 1rem;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-style: italic;
+}
+
+/* ── Dependencies inline ── */
+
+.dsdl-inline-section {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.dsdl-inline-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.dsdl-dep-chip {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--accent);
+  background: var(--accent-muted);
+  padding: 0.1875rem 0.5rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+
+.dsdl-dep-chip:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* ── Source card ── */
+
+.dsdl-card-source {
+  flex: 1;
+}
+
+.dsdl-src {
+  margin: 0;
+  padding: 0.75rem 0;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  line-height: 1.65;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--text);
+  counter-reset: srcline;
+}
+
+.dsdl-src-num {
+  display: inline-block;
+  width: 2.75rem;
+  padding-right: 0.75rem;
+  text-align: right;
+  color: var(--muted);
+  opacity: 0.5;
+  user-select: none;
+  font-size: 0.625rem;
+}
+
+.dsdl-bus-dot {
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: 50%;
+  background: var(--ok);
+  flex-shrink: 0;
+  animation: dsdl-pulse 2s ease-in-out infinite;
+}
+
+.dsdl-type-row .dsdl-bus-dot {
+  position: absolute;
+  width: 0;
+  height: 0;
+  margin: 0;
+  overflow: visible;
+  top: 50%;
+}
+
+.dsdl-type-row .dsdl-bus-dot::after {
+  content: '';
+  position: absolute;
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: 50%;
+  background: var(--ok);
+  animation: dsdl-pulse 2s ease-in-out infinite;
+  right: 0.25rem;
+  top: -0.21875rem;
+}
+
+@keyframes dsdl-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.dsdl-bus-section {
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+  position: relative;
+}
+
+.dsdl-bus-section.dsdl-bus-collapsed {
+  max-height: 3.25rem;
+  overflow: hidden;
+}
+
+.dsdl-bus-section .dsdl-bus-dot {
+  align-self: center;
+}
+
+.dsdl-bus-label {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--ok);
+  margin-right: 0.25rem;
+  white-space: nowrap;
+  align-self: center;
+}
+
+.dsdl-bus-chip {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius);
+  background: var(--ok-muted);
+  color: var(--ok);
+}
+
+.dsdl-bus-toggle {
+  font-size: 0.625rem;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0.0625rem 0.375rem;
+  border-radius: var(--radius);
+  border: none;
+  background: var(--surface-3);
+  align-self: center;
+}
+
+.dsdl-bus-toggle:hover {
+  color: var(--text);
+  background: var(--border);
+}

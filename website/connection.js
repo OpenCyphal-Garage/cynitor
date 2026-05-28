@@ -550,6 +550,7 @@ const connectDashboard = async () => {
 
   renderNodesTable();
   renderSelectedNodeContent();
+  if (state.activeView === 'dsdl') DsdlView.init();
   saveSettings();
 };
 

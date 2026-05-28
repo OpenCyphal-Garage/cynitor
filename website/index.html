@@ -75,6 +75,13 @@
           </svg>
           <span>Compare</span>
         </button>
+        <button class="view-graph-btn" data-view="dsdl" role="tab" aria-selected="false" id="viewTabDsdl" aria-controls="dsdlContainer">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1"/>
+            <path d="M16 3h1a2 2 0 0 1 2 2v5a2 2 0 0 1 2 2 2 2 0 0 1-2 2v5a2 2 0 0 0-2 2h-1"/>
+          </svg>
+          <span>DSDL</span>
+        </button>
       </div>
 
       <div class="sidebar-footer">
@@ -108,6 +115,7 @@
       <div id="subjectsTable" class="hidden" role="tabpanel" aria-labelledby="viewTabSubjects"></div>
       <div id="graphContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabGraph"></div>
       <div id="compareContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabCompare"></div>
+      <div id="dsdlContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabDsdl"></div>
       <div class="detail-resize-handle" id="detailResizeHandle">
         <button class="detail-collapse-btn" id="detailCollapseBtn" aria-label="Toggle detail panel">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -161,6 +169,7 @@
   <script src="./compare-view.js"></script>
   <script src="./subjects-panel.js"></script>
   <script src="./graph-view.js"></script>
+  <script src="./dsdl-view.js"></script>
   <script src="./connection.js"></script>
   <script src="./app.js"></script>
 </body>

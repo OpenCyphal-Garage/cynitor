@@ -403,14 +403,18 @@ async def _event_logger_loop(event_logger, queue: asyncio.Queue) -> None:
 
 async def main(can_iface: Optional[str] = None, force_compile: bool = False) -> None:
     from websocket_server import WebSocketServer
+    from dsdl_manager import DsdlManager
 
     session = CANSession()
+    project_root = Path(__file__).resolve().parent.parent
+    dsdl_mgr = DsdlManager(project_root)
 
     ws_server = WebSocketServer(
         session=session,
         host="0.0.0.0",
         port=8080,
         log_store=_log_store,
+        dsdl_manager=dsdl_mgr,
     )
     await ws_server.start()
 

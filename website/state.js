@@ -526,7 +526,7 @@ const loadSettings = () => {
   if (settings.nodeAliases && typeof settings.nodeAliases === 'object') {
     state.nodeAliases = settings.nodeAliases;
   }
-  if (settings.activeView === 'subjects' || settings.activeView === 'graph' || settings.activeView === 'compare') {
+  if (settings.activeView === 'subjects' || settings.activeView === 'graph' || settings.activeView === 'compare' || settings.activeView === 'dsdl') {
     state.activeView = settings.activeView;
   }
   if (Array.isArray(settings.favouriteSubjectIds)) {

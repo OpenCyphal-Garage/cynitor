@@ -633,6 +633,7 @@ const switchView = (view) => {
   const subjectsEl = el('subjectsTable');
   const graphEl = el('graphContainer');
   const compareEl = el('compareContainer');
+  const dsdlEl = el('dsdlContainer');
   const detailHandle = el('detailResizeHandle');
   const detailPanel = el('detailPanel');
 
@@ -654,6 +655,8 @@ const switchView = (view) => {
     stopCompareAnim();
   } else if (prevView === 'graph') {
     GraphView.hide();
+  } else if (prevView === 'dsdl') {
+    DsdlView.hide();
   }
 
   // Hide all content panes
@@ -661,6 +664,7 @@ const switchView = (view) => {
   subjectsEl.classList.add('hidden');
   graphEl.classList.add('hidden');
   compareEl.classList.add('hidden');
+  dsdlEl.classList.add('hidden');
 
   // Activate target view
   if (view === 'subjects') {
@@ -694,6 +698,11 @@ const switchView = (view) => {
     detailHandle.classList.add('hidden');
     detailPanel.classList.add('hidden');
     GraphView.show();
+  } else if (view === 'dsdl') {
+    detailHandle.classList.add('hidden');
+    detailPanel.classList.add('hidden');
+    dsdlEl.classList.remove('hidden');
+    DsdlView.init();
   } else {
     state.selectedPlotSubject = state._nodesPlotSubject ?? null;
     stopPlotAnim();

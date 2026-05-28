@@ -207,6 +207,36 @@ Response:
 
 Returns `409` if not connected.
 
+**DSDL status (does not require CAN connection):**
+```bash
+curl http://localhost:8080/api/dsdl/status
+```
+
+Response:
+```json
+{
+    "paths": [{"path": "...", "label": "Public regulated types", "source": "regulated"}],
+    "compiled": true,
+    "last_compiled": 1773832423.0,
+    "source_types": 257,
+    "custom_types": 0
+}
+```
+
+**DSDL namespace tree:**
+```bash
+curl http://localhost:8080/api/dsdl/namespaces
+```
+
+Returns a nested tree of namespaces with type entries. Each type includes `short_name`, `full_name`, `version`, `kind` (`"message"` or `"service"`), `fixed_port_id`, and `source`.
+
+**DSDL type detail:**
+```bash
+curl http://localhost:8080/api/dsdl/type/uavcan.node.Heartbeat.1.0
+```
+
+Returns full type info: fields (with types), constants, dependencies, compilation status, and raw `.dsdl` source text. For services, fields are split into `request` and `response`.
+
 **Get latest event for a subject:**
 ```bash
 curl http://localhost:8080/api/latest/subject/7509
