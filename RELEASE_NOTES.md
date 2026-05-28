@@ -1,3 +1,26 @@
+## Cynitor v0.3.0
+
+### New Features
+
+- **Compare view** — new sidebar tab with independent graphs for side-by-side multi-series comparison. Add any subject + attribute from the network to any graph.
+- **Derived series** — computed from raw series at render time: delta (A−B), ratio (A/B), moving average (windowed), min/max envelope (rolling), and rate of change (Δv/Δt).
+- **Thresholds** — horizontal reference lines with labels on compare graphs.
+- **Timeline markers** — Shift+click to place a named vertical marker with label, optional note, color, and line style. Click an existing marker to edit or delete. Markers persist and export with graph config.
+- **Freehand drawing** — Alt+drag to draw annotations directly on plots. Configurable color, line style, and stroke size via toolbar controls. Alt+double-click to clear all drawings.
+- **Crosshair sync** — hovering over one compare graph shows synchronized crosshairs with live value readouts on all other graphs.
+- **Workspace export/import** — serialize the full compare workspace (all graphs, presets, markers, drawings) as a JSON file.
+- **Presets** — save and load named graph configurations in compare view.
+
+### Plot Improvements
+
+- **Live tooltip updates** — tooltip values update in real time as data scrolls under a stationary cursor, instead of requiring mouse movement.
+- **Click-to-pause** — single click pauses/resumes the plot. Double-click resets zoom and pan.
+- **Drag-to-pan** — hold and drag to navigate the X axis. Scroll wheel to zoom centered on cursor.
+- **Interactive three-zone legend** — color picker swatch (click to change), center label (click to toggle visibility), style indicator (click to cycle through 9 line styles: 5 dash patterns + 4 marker shapes), and remove button.
+- **Marker shapes** — circle, square, triangle, and diamond markers for distinguishing overlapping series.
+
+---
+
 ## Cynitor v0.2.2
 
 ### New Features

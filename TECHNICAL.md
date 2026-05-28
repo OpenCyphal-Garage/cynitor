@@ -95,7 +95,8 @@ All frontend code lives in `website/`. Plain HTML/CSS/JS. No build step. D3 (CDN
 |------|------|
 | `state.js` | Global `state` object, constants (`PLOT_COLORS`, `PLOT_TICK_MS`), basic helpers (`el`, `escapeHtml`, formatters), API helpers (`apiBase`, `requestJson`), settings load/save (debounced 250ms, flushed on `beforeunload`) |
 | `cache.js` | Telemetry cache and per-node accessors: `cacheEvent`, `getNodeRate`, `getNodeHealthValue`, `getNodeVisualState`, `pruneNodeCache`, `buildSubjectDetailData` |
-| `plot.js` | Multi-panel D3 time-series plot: axis setup, line rendering, hover crosshair + tooltip, animation loop, resize handling |
+| `plot.js` | Multi-panel D3 time-series plot: axis setup, line rendering, hover crosshair + tooltip, interactive three-zone legend (color picker, line style cycling, visibility, remove), zoom/pan, timeline markers, freehand drawing, animation loop, resize handling |
+| `compare-view.js` | Independent multi-graph compare view: multi-series overlay, derived series (delta, ratio, moving avg, min/max, rate), thresholds, presets, export/import workspace, per-graph controls, crosshair sync across graphs |
 | `detail-panel.js` | Per-node detail panel: subject cards, tab rendering (publishers, subscribers, servers, clients, registers, history), plot integration, selection helpers |
 | `nodes-table.js` | Tabulator init, formatters, row build (port arrays joined to strings to avoid spurious cell re-renders), favourite + ghost delete actions, ghost rows pinned to bottom |
 | `services-panel.js` | Service interaction: schema fetch, request form rendering, send/repeat/copy, persistent call history from backend, view-isolated state (`forSubjects` parameter), offline fallback for stale schemas |
@@ -151,9 +152,27 @@ Service interaction state is duplicated per view to prevent cross-contamination:
 
 The detail panel's plot in `detail-panel.js#renderPlot` is a stack of one mini-panel per visible numeric attribute, each with its own y-axis scale. Panels share a single x-axis at the bottom and a single hover crosshair that spans the full stack. Series are joined by attribute name (`(d) => d.name`) so a panel persists across renders and only its line/axis updates. Each panel has its own clipPath keyed by `subject_id` + attribute name to keep lines confined when values spike.
 
-The plot redraws every `PLOT_TICK_MS` (100ms) while data is live; otherwise the loop pauses until the next user interaction or new event.
+The plot redraws every `PLOT_TICK_MS` (100ms) while data is live; otherwise the loop pauses until the next user interaction or new event. The tooltip re-evaluates on each render tick at the stored cursor pixel position, so values update in real time as data scrolls under a stationary cursor. Synced crosshairs (in compare view) store a timestamp instead, which is re-broadcast from the source plot each tick.
 
-The legend is a row of toggle-pill `<button>` elements. Clicks update `state.hiddenPlotSeries[sid]` and flip the button's `.active` class immediately. The legend's full DOM is only rebuilt when the underlying series set changes (different attribute names appear) — within a stable set, only classes update, so click targets don't get destroyed under the cursor.
+The legend uses three-zone `<div>` pills: left swatch (click to pick color via native `<input type="color">`), center label (click to toggle visibility), and optional style indicator (click to cycle through 9 line styles: 5 stroke-dasharray + 4 marker shapes) and remove button. Legend items for derived series, thresholds, and compare series carry all four zones. The legend's full DOM is only rebuilt when the underlying series set changes — within a stable set, only classes update.
+
+### Compare view
+
+`compare-view.js` provides independent graphs for side-by-side multi-series comparison. Each graph has its own series list, derived series, thresholds, timeline markers, freehand drawings, time window, and animation loop. Graphs are stored in `state.compareGraphs` and persisted in localStorage.
+
+**Derived series** are computed from raw series at render time via `_computeDerived()`: delta (A−B), ratio (A/B), moving average (windowed), min/max envelope (rolling), and rate of change (Δv/Δt). Each type declares its source count and optional window parameter.
+
+**Zoom/pan** is implemented in `bindPlotTooltip`: wheel zoom scales `cfg._zoom` centered on cursor, drag translates `cfg._panOffset`. `computePlotScales` applies zoom and pan to the base X domain. Click toggles pause (with 250ms delay to distinguish from double-click); double-click resets zoom and pan.
+
+**Timeline markers** (`cfg.markers[]`) are placed with Shift+click and rendered as vertical dashed lines with labels by `_renderMarkers`. Each marker has a timestamp, label, optional note, color, and line style. Clicking near an existing marker opens an inline edit form (`_openMarkerForm`) with save/delete.
+
+**Freehand drawings** (`cfg.drawings[]`) are captured with Alt+drag. Points are stored as `{t, y}` (timestamp + normalized 0–1 panel height) so they scroll with the timeline. Drawing color, width, and dash style are configurable per-graph via toolbar controls. Alt+double-click clears all drawings.
+
+**Crosshair sync** uses custom DOM events (`crosshair-sync`, `crosshair-hide`) dispatched on the `.compare-cards` container. Each plot stores both `_cursorMx` (local pixel) and `_syncedT` (received timestamp) and re-evaluates on every render tick.
+
+**Fingerprint-based re-rendering**: `_renderCompareGraphNow` computes a string fingerprint from all render-affecting state (series data, time window, zoom, pan, styles, markers, drawings). If the fingerprint matches the previous render, the function returns early. Any state change invalidates the fingerprint via `cfg._fingerprint = ''`.
+
+**Presets** save/load named graph configurations. **Export/Import** serializes the full workspace (all graphs + saved configs) as a JSON file.
 
 ## Telemetry event format
 
