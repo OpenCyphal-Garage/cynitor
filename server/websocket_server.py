@@ -9,6 +9,19 @@ from aiohttp import web, WSCloseCode
 
 logger = logging.getLogger(__name__)
 
+MAX_NODE_ID = 127
+MAX_SUBJECT_ID = 8191
+MAX_SERVICE_ID = 511
+
+def _parse_int(value: str, name: str, lo: int = 0, hi: int = MAX_NODE_ID):
+    try:
+        v = int(value)
+    except (ValueError, TypeError):
+        return None, web.json_response({"error": f"Invalid {name}"}, status=400)
+    if v < lo or v > hi:
+        return None, web.json_response({"error": f"{name} must be {lo}–{hi}"}, status=400)
+    return v, None
+
 
 class WebSocketServer:
     """
@@ -171,10 +184,9 @@ class WebSocketServer:
 
     async def _get_services(self, request: web.Request) -> web.Response:
         """Return service schema metadata for a node."""
-        try:
-            node_id = int(request.match_info['node_id'])
-        except (ValueError, KeyError):
-            return web.json_response({"error": "Invalid node_id"}, status=400)
+        node_id, err = _parse_int(request.match_info.get('node_id'), 'node_id', 0, MAX_NODE_ID)
+        if err:
+            return err
 
         if not self.session.is_running:
             return web.json_response({"error": "CAN bus not connected"}, status=503)
@@ -186,10 +198,9 @@ class WebSocketServer:
 
     async def _get_clients(self, request: web.Request) -> web.Response:
         """Return enriched client port info for a node."""
-        try:
-            node_id = int(request.match_info['node_id'])
-        except (ValueError, KeyError):
-            return web.json_response({"error": "Invalid node_id"}, status=400)
+        node_id, err = _parse_int(request.match_info.get('node_id'), 'node_id', 0, MAX_NODE_ID)
+        if err:
+            return err
 
         if not self.session.is_running:
             return web.json_response({"error": "CAN bus not connected"}, status=503)
@@ -201,10 +212,9 @@ class WebSocketServer:
 
     async def _get_registers(self, request: web.Request) -> web.Response:
         """Return all registers for a node."""
-        try:
-            node_id = int(request.match_info['node_id'])
-        except (ValueError, KeyError):
-            return web.json_response({"error": "Invalid node_id"}, status=400)
+        node_id, err = _parse_int(request.match_info.get('node_id'), 'node_id', 0, MAX_NODE_ID)
+        if err:
+            return err
 
         if not self.session.is_running:
             return web.json_response({"error": "CAN bus not connected"}, status=503)
@@ -220,10 +230,9 @@ class WebSocketServer:
 
     async def _set_register(self, request: web.Request) -> web.Response:
         """Set a register value on a node."""
-        try:
-            node_id = int(request.match_info['node_id'])
-        except (ValueError, KeyError):
-            return web.json_response({"error": "Invalid node_id"}, status=400)
+        node_id, err = _parse_int(request.match_info.get('node_id'), 'node_id', 0, MAX_NODE_ID)
+        if err:
+            return err
 
         if not self.session.is_running:
             return web.json_response({"error": "CAN bus not connected"}, status=503)
@@ -256,11 +265,12 @@ class WebSocketServer:
 
     async def _call_service(self, request: web.Request) -> web.Response:
         """Invoke a service on a remote node and return the response."""
-        try:
-            node_id = int(request.match_info['node_id'])
-            service_id = int(request.match_info['service_id'])
-        except (ValueError, KeyError):
-            return web.json_response({"error": "Invalid node_id or service_id"}, status=400)
+        node_id, err = _parse_int(request.match_info.get('node_id'), 'node_id', 0, MAX_NODE_ID)
+        if err:
+            return err
+        service_id, err = _parse_int(request.match_info.get('service_id'), 'service_id', 0, MAX_SERVICE_ID)
+        if err:
+            return err
 
         if not self.session.is_running:
             return web.json_response({"error": "CAN bus not connected"}, status=503)
@@ -311,7 +321,7 @@ class WebSocketServer:
                 "status": "timeout",
                 "latency_ms": latency_ms,
                 "error": f"Service {service_id} on node {node_id} timed out",
-            })
+            }, status=504)
         except ValueError as e:
             return web.json_response({"status": "error", "error": str(e)}, status=400)
         except Exception as e:
@@ -335,10 +345,9 @@ class WebSocketServer:
     _TIME_RANGE_MAP = {"5m": 300, "15m": 900, "1h": 3600, "6h": 21600, "24h": 86400, "7d": 604800}
 
     async def _get_node_history(self, request: web.Request) -> web.Response:
-        try:
-            node_id = int(request.match_info['node_id'])
-        except (ValueError, KeyError):
-            return web.json_response({"error": "Invalid node_id"}, status=400)
+        node_id, err = _parse_int(request.match_info.get('node_id'), 'node_id', 0, MAX_NODE_ID)
+        if err:
+            return err
 
         if not self.session.event_logger:
             return web.json_response({"error": "Event logger not available"}, status=503)
@@ -363,10 +372,9 @@ class WebSocketServer:
         return web.json_response({"node_id": node_id, "events": events})
 
     async def _get_node_subject_summary(self, request: web.Request) -> web.Response:
-        try:
-            node_id = int(request.match_info['node_id'])
-        except (ValueError, KeyError):
-            return web.json_response({"error": "Invalid node_id"}, status=400)
+        node_id, err = _parse_int(request.match_info.get('node_id'), 'node_id', 0, MAX_NODE_ID)
+        if err:
+            return err
 
         if not self.session.event_logger:
             return web.json_response({"error": "Event logger not available"}, status=503)
@@ -376,10 +384,9 @@ class WebSocketServer:
         return web.json_response({"node_id": node_id, "subjects": subjects})
 
     async def _get_service_call_history(self, request: web.Request) -> web.Response:
-        try:
-            service_id = int(request.match_info['service_id'])
-        except (ValueError, KeyError):
-            return web.json_response({"error": "Invalid service_id"}, status=400)
+        service_id, err = _parse_int(request.match_info.get('service_id'), 'service_id', 0, MAX_SERVICE_ID)
+        if err:
+            return err
 
         if not self.session.event_logger:
             return web.json_response({"error": "Event logger not available"}, status=503)
@@ -394,7 +401,11 @@ class WebSocketServer:
             return web.json_response({"error": "Invalid limit parameter"}, status=400)
 
         node_id_str = request.query.get("node_id")
-        node_id = int(node_id_str) if node_id_str else None
+        node_id = None
+        if node_id_str:
+            node_id, err = _parse_int(node_id_str, 'node_id', 0, MAX_NODE_ID)
+            if err:
+                return err
         unique_id = request.query.get("unique_id")
 
         history = await self.session.event_logger.get_service_call_history(
@@ -429,28 +440,44 @@ class WebSocketServer:
         queue: Optional[asyncio.Queue] = None
 
         try:
-            telemetry = self.session.telemetry
-            if telemetry is None:
-                # CAN not connected — just handle client messages until disconnect
-                await self._receive_client_messages(ws)
-            else:
-                queue = telemetry.subscribe(max_queue=100)
+            recv_task = asyncio.create_task(self._receive_client_messages(ws))
+            metrics_task = asyncio.create_task(self._send_metrics_loop(ws))
 
-                consume_task = asyncio.create_task(self._consume_and_send(ws, queue))
-                recv_task = asyncio.create_task(self._receive_client_messages(ws))
-                metrics_task = asyncio.create_task(self._send_metrics_loop(ws))
+            while not ws.closed:
+                telemetry = self.session.telemetry
+                if telemetry is not None:
+                    queue = telemetry.subscribe(max_queue=100)
+                    consume_task = asyncio.create_task(self._consume_and_send(ws, queue))
+                    done, pending = await asyncio.wait(
+                        [consume_task, recv_task, metrics_task],
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+                    for task in pending:
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+                    break
 
-                done, pending = await asyncio.wait(
-                    [consume_task, recv_task, metrics_task],
-                    return_when=asyncio.FIRST_COMPLETED
+                done, _ = await asyncio.wait(
+                    [recv_task], timeout=1.0
                 )
+                if done:
+                    break
 
-                for task in pending:
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
+            if not recv_task.done():
+                recv_task.cancel()
+                try:
+                    await recv_task
+                except asyncio.CancelledError:
+                    pass
+            if not metrics_task.done():
+                metrics_task.cancel()
+                try:
+                    await metrics_task
+                except asyncio.CancelledError:
+                    pass
 
         except Exception as e:
             logger.error(f"Error in WebSocket handler: {e}", exc_info=True)
@@ -615,8 +642,11 @@ class WebSocketServer:
         if telemetry is None:
             return web.json_response({"error": "CAN not connected"}, status=503)
 
+        subject_id, err = _parse_int(request.match_info.get('subject_id'), 'subject_id', 0, MAX_SUBJECT_ID)
+        if err:
+            return err
+
         try:
-            subject_id = int(request.match_info['subject_id'])
             event = telemetry.get_latest_subject(subject_id)
 
             if event:
@@ -626,8 +656,6 @@ class WebSocketServer:
                     {"error": f"No data for subject {subject_id}"},
                     status=404
                 )
-        except ValueError:
-            return web.json_response({"error": "Invalid subject_id"}, status=400)
         except Exception as e:
             logger.error(f"Error in GET /api/latest/subject: {e}")
             return web.json_response({"error": str(e)}, status=500)
@@ -638,7 +666,9 @@ class WebSocketServer:
             return web.json_response({"error": "CAN not connected"}, status=503)
 
         try:
-            node_id = int(request.match_info['node_id'])
+            node_id, err = _parse_int(request.match_info.get('node_id'), 'node_id', 0, MAX_NODE_ID)
+            if err:
+                return err
             events = telemetry.get_latest_node(node_id)
 
             if not events:
@@ -660,8 +690,6 @@ class WebSocketServer:
                 "node_id": node_id,
                 "events": events
             })
-        except ValueError:
-            return web.json_response({"error": "Invalid node_id"}, status=400)
         except Exception as e:
             logger.error(f"Error in GET /api/latest/node: {e}")
             return web.json_response({"error": str(e)}, status=500)

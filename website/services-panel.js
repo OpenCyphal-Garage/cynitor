@@ -344,6 +344,10 @@ const sendServiceRequest = async (nodeId, serviceId) => {
     } else {
       _setCallState({ nodeId, serviceId, status: 'error', response: null, error: data.error || 'Unknown error', latencyMs: data.latency_ms }, inSubjectsView);
     }
+    const idx = state.serviceCallHistory.findIndex((h) => h.serviceId === serviceId);
+    const entry = { serviceId, nodeId, timestamp: Date.now() };
+    if (idx >= 0) state.serviceCallHistory[idx] = entry;
+    else state.serviceCallHistory.push(entry);
   } catch (e) {
     _setCallState({ nodeId, serviceId, status: 'error', response: null, error: e.message || 'Request failed', latencyMs: null }, inSubjectsView);
   }

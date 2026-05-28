@@ -6,14 +6,6 @@ let _subjectsTableReady = false;
 let _suppressReattach = false;
 const _serviceTypeCache = new Map();
 
-const _fmt24H = (unix) => {
-  const d = new Date(unix * 1000);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  return `${hh}:${mm}:${ss}`;
-};
-
 const _fmtDate = (unix) => {
   const d = new Date(unix * 1000);
   const dd = String(d.getDate()).padStart(2, '0');
@@ -22,19 +14,8 @@ const _fmtDate = (unix) => {
 };
 
 const subjectsPlaceholder = () => {
-  if (!state.dashboardConnected) {
-    if (state.pendingReconnect) {
-      return svcStateMsg('<span class="svc-spinner"></span>', 'Reconnecting to backend…', 'Restoring previous session.');
-    }
-    return svcStateMsg('⏻', 'Not connected to backend', 'Connect to the backend server to browse subjects and services.');
-  }
-  if (state.canState === CONN.CONNECTING) {
-    return svcStateMsg('<span class="svc-spinner"></span>', 'Connecting to CAN interface…', 'Establishing CAN bus connection.');
-  }
-  if (state.canState !== CONN.CONNECTED) {
-    return svcStateMsg('⛓', 'CAN bus not connected', 'Connect a CAN interface to discover subjects and services.');
-  }
-  return svcStateMsg('<span class="svc-spinner"></span>', 'Waiting for traffic…', 'Listening on the CAN bus. Subjects and services will appear as nodes communicate.');
+  return connectionPlaceholder('browse subjects and services')
+    || svcStateMsg('<span class="svc-spinner"></span>', 'Waiting for traffic…', 'Listening on the CAN bus. Subjects and services will appear as nodes communicate.');
 };
 
 const _lookupServiceType = (serviceId) => {
@@ -104,7 +85,7 @@ const buildSubjectsRows = () => {
       publishers: info.publishers.sort((a, b) => a - b).join(', '),
       subscribers: info.subscribers.sort((a, b) => a - b).join(', '),
       rate: event?.rate ?? 0,
-      lastTime: event?.timestamp_unix ? `${_fmt24H(event.timestamp_unix)} ${pubNode}` : '-',
+      lastTime: event?.timestamp_unix ? `${formatPlotTime(event.timestamp_unix)} ${pubNode}` : '-',
       lastDate: event?.timestamp_unix ? _fmtDate(event.timestamp_unix) : '-',
       _fav: state.favouriteSubjectIds.has(sid),
     });
@@ -123,7 +104,7 @@ const buildSubjectsRows = () => {
       publishers: info.servers.sort((a, b) => a - b).join(', '),
       subscribers: info.clients.sort((a, b) => a - b).join(', '),
       rate: 0,
-      lastTime: lastTs ? `${_fmt24H(lastTs)} ${calledNode}` : '-',
+      lastTime: lastTs ? `${formatPlotTime(lastTs)} ${calledNode}` : '-',
       lastDate: lastTs ? _fmtDate(lastTs) : '-',
       _fav: state.favouriteSubjectIds.has(`svc:${sid}`),
     });
@@ -206,9 +187,7 @@ const populateHiddenSubjectsPopover = () => {
     return;
   }
 
-  const rect = chip.getBoundingClientRect();
-  popover.style.top = (rect.bottom + 4) + 'px';
-  popover.style.right = (window.innerWidth - rect.right) + 'px';
+  positionPopover(popover, chip);
 
   let html = '<div class="hidden-popover-header"><span>Hidden subjects</span>'
     + '<button type="button" class="hidden-unhide-all" aria-label="Unhide all">Unhide all</button></div>'
@@ -254,19 +233,7 @@ const toggleHiddenSubjectsPopover = () => {
   }
 };
 
-const subjectFavPinSorter = (baseSorter) => (a, b, aRow, bRow, column, dir, sorterParams) => {
-  const aFav = aRow.getData()._fav ? 1 : 0;
-  const bFav = bRow.getData()._fav ? 1 : 0;
-  if (aFav !== bFav) {
-    return dir === 'asc' ? bFav - aFav : aFav - bFav;
-  }
-  if (typeof baseSorter === 'function') return baseSorter(a, b, aRow, bRow, column, dir, sorterParams);
-  if (a == null && b == null) return 0;
-  if (a == null) return 1;
-  if (b == null) return -1;
-  if (baseSorter === 'number') return Number(a) - Number(b);
-  return String(a).localeCompare(String(b));
-};
+const subjectFavPinSorter = makeFavPinSorter();
 
 const initSubjectsTable = () => {
   if (subjectsTabulator) return;
@@ -378,30 +345,7 @@ const refreshSubjectsTable = () => {
 
   _suppressReattach = true;
 
-  const currentRowMap = new Map();
-  for (const row of subjectsTabulator.getRows()) {
-    currentRowMap.set(row.getData()._rowId, row);
-  }
-
-  const newRows = [];
-  const newIds = new Set();
-  for (const d of data) {
-    newIds.add(d._rowId);
-    const existing = currentRowMap.get(d._rowId);
-    if (!existing) { newRows.push(d); continue; }
-    const cur = existing.getData();
-    const diff = {};
-    for (const k of Object.keys(d)) {
-      if (d[k] !== cur[k]) diff[k] = d[k];
-    }
-    if (Object.keys(diff).length) existing.update(diff);
-  }
-
-  for (const [id, row] of currentRowMap) {
-    if (!newIds.has(id)) row.delete();
-  }
-
-  if (newRows.length) subjectsTabulator.addData(newRows);
+  diffUpdateTable(subjectsTabulator, data, '_rowId');
 
   _suppressReattach = false;
   _unstashInlineDetail();
@@ -608,6 +552,8 @@ const openSubjectPlot = (rowData) => {
     return;
   }
 
+  state.plotPaused = false;
+  state.plotPausedAt = null;
   state.selectedPlotSubject = sid;
   state._subjectsPlotSubject = sid;
   tabs.classList.add('hidden');
@@ -659,6 +605,7 @@ const _saveDetailPanelState = (viewKey) => {
 
 const _restoreDetailPanelState = (viewKey) => {
   const detailPanel = el('detailPanel');
+  detailPanel.classList.add('no-transition');
   const height = viewKey === 'nodes' ? state._nodesDetailHeight : state._subjectsDetailHeight;
   const collapsed = viewKey === 'nodes' ? state._nodesDetailCollapsed : state._subjectsDetailCollapsed;
 
@@ -673,6 +620,8 @@ const _restoreDetailPanelState = (viewKey) => {
   state.detailPanelHeight = height;
   const collapseBtn = el('detailCollapseBtn');
   if (collapseBtn) collapseBtn.classList.toggle('pointing-up', collapsed);
+  detailPanel.offsetHeight;
+  detailPanel.classList.remove('no-transition');
 };
 
 const switchView = (view) => {
@@ -683,6 +632,7 @@ const switchView = (view) => {
   const nodesEl = el('nodesTable');
   const subjectsEl = el('subjectsTable');
   const graphEl = el('graphContainer');
+  const compareEl = el('compareContainer');
   const detailHandle = el('detailResizeHandle');
   const detailPanel = el('detailPanel');
 
@@ -700,6 +650,8 @@ const switchView = (view) => {
     _suppressReattach = true;
   } else if (prevView === 'nodes') {
     state._nodesPlotSubject = state.selectedPlotSubject;
+  } else if (prevView === 'compare') {
+    stopCompareAnim();
   } else if (prevView === 'graph') {
     GraphView.hide();
   }
@@ -708,6 +660,7 @@ const switchView = (view) => {
   nodesEl.classList.add('hidden');
   subjectsEl.classList.add('hidden');
   graphEl.classList.add('hidden');
+  compareEl.classList.add('hidden');
 
   // Activate target view
   if (view === 'subjects') {
@@ -731,6 +684,12 @@ const switchView = (view) => {
       _highlightSubjectRow(state.selectedPlotSubject);
       startPlotAnim();
     }
+  } else if (view === 'compare') {
+    detailHandle.classList.add('hidden');
+    detailPanel.classList.add('hidden');
+    compareEl.classList.remove('hidden');
+    initCompareView();
+    startCompareAnim();
   } else if (view === 'graph') {
     detailHandle.classList.add('hidden');
     detailPanel.classList.add('hidden');

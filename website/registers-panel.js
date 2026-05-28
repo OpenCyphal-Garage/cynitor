@@ -146,10 +146,11 @@ const bindRegisterEvents = (container, nodeId) => {
       const input = container.querySelector(`.reg-value-input[data-reg-name="${CSS.escape(name)}"]`);
       if (!input) return;
 
+      const sentValue = input.value;
+      if (!confirm(`Write "${name}" = ${sentValue}?`)) return;
+
       btn.disabled = true;
       btn.textContent = '…';
-
-      const sentValue = input.value;
       try {
         const data = await requestJson(`/api/registers/${nodeId}/set`, {
           method: 'POST',

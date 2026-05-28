@@ -27,7 +27,9 @@ def db_path(tmp_path):
 
 @pytest.fixture
 def logger(db_path):
-    return EventLogger(db_path=db_path, max_events=1000)
+    el = EventLogger(db_path=db_path, max_events=1000)
+    el.init_db_sync()
+    return el
 
 
 class TestEventLogger:
@@ -87,6 +89,7 @@ class TestEventLogger:
     @pytest.mark.asyncio
     async def test_max_events_pruning(self, db_path):
         logger = EventLogger(db_path=db_path, max_events=3)
+        logger.init_db_sync()
         events = [_sample_event(subject_id=i) for i in range(5)]
         logger._write_events_sync(events)
         count = logger._get_event_count_sync()

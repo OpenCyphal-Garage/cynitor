@@ -25,6 +25,13 @@ import uavcan.pnp
 from node_info import NodeInfo
 from node_identity_map import NodeIdentityMap
 
+
+def _fire_and_log(coro, context: str = "background task"):
+    """Schedule a coroutine and log any exception instead of silently dropping it."""
+    task = asyncio.ensure_future(coro)
+    task.add_done_callback(lambda t: t.exception() and logging.error(f"{context}: {t.exception()}") if not t.cancelled() and t.exception() else None)
+    return task
+
 class ScannerNode:
     # Constants
     REGISTER_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "monitor_app.db")
@@ -414,13 +421,13 @@ class ScannerNode:
                                 
                                 # Split type into namespace and type name
                                 try:
-                                    attribyte_type_split = attr_type.split('.')
-                                    if len(attribyte_type_split) < 3:
+                                    attribute_type_split = attr_type.split('.')
+                                    if len(attribute_type_split) < 3:
                                         logging.error(f"Invalid type format for attribute {key}: {attr_type}")
                                         raise ValueError(f"Invalid type format: {attr_type}")
                                     
-                                    attribute_type_name = '_'.join(attribyte_type_split[-3:])
-                                    attribute_type_namespace = '.'.join(attribyte_type_split[:-3])
+                                    attribute_type_name = '_'.join(attribute_type_split[-3:])
+                                    attribute_type_namespace = '.'.join(attribute_type_split[:-3])
                                     logging.debug(f"Parsed type: namespace={attribute_type_namespace}, type_name={attribute_type_name}")
                                 except AttributeError as e:
                                     logging.error(f"Failed to split type {attr_type} for attribute {key}: {str(e)}")
@@ -530,17 +537,6 @@ class ScannerNode:
             response = response_tuple[0]
             logging.info(f"Received response for service {service_id}: {response}")
 
-            # Format response for SumService_1_0
-            if service_type == "dontpanic.SumService_1_0":
-                try:
-                    response_str = f"sum: {response.sum}"
-                    logging.debug(f"Formatted SumService_1_0 response: {response_str}")
-                    return response_str
-                except AttributeError as e:
-                    logging.error(f"Failed to access response.sum for SumService_1_0: {str(e)}")
-                    raise ValueError(f"Invalid response format for SumService_1_0: {str(e)}")
-
-            # Generic response formatting
             response_str = str(response)
             logging.debug(f"Formatted response as string: {response_str}")
             return response_str
@@ -1165,7 +1161,7 @@ class ScannerNode:
     def _emit_node_event(self, node_id: int, event_type: str, detail: Optional[dict] = None) -> None:
         if self.on_node_event:
             uid = self._get_node_unique_id_hex(node_id) or self.identity_map.get_uid(node_id)
-            asyncio.ensure_future(self.on_node_event(node_id, event_type, detail, unique_id=uid))
+            _fire_and_log(self.on_node_event(node_id, event_type, detail, unique_id=uid), f"node_event({event_type})")
 
     async def port_callback(self, msg: uavcan.node.port.List_1_0, transfer: pycyphal.transport.TransferFrom):
         node_id: int = transfer.source_node_id
@@ -1381,7 +1377,7 @@ class ScannerNode:
             }
             self.identity_map.save_node_snapshot(uid, snapshot)
             if self.on_node_data_save:
-                asyncio.ensure_future(self.on_node_data_save(uid, snapshot))
+                _fire_and_log(self.on_node_data_save(uid, snapshot), "node_data_save")
         except Exception as e:
             logging.warning(f"Failed to snapshot node {node_id}: {e}")
 
@@ -1437,7 +1433,7 @@ class ScannerNode:
             if uid_hex:
                 displaced_uid = self.identity_map.get_uid(node_id)
                 if displaced_uid and displaced_uid != uid_hex and self.on_node_event:
-                    asyncio.ensure_future(self.on_node_event(node_id, "lost_node_id", {"node_id": node_id}, unique_id=displaced_uid))
+                    _fire_and_log(self.on_node_event(node_id, "lost_node_id", {"node_id": node_id}, unique_id=displaced_uid), "node_event(lost_node_id)")
                 prev_nid = self.identity_map.get_nid(uid_hex)
                 old_node_id = self.identity_map.register(node_id, uid_hex)
                 if prev_nid != node_id:

@@ -46,7 +46,7 @@ pip install -r requirements.txt
 Key dependencies:
 - `pycyphal` - UAVCAN protocol library
 - `aiohttp` - Async HTTP/WebSocket server
-- `aiohttp-cors` - CORS support
+- CORS is handled via built-in middleware (no extra dependency)
 
 ### 2. Run the System
 
@@ -701,7 +701,7 @@ queue = telemetry.subscribe(max_queue=200)  # Increase from 100
 
 | Component | Capacity | Bottleneck |
 |---|---|---|
-| ScannerNode | 1000 nodes | UAVCAN bus saturation |
+| ScannerNode | 128 nodes | UAVCAN bus saturation |
 | TelemetryManager | 100K events/s | RAM (cache) |
 | WebSocketServer | 1000 clients | Network bandwidth |
 | EventLogger | 100K events/s | Disk I/O |

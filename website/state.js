@@ -1,7 +1,8 @@
 // Global state, constants, foundational helpers, API, and settings persistence.
 // Loaded first; everything below depends on what's declared here.
 
-const STORAGE_KEY = 'pycyphal.dashboard.settings.v2';
+const STORAGE_KEY = 'cynitor.dashboard.settings.v1';
+const _LEGACY_STORAGE_KEY = 'pycyphal.dashboard.settings.v2';
 
 // Connection state enums — prevent impossible flag combinations
 const CONN = Object.freeze({ IDLE: 'idle', CONNECTING: 'connecting', CONNECTED: 'connected', DISCONNECTING: 'disconnecting' });
@@ -31,6 +32,16 @@ const state = {
   subjectHistory: new Map(),
   hiddenPlotSeries: new Map(),
   plotTimer: null,
+  plotPaused: false,
+  plotPausedAt: null,
+  plotTimeWindow: 60,
+  plotSmooth: 0,
+  plotDisconnectPoints: false,
+  plotStroke: 1.5,
+  plotGrid: false,
+  plotColorOverrides: {},
+  compareGraphs: [],
+  savedCompareConfigs: [],
   wsBytesAccum: 0,
   wsThroughput: 0,
   busUtilization: null,
@@ -54,7 +65,6 @@ const state = {
   _subjectExpandedServiceId: null,
   nodeAliases: {},
   historyTimeRange: '1h',
-  historyChangesOnly: true,
   activeView: 'nodes',
   favouriteSubjectIds: new Set(),
   hiddenSubjectIds: new Set(),
@@ -184,15 +194,73 @@ const formatPlotTime = (unix) => {
   return `${h}:${m}:${s}`;
 };
 
+const classifyHealth = (health) => {
+  if (!health) return null;
+  const v = String(health).toUpperCase();
+  if (v === 'NOMINAL' || v === '0') return 'ok';
+  if (v === 'ADVISORY' || v === '1') return 'ok';
+  if (v === 'CAUTION' || v === '2') return 'warn';
+  if (v === 'WARNING' || v === '3') return 'err';
+  return null;
+};
+
+const HEALTH_CSS_CLASS = { ok: 'status-ok', warn: 'status-warn', err: 'status-err' };
+const HEALTH_CSS_COLOR = { ok: 'var(--ok)', warn: 'var(--warn)', err: 'var(--error)' };
+
+const getHealthCssClass = (health) => HEALTH_CSS_CLASS[classifyHealth(health)] || '';
+const getHealthColor = (health) => HEALTH_CSS_COLOR[classifyHealth(health)] || 'var(--muted)';
+
+const connectionPlaceholder = (context) => {
+  if (!state.dashboardConnected) {
+    if (state.pendingReconnect) {
+      return svcStateMsg('<span class="svc-spinner"></span>', 'Reconnecting to backend…', 'Restoring previous session.');
+    }
+    return svcStateMsg('⏻', 'Not connected to backend', `Connect to the backend server to ${context}.`);
+  }
+  if (state.canState === CONN.CONNECTING) {
+    return svcStateMsg('<span class="svc-spinner"></span>', 'Connecting to CAN interface…', 'Establishing CAN bus connection.');
+  }
+  if (state.canState !== CONN.CONNECTED) {
+    return svcStateMsg('⛓', 'CAN bus not connected', `Connect a CAN interface to ${context}.`);
+  }
+  return null;
+};
+
+const diffUpdateTable = (tabulator, data, keyField) => {
+  const currentRowMap = new Map();
+  for (const row of tabulator.getRows()) {
+    currentRowMap.set(row.getData()[keyField], row);
+  }
+  const newRows = [];
+  const newIds = new Set();
+  for (const d of data) {
+    newIds.add(d[keyField]);
+    const existing = currentRowMap.get(d[keyField]);
+    if (!existing) { newRows.push(d); continue; }
+    const cur = existing.getData();
+    const diff = {};
+    for (const k of Object.keys(d)) {
+      if (d[k] !== cur[k]) diff[k] = d[k];
+    }
+    if (Object.keys(diff).length) existing.update(diff);
+  }
+  for (const [id, row] of currentRowMap) {
+    if (!newIds.has(id)) row.delete();
+  }
+  if (newRows.length) tabulator.addData(newRows);
+};
+
+const positionPopover = (popover, anchorEl) => {
+  const rect = anchorEl.getBoundingClientRect();
+  popover.style.top = (rect.bottom + 4) + 'px';
+  popover.style.right = (window.innerWidth - rect.right) + 'px';
+};
+
 const getStatusClass = (attr, value) => {
   const v = String(value).toUpperCase();
   switch (attr) {
     case 'health':
-      if (v === 'NOMINAL' || v === '0') return 'status-ok';
-      if (v === 'ADVISORY' || v === '1') return 'status-ok';
-      if (v === 'CAUTION' || v === '2') return 'status-warn';
-      if (v === 'WARNING' || v === '3') return 'status-err';
-      return '';
+      return getHealthCssClass(value);
     case 'mode':
       if (v === 'OPERATIONAL' || v === '0') return 'status-ok';
       if (v === 'INITIALIZATION' || v === '1') return 'status-init';
@@ -201,6 +269,31 @@ const getStatusClass = (attr, value) => {
       return '';
   }
 };
+
+const makeFavPinSorter = ({ ghostField } = {}) => (baseSorter) =>
+  (a, b, aRow, bRow, column, dir, sorterParams) => {
+    if (ghostField) {
+      const aGhost = aRow.getData()[ghostField] ? 1 : 0;
+      const bGhost = bRow.getData()[ghostField] ? 1 : 0;
+      if (aGhost !== bGhost) return aGhost - bGhost;
+    }
+    const aFav = aRow.getData()._fav ? 1 : 0;
+    const bFav = bRow.getData()._fav ? 1 : 0;
+    if (aFav !== bFav) return dir === 'asc' ? bFav - aFav : aFav - bFav;
+    if (typeof baseSorter === 'function') return baseSorter(a, b, aRow, bRow, column, dir, sorterParams);
+    if (a == null && b == null) return 0;
+    if (a == null) return 1;
+    if (b == null) return -1;
+    if (baseSorter === 'number') {
+      const aNum = Number(a), bNum = Number(b);
+      const aNaN = isNaN(aNum), bNaN = isNaN(bNum);
+      if (aNaN && bNaN) return String(a).localeCompare(String(b));
+      if (aNaN) return 1;
+      if (bNaN) return -1;
+      return aNum - bNum;
+    }
+    return String(a).localeCompare(String(b));
+  };
 
 const getMetricMinWidth = (subjectId, attr, displayStr) => {
   const key = `${subjectId}:${attr}`;
@@ -246,12 +339,24 @@ const withSmartJsonHeaders = (options = {}) => {
   };
 };
 
+const REQUEST_TIMEOUT_MS = 15000;
+
 const requestJson = async (path, options = {}) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   let response;
   try {
-    response = await fetch(`${apiBase()}${path}`, withSmartJsonHeaders(options));
+    response = await fetch(`${apiBase()}${path}`, {
+      ...withSmartJsonHeaders(options),
+      signal: controller.signal,
+    });
   } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error(`Request timeout for ${path}`);
+    }
     throw new Error(`Network error for ${path}: ${error?.message || error}`);
+  } finally {
+    clearTimeout(timeout);
   }
 
   const data = await response.json().catch(() => ({}));
@@ -265,7 +370,12 @@ const requestJson = async (path, options = {}) => {
 
 const readSettings = () => {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+    let raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw && (raw = localStorage.getItem(_LEGACY_STORAGE_KEY))) {
+      localStorage.setItem(STORAGE_KEY, raw);
+      localStorage.removeItem(_LEGACY_STORAGE_KEY);
+    }
+    return JSON.parse(raw || '{}');
   } catch {
     return {};
   }
@@ -303,6 +413,20 @@ const _writeSettingsNow = () => {
     headerFilters: getHeaderFilters(),
     selectedNodeId: state.selectedNodeId,
     splitRatio: state.splitRatio,
+    plotTimeWindow: state.plotTimeWindow,
+    plotSmooth: state.plotSmooth,
+    plotDisconnectPoints: state.plotDisconnectPoints,
+    plotStroke: state.plotStroke,
+    plotGrid: state.plotGrid,
+    plotColorOverrides: state.plotColorOverrides,
+    compareGraphs: state.compareGraphs.map(g => ({
+      id: g.id, name: g.name, series: g.series, thresholds: g.thresholds || [],
+      derivedSeries: g.derivedSeries || [],
+      markers: g.markers || [],
+      drawings: g.drawings || [],
+      timeWindow: g.timeWindow, smooth: g.smooth, stroke: g.stroke, disconnectPoints: g.disconnectPoints, grid: g.grid,
+    })),
+    savedCompareConfigs: state.savedCompareConfigs,
     favouriteNodeIds: [...state.favouriteNodeIds],
     hiddenNodeIds: [...state.hiddenNodeIds],
     nodeAliases: state.nodeAliases,
@@ -402,7 +526,7 @@ const loadSettings = () => {
   if (settings.nodeAliases && typeof settings.nodeAliases === 'object') {
     state.nodeAliases = settings.nodeAliases;
   }
-  if (settings.activeView === 'subjects' || settings.activeView === 'graph') {
+  if (settings.activeView === 'subjects' || settings.activeView === 'graph' || settings.activeView === 'compare') {
     state.activeView = settings.activeView;
   }
   if (Array.isArray(settings.favouriteSubjectIds)) {
@@ -413,5 +537,66 @@ const loadSettings = () => {
   }
   if (settings.subjectsTableSort?.key) {
     state.subjectsTableSort = settings.subjectsTableSort;
+  }
+  if (typeof settings.plotTimeWindow === 'number' && settings.plotTimeWindow >= 0) {
+    state.plotTimeWindow = settings.plotTimeWindow;
+  }
+  if (typeof settings.plotSmooth === 'number' && settings.plotSmooth >= 0 && settings.plotSmooth <= 30) {
+    state.plotSmooth = settings.plotSmooth;
+  }
+  if (settings.plotDisconnectPoints === true) {
+    state.plotDisconnectPoints = true;
+  }
+  if (typeof settings.plotStroke === 'number' && settings.plotStroke >= 1 && settings.plotStroke <= 5) {
+    state.plotStroke = settings.plotStroke;
+  }
+  if (settings.plotGrid === true) {
+    state.plotGrid = true;
+  }
+  if (settings.plotColorOverrides && typeof settings.plotColorOverrides === 'object') {
+    state.plotColorOverrides = settings.plotColorOverrides;
+  }
+  if (Array.isArray(settings.compareGraphs)) {
+    state.compareGraphs = settings.compareGraphs
+      .filter(g => g && typeof g.id === 'string' && Array.isArray(g.series))
+      .map(g => ({
+        id: g.id, name: g.name || '',
+        series: g.series.filter(s => Number.isInteger(s?.subjectId) && typeof s?.attribute === 'string'),
+        paused: false, pausedAt: null,
+        timeWindow: typeof g.timeWindow === 'number' ? g.timeWindow : 60,
+        smooth: typeof g.smooth === 'number' ? g.smooth : 0,
+        stroke: typeof g.stroke === 'number' ? g.stroke : 1.5,
+        disconnectPoints: g.disconnectPoints === true,
+        grid: g.grid === true,
+        thresholds: Array.isArray(g.thresholds) ? g.thresholds.filter(t => typeof t.value === 'number') : [],
+        derivedSeries: Array.isArray(g.derivedSeries) ? g.derivedSeries.filter(d => d?.id && d?.type && d?.sourceA) : [],
+        markers: Array.isArray(g.markers) ? g.markers.filter(m => typeof m.t === 'number') : [],
+        drawings: Array.isArray(g.drawings) ? g.drawings.filter(d => Array.isArray(d?.points) && d.points.length >= 2) : [],
+        _timer: null, _fingerprint: '', _hidden: new Set(),
+      }));
+  }
+  if (Array.isArray(settings.savedCompareConfigs)) {
+    state.savedCompareConfigs = settings.savedCompareConfigs
+      .filter(c => c && typeof c.name === 'string' && Array.isArray(c.series))
+      .map(c => ({
+        name: c.name,
+        series: c.series.filter(s => Number.isInteger(s?.subjectId) && typeof s?.attribute === 'string'),
+        derivedSeries: Array.isArray(c.derivedSeries) ? c.derivedSeries.filter(d => d?.id && d?.type && d?.sourceA) : [],
+        markers: Array.isArray(c.markers) ? c.markers.filter(m => typeof m.t === 'number') : [],
+        drawings: Array.isArray(c.drawings) ? c.drawings.filter(d => Array.isArray(d?.points) && d.points.length >= 2) : [],
+      }));
+  }
+  if (!state.compareGraphs.length && Array.isArray(settings.plotCompareList)) {
+    const migrated = settings.plotCompareList.filter(
+      item => Number.isInteger(item?.subjectId) && typeof item?.attribute === 'string'
+    );
+    if (migrated.length) {
+      state.compareGraphs.push({
+        id: 'cg_migrated', name: '', series: migrated,
+        paused: false, pausedAt: null,
+        timeWindow: 60, smooth: 0, stroke: 1.5, disconnectPoints: false,
+        _timer: null, _fingerprint: '', _hidden: new Set(),
+      });
+    }
   }
 };

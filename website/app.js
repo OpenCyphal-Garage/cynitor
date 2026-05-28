@@ -21,6 +21,9 @@ const bind = () => {
   el('easterEggOverlay').addEventListener('click', () => {
     el('easterEggOverlay').classList.add('hidden');
   });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') el('easterEggOverlay').classList.add('hidden');
+  });
 
   el('connectDashboardBtn').addEventListener('click', connectDashboard);
   el('connectCanBtn').addEventListener('click', connectCan);
@@ -214,16 +217,19 @@ updateSemaphores();
 // Restore previous connection state
 (async () => {
   if (state.pendingReconnect) {
-    await connectDashboard();
-    delete state.pendingReconnect;
+    try {
+      await connectDashboard();
+    } finally {
+      delete state.pendingReconnect;
+      updateSemaphores();
+    }
   }
-  updateSemaphores();
 })();
 
 // ── Frontend server heartbeat ──
 (() => {
   const HEARTBEAT_INTERVAL = 5000;
-  const FAIL_THRESHOLD = 2;
+  const FAIL_THRESHOLD = 4;
   const overlay = el('serverDownOverlay');
   let serverDown = false;
   let consecutiveFailures = 0;

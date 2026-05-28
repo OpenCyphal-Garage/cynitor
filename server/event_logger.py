@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Optional, Any
@@ -33,8 +34,8 @@ class EventLogger:
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._write_count = 0
-
-        self._init_db()
+        self._write_lock = threading.Lock()
+        self._db_initialized = False
     
     def _init_db(self) -> None:
         """Initialize database schema."""
@@ -117,16 +118,24 @@ class EventLogger:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_nh_timestamp ON node_history(timestamp_unix)")
 
                 conn.execute("PRAGMA journal_mode=WAL")
+            self._db_initialized = True
             logger.info(f"Database initialized at {self.db_path}")
         except Exception as e:
             logger.error(f"Failed to initialize database: {e}", exc_info=True)
     
+    def init_db_sync(self) -> None:
+        """Initialize database synchronously. Use for tests or non-async contexts."""
+        self._init_db()
+
     async def start(self) -> None:
         """Start the event logger background task."""
         if self._running:
             logger.debug("EventLogger already running")
             return
-        
+
+        if not self._db_initialized:
+            await asyncio.to_thread(self._init_db)
+
         self._running = True
         self._task = asyncio.create_task(self._log_loop())
         logger.info("EventLogger started")
@@ -213,9 +222,12 @@ class EventLogger:
                     json.dumps(event.get("attributes", []))
                 ))
 
-            self._write_count += len(events)
-            if self.max_events > 0 and self._write_count >= self.max_events:
-                self._write_count = 0
+            with self._write_lock:
+                self._write_count += len(events)
+                should_prune = self.max_events > 0 and self._write_count >= self.max_events
+                if should_prune:
+                    self._write_count = 0
+            if should_prune:
                 cursor.execute(f"""
                     DELETE FROM events
                     WHERE id NOT IN (
@@ -350,9 +362,10 @@ class EventLogger:
                 "INSERT INTO node_history (node_id, unique_id, timestamp_unix, event_type, detail) VALUES (?, ?, ?, ?, ?)",
                 (node_id, unique_id, time.time(), event_type, json.dumps(detail) if detail else None),
             )
-            # Prune old entries periodically
-            self._write_count += 1
-            if self._write_count % 100 == 0:
+            with self._write_lock:
+                self._write_count += 1
+                should_prune = self._write_count % 100 == 0
+            if should_prune:
                 cutoff = time.time() - self.NODE_HISTORY_RETENTION_DAYS * 86400
                 cursor.execute("DELETE FROM node_history WHERE timestamp_unix < ?", (cutoff,))
 
@@ -524,10 +537,15 @@ class EventLogger:
     def _save_identity_map_sync(self, records: list[dict[str, Any]]) -> None:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM identity_map")
+            current_ids = [rec["unique_id"] for rec in records]
+            if current_ids:
+                placeholders = ",".join("?" * len(current_ids))
+                cursor.execute(f"DELETE FROM identity_map WHERE unique_id NOT IN ({placeholders})", current_ids)
+            else:
+                cursor.execute("DELETE FROM identity_map")
             for rec in records:
                 cursor.execute(
-                    "INSERT INTO identity_map (unique_id, current_node_id, last_seen_unix, node_name, previous_node_ids) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT OR REPLACE INTO identity_map (unique_id, current_node_id, last_seen_unix, node_name, previous_node_ids) VALUES (?, ?, ?, ?, ?)",
                     (rec["unique_id"], rec.get("current_node_id"), rec.get("last_seen_unix"), rec.get("node_name"), json.dumps(rec.get("previous_node_ids", []))),
                 )
         logger.debug(f"Saved {len(records)} identity map entries")

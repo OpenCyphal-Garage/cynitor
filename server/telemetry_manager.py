@@ -246,15 +246,17 @@ class TelemetryManager:
 
     async def _telemetry_loop(self) -> None:
         """Main loop that consumes events from scanner and broadcasts them."""
-        try:
-            while True:
+        while True:
+            try:
                 event = await self.scanner.message_queue.get()
                 self._update_state(event)
                 await self._broadcast(event)
-        except asyncio.CancelledError:
-            logger.info("Telemetry loop cancelled")
-        except Exception as e:
-            logger.error(f"Error in telemetry loop: {e}", exc_info=True)
+            except asyncio.CancelledError:
+                logger.info("Telemetry loop cancelled")
+                return
+            except Exception as e:
+                logger.error(f"Error in telemetry loop: {e}", exc_info=True)
+                await asyncio.sleep(0.1)
 
     # ------------------------------------------------------------------
     # STATE MANAGEMENT

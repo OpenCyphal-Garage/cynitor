@@ -142,15 +142,6 @@ const renderClientsTab = async () => {
   content.innerHTML = renderClientCards(clients, enrichedMap);
 };
 
-const renderListTab = (title, items) => `
-  <section class="details-panel">
-    <h3>${escapeHtml(title)}</h3>
-    <ul class="details-list">
-      ${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}
-    </ul>
-  </section>
-`;
-
 const renderSelectedNodeContent = () => {
   if (state.activeView === 'subjects') return;
   const content = el('selectedNodeContent');

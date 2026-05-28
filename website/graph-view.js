@@ -71,7 +71,7 @@ const GraphView = (() => {
         nodeId: nid,
         type: 'device',
         label: node.name || `Node ${nid}`,
-        health: _getHealth(nid),
+        health: getNodeHealthValue(nid),
         disappeared: !!node.has_disappeared,
       });
 
@@ -133,27 +133,6 @@ const GraphView = (() => {
     for (const link of collapsedAdj.values()) collapsedLinks.push(link);
 
     return { deviceNodes, subjectNodes, links, collapsedLinks, adjacency };
-  };
-
-  const _getHealth = (nodeId) => {
-    const map = state.latestByNode.get(nodeId);
-    if (!map) return null;
-    for (const ev of map.values()) {
-      for (const attr of ev.attributes || []) {
-        if (String(attr.attribute).toLowerCase() === 'health') return String(attr.value);
-      }
-    }
-    return null;
-  };
-
-  const _healthColor = (health) => {
-    if (!health) return 'var(--muted)';
-    const v = health.toUpperCase();
-    if (v === 'NOMINAL' || v === '0') return 'var(--ok)';
-    if (v === 'ADVISORY' || v === '1') return 'var(--ok)';
-    if (v === 'CAUTION' || v === '2') return 'var(--warn)';
-    if (v === 'WARNING' || v === '3') return 'var(--error)';
-    return 'var(--muted)';
   };
 
   // ── Initialization ──
@@ -369,7 +348,7 @@ const GraphView = (() => {
       const g = d3.select(this);
       if (d.type === 'device') {
         g.select('.graph-device-circle')
-          .attr('stroke', d.disappeared ? 'var(--unknown)' : _healthColor(d.health))
+          .attr('stroke', d.disappeared ? 'var(--unknown)' : getHealthColor(d.health))
           .attr('opacity', d.disappeared ? 0.4 : 1);
         g.select('.graph-node-id')
           .attr('opacity', d.disappeared ? 0.4 : 1);
@@ -543,7 +522,7 @@ const GraphView = (() => {
   const _renderDeviceInfo = (panel, node) => {
     const raw = state.latestNodesPayload?.nodes?.[String(node.nodeId)];
     const health = node.health || 'UNKNOWN';
-    const hClass = _healthCssClass(health);
+    const hClass = getHealthCssClass(health);
     const alias = typeof getNodeAlias === 'function' ? getNodeAlias(raw?.unique_id) : null;
     const displayName = alias || node.label;
 
@@ -640,16 +619,6 @@ const GraphView = (() => {
     document.getElementById('graphInfoClose')?.addEventListener('click', () => _selectNode(null));
   };
 
-  const _healthCssClass = (health) => {
-    if (!health) return '';
-    const v = health.toUpperCase();
-    if (v === 'NOMINAL' || v === '0') return 'status-ok';
-    if (v === 'ADVISORY' || v === '1') return 'status-ok';
-    if (v === 'CAUTION' || v === '2') return 'status-warn';
-    if (v === 'WARNING' || v === '3') return 'status-err';
-    return '';
-  };
-
   // ── Live refresh ──
 
   const _snapshotKey = () => {
@@ -675,13 +644,13 @@ const GraphView = (() => {
 
   const _updateVisuals = () => {
     gNodes.selectAll('.graph-node--device').each(function(d) {
-      const newHealth = _getHealth(d.nodeId);
+      const newHealth = getNodeHealthValue(d.nodeId);
       const raw = state.latestNodesPayload?.nodes?.[String(d.nodeId)];
       d.health = newHealth;
       d.disappeared = raw?.has_disappeared || false;
       const g = d3.select(this);
       g.select('.graph-device-circle')
-        .attr('stroke', d.disappeared ? 'var(--unknown)' : _healthColor(newHealth))
+        .attr('stroke', d.disappeared ? 'var(--unknown)' : getHealthColor(newHealth))
         .attr('opacity', d.disappeared ? 0.4 : 1);
     });
 

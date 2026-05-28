@@ -172,7 +172,7 @@ const renderHistoryTab = async () => {
   } catch (err) {
     const body = content.querySelector('.hist-body');
     if (body) {
-      body.innerHTML = svcStateMsg('⚠', 'Failed to load history', escapeHtml(String(err)));
+      body.innerHTML = svcStateMsg('⚠', 'Failed to load history', String(err));
     }
   }
 };

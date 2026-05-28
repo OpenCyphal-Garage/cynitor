@@ -10,7 +10,8 @@ The current UI is network-centric: it emphasizes topology, live traffic, and sel
 - `styles.css` – theme and component styling
 - `state.js` – global state, settings persistence, API helpers
 - `cache.js` – telemetry cache and per-node accessors
-- `plot.js` – multi-panel D3 time-series plot with crosshair and legend
+- `plot.js` – multi-panel D3 time-series plot with crosshair, interactive legend, zoom/pan, markers, freehand drawing
+- `compare-view.js` – independent multi-graph compare view with derived series, presets, export/import
 - `detail-panel.js` – per-node detail panel with subject cards and tab rendering
 - `nodes-table.js` – Tabulator-based nodes table with ghost row support
 - `services-panel.js` – service interaction UI, schema fetch, persistent history
@@ -71,13 +72,14 @@ Open in browser:
   - **Nodes** — node-centric table with per-node detail panel; ghost rows for displaced identities pinned to bottom
   - **Subjects** — subject-centric table listing all subjects and services across the network, with inline service expansion
   - **Graph** — D3 force-directed bipartite topology showing device and subject nodes with directional pub/sub links
+  - **Compare** — independent graphs for side-by-side multi-series comparison with derived series, thresholds, markers, and freehand drawing
 - Detail panel (below nodes table, nodes view):
   - Tabbed view: Publishers, Subscribers, Servers, Clients, Registers, History (with count badges)
   - Subject cards: each subject displayed as an individual card with subject ID, message type, rate, live dot indicator, and key-value metrics
   - Servers tab: expandable service cards with request forms, response display, and persistent call history fetched from backend
   - History tab: node lifecycle events (health/mode changes, service calls) with time-range filtering
   - Real-time D3 line plot: click a subject card to plot its numeric attributes over time (60-second scrolling window)
-  - Plot legend with per-attribute checkboxes to show/hide individual series
+  - Plot legend: three-zone pills with color picker, line style cycling, visibility toggle, and remove
   - Resizable split between card list and plot area (drag handle)
   - Vertical resize handle between nodes table and detail panel
 - Server down overlay:
@@ -119,9 +121,27 @@ Open in browser:
 
 - API base URL is editable in the UI (default: `http://localhost:8080`).
 - WebSocket URL is derived automatically from API base (`ws://.../ws`).
-- All settings persisted in localStorage: API URL, CAN interface, filters, sort state, column widths, theme, sidebar state, refresh interval, selected node, detail panel split ratio, detail panel height, active view, favourite/hidden subjects.
+- All settings persisted in localStorage: API URL, CAN interface, filters, sort state, column widths, theme, sidebar state, refresh interval, selected node, detail panel split ratio, detail panel height, active view, favourite/hidden subjects, compare graphs with markers and drawings.
 - Node list refresh interval is configurable via sidebar slider (1–60 seconds, default: 3s).
 - Selected node, active view, and detail panel layout are restored on page reload.
+
+## Compare View
+
+The compare view provides independent graphs for multi-series comparison.
+
+### Features
+
+- **Multi-series overlay** — add any subject + attribute from the network to a graph
+- **Derived series** — computed from raw series: delta, ratio, moving average, min/max envelope, rate of change
+- **Thresholds** — horizontal reference lines with labels
+- **Interactive legend** — three-zone pills: click swatch to change color, click style indicator to cycle line style (solid/dashed/dotted/dashdot/longdash + circle/square/triangle/diamond markers), click label to toggle visibility, click × to remove
+- **Timeline markers** — Shift+click to place a named marker with optional note, color, and line style. Click on an existing marker to edit. Markers persist and export with the graph config.
+- **Freehand drawing** — Alt+drag to draw annotations directly on the plot. Controls for color, line style, and size are in the toolbar. Alt+double-click to clear all drawings.
+- **Zoom and pan** — mouse wheel to zoom, drag to pan the X axis. Click to pause/resume, double-click to reset zoom.
+- **Crosshair sync** — hovering over one graph shows synchronized crosshairs with live value readouts on all graphs
+- **Presets** — save/load named graph configurations
+- **Export/Import** — full workspace export/import as JSON files
+- **Per-graph controls** — time window, fill rate interpolation, stroke size, disconnected points, grid
 
 ## Troubleshooting
 
