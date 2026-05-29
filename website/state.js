@@ -361,7 +361,9 @@ const requestJson = async (path, options = {}) => {
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.error || `HTTP ${response.status} for ${path}`);
+    const detail = data.error
+      || (Array.isArray(data.errors) && data.errors.length ? data.errors.join('\n') : null);
+    throw new Error(detail || `HTTP ${response.status} for ${path}`);
   }
   return data;
 };

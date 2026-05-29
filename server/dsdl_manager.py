@@ -6,6 +6,8 @@ and reports compilation status. Independent of CAN connection.
 
 import logging
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, Optional
 
@@ -45,14 +47,15 @@ class DsdlManager:
 
         compiled_ok = all((self.compiled_dir / ns).is_dir() for ns in ("uavcan", "reg"))
 
-        last_compiled: Optional[float] = None
-        if compiled_ok:
-            try:
-                last_compiled = max(
-                    f.stat().st_mtime for f in self.compiled_dir.rglob("*.py") if not f.name.startswith("__")
-                )
-            except (ValueError, OSError):
-                pass
+        public_roots = {"uavcan", "reg"}
+        last_public_compiled = self._max_compiled_mtime(
+            lambda p: p.parts and p.parts[0] in public_roots
+        ) if compiled_ok else None
+        last_custom_compiled = self._max_compiled_mtime(
+            lambda p: p.parts and p.parts[0] not in public_roots
+        )
+        last_compiled_candidates = [t for t in (last_public_compiled, last_custom_compiled) if t is not None]
+        last_compiled = max(last_compiled_candidates) if last_compiled_candidates else None
 
         source_count = sum(1 for _ in self.public_types_dir.rglob("*.dsdl")) if self.public_types_dir.is_dir() else 0
         custom_count = sum(1 for _ in self.custom_dir.rglob("*.dsdl")) if self.custom_dir.is_dir() else 0
@@ -61,9 +64,26 @@ class DsdlManager:
             "paths": paths,
             "compiled": compiled_ok,
             "last_compiled": last_compiled,
+            "last_public_compiled": last_public_compiled,
+            "last_custom_compiled": last_custom_compiled,
             "source_types": source_count,
             "custom_types": custom_count,
         }
+
+    def _max_compiled_mtime(self, predicate) -> Optional[float]:
+        if not self.compiled_dir.is_dir():
+            return None
+        try:
+            mtimes = []
+            for f in self.compiled_dir.rglob("*.py"):
+                if f.name.startswith("__"):
+                    continue
+                rel = f.relative_to(self.compiled_dir)
+                if predicate(rel):
+                    mtimes.append(f.stat().st_mtime)
+            return max(mtimes) if mtimes else None
+        except (ValueError, OSError):
+            return None
 
     def get_namespaces(self) -> dict[str, Any]:
         if self._tree_cache is not None:
@@ -82,6 +102,7 @@ class DsdlManager:
             for child in sorted(self.custom_dir.iterdir()):
                 if child.is_dir() and not child.name.startswith("."):
                     self._walk_namespace(child, child.name, tree, "custom")
+                    self._ensure_custom_dirs(child, child.name, tree)
 
         self._tree_cache = {"namespaces": tree}
         return self._tree_cache
@@ -123,6 +144,91 @@ class DsdlManager:
         self._tree_cache = None
         self._type_index.clear()
 
+    def create_namespace(self, namespace: str) -> dict[str, Any]:
+        self._validate_namespace(namespace)
+        ns_dir = self.custom_dir / Path(*namespace.split("."))
+        if ns_dir.is_dir():
+            raise ValueError(f"Namespace '{namespace}' already exists")
+        ns_dir.mkdir(parents=True, exist_ok=True)
+        self.invalidate_cache()
+        return {"namespace": namespace, "path": str(ns_dir)}
+
+    def save_type(self, namespace: str, type_name: str, version: str,
+                  source_text: str, fixed_port_id: Optional[int] = None,
+                  overwrite: bool = False) -> dict[str, Any]:
+        self._validate_namespace(namespace)
+        if not re.match(r"^[A-Z][A-Za-z0-9_]*$", type_name):
+            raise ValueError("Type name must start with uppercase letter and contain only alphanumeric/underscore")
+        if not re.match(r"^\d+\.\d+$", version):
+            raise ValueError("Version must be MAJOR.MINOR (e.g. 1.0)")
+
+        ns_dir = self.custom_dir / Path(*namespace.split("."))
+        ns_dir.mkdir(parents=True, exist_ok=True)
+
+        prefix = f"{fixed_port_id}." if fixed_port_id is not None else ""
+        filename = f"{prefix}{type_name}.{version}.dsdl"
+        file_path = ns_dir / filename
+
+        existing = list(ns_dir.glob(f"*.{type_name}.{version}.dsdl")) + \
+                   list(ns_dir.glob(f"{type_name}.{version}.dsdl"))
+
+        if existing and not overwrite:
+            raise ValueError(f"Type '{namespace}.{type_name}.{version}' already exists")
+
+        for old in existing:
+            if old != file_path:
+                old.unlink()
+
+        file_path.write_text(source_text, encoding="utf-8")
+        self.invalidate_cache()
+
+        full_name = f"{namespace}.{type_name}.{version}"
+        return {"full_name": full_name, "path": str(file_path)}
+
+    def delete_type(self, namespace: str, type_name: str, version: str) -> dict[str, Any]:
+        self._validate_namespace(namespace)
+        if not re.match(r"^[A-Z][A-Za-z0-9_]*$", type_name):
+            raise ValueError("Type name must start with uppercase letter and contain only alphanumeric/underscore")
+        if not re.match(r"^\d+\.\d+$", version):
+            raise ValueError("Version must be MAJOR.MINOR (e.g. 1.0)")
+
+        ns_dir = self.custom_dir / Path(*namespace.split("."))
+        matches = list(ns_dir.glob(f"*.{type_name}.{version}.dsdl")) + \
+                  list(ns_dir.glob(f"{type_name}.{version}.dsdl"))
+        if not matches:
+            raise FileNotFoundError(f"Type not found: {namespace}.{type_name}.{version}")
+
+        for f in matches:
+            f.unlink()
+        self.invalidate_cache()
+
+        full_name = f"{namespace}.{type_name}.{version}"
+        return {"full_name": full_name, "deleted": True}
+
+    def is_compiled(self, full_name: str) -> bool:
+        return self._is_compiled(full_name)
+
+    def compile_custom(self) -> dict[str, Any]:
+        if not self.custom_dir.is_dir() or not any(self.custom_dir.rglob("*.dsdl")):
+            return {"ok": False, "error": "No custom types to compile"}
+        return self._run_compilation(scope="custom")
+
+    def compile_public(self) -> dict[str, Any]:
+        return self._run_compilation(scope="public")
+
+    def compile_all(self) -> dict[str, Any]:
+        return self._run_compilation(scope="all")
+
+    def list_custom_namespaces(self) -> list[str]:
+        if not self.custom_dir.is_dir():
+            return []
+        namespaces = []
+        for path in sorted(self.custom_dir.rglob("*")):
+            if path.is_dir() and not path.name.startswith("."):
+                rel = path.relative_to(self.custom_dir)
+                namespaces.append(".".join(rel.parts))
+        return namespaces
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
@@ -157,7 +263,25 @@ class DsdlManager:
                 "fixed_port_id": fixed_port_id,
                 "source": source,
                 "field_names": field_names,
+                "compiled": self._is_compiled(full_name),
             })
+
+    def _ensure_custom_dirs(self, base_dir: Path, ns_prefix: str, tree: dict) -> None:
+        """Ensure empty custom directories appear in the tree."""
+        if ns_prefix not in tree:
+            tree[ns_prefix] = {"children": {}, "types": [], "_source": "custom"}
+        node = tree[ns_prefix]
+        node["_source"] = "custom"
+        self._ensure_custom_children(base_dir, node)
+
+    def _ensure_custom_children(self, base_dir: Path, node: dict) -> None:
+        for sub in sorted(base_dir.iterdir()):
+            if sub.is_dir() and not sub.name.startswith("."):
+                if sub.name not in node["children"]:
+                    node["children"][sub.name] = {"children": {}, "types": [], "_source": "custom"}
+                child = node["children"][sub.name]
+                child["_source"] = "custom"
+                self._ensure_custom_children(sub, child)
 
     @staticmethod
     def _parse_filename(filename: str) -> tuple[Optional[str], Optional[str], Optional[int]]:
@@ -282,3 +406,52 @@ class DsdlManager:
         compiled_name = f"{parts[-3]}_{parts[-2]}_{parts[-1]}.py"
         compiled_path = self.compiled_dir / Path(*parts[:-3]) / compiled_name
         return compiled_path.is_file()
+
+    @staticmethod
+    def _validate_namespace(namespace: str) -> None:
+        if not namespace or not re.match(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$", namespace):
+            raise ValueError("Namespace must be lowercase dotted identifiers (e.g. myapp.sensors)")
+
+    def _run_compilation(self, scope: str = "all") -> dict[str, Any]:
+        if shutil.which("nnvg") is None:
+            return {"ok": False, "error": "nnvg not available — install nunavut"}
+
+        uavcan_dir = self.public_types_dir / "uavcan"
+        reg_dir = self.public_types_dir / "reg"
+        errors: list[str] = []
+
+        if scope in ("all", "public"):
+            errors += self._nnvg_compile(reg_dir, [uavcan_dir], "reg")
+            errors += self._nnvg_compile(uavcan_dir, [reg_dir], "uavcan")
+
+        if scope in ("all", "custom") and self.custom_dir.is_dir():
+            custom_roots = [c for c in sorted(self.custom_dir.iterdir())
+                            if c.is_dir() and not c.name.startswith(".")]
+            for child in custom_roots:
+                siblings = [c for c in custom_roots if c != child]
+                errors += self._nnvg_compile(
+                    child,
+                    [uavcan_dir, reg_dir, *siblings],
+                    f"custom/{child.name}",
+                )
+
+        self.invalidate_cache()
+        if errors:
+            return {"ok": False, "errors": errors}
+        return {"ok": True}
+
+    def _nnvg_compile(self, target: Path, lookups: list[Path], label: str) -> list[str]:
+        args = ["nnvg", "--target-language", "py", str(target)]
+        for ld in lookups:
+            if ld.is_dir():
+                args += ["--lookup-dir", str(ld)]
+        args += ["--outdir", str(self.compiled_dir)]
+
+        try:
+            result = subprocess.run(args, check=False, capture_output=True, text=True)
+        except Exception as exc:
+            return [f"{label}: {exc}"]
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            return [f"{label}: {stderr}" if stderr else f"{label}: exit code {result.returncode}"]
+        return []

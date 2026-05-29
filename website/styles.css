@@ -3946,7 +3946,7 @@ details.svc-history-entry[open] > summary::before {
 /* ── Tree panel ── */
 
 .dsdl-tree-panel {
-  width: 17rem;
+  width: 22rem;
   min-width: 11rem;
   flex-shrink: 0;
   display: flex;
@@ -3967,26 +3967,165 @@ details.svc-history-entry[open] > summary::before {
   background: var(--accent);
 }
 
-.dsdl-tree-header {
+.dsdl-tree-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.dsdl-tree-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.dsdl-tree-divider {
+  height: 0.0625rem;
+  background: var(--border);
+  margin: 0.25rem 0;
+}
+
+.dsdl-section-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0.625rem 0.75rem;
+  gap: 0.375rem;
+  padding: 0.4375rem 0.75rem;
   font-size: 0.6875rem;
   border-bottom: 0.0625rem solid var(--border);
 }
 
-.dsdl-tree-count {
-  font-family: var(--mono);
+.dsdl-section-title {
   font-weight: 600;
   color: var(--text);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03125rem;
+}
+
+.dsdl-section-count {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--muted);
+}
+
+.dsdl-section-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.dsdl-hdr-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.1875rem;
+  padding: 0.125rem 0.3125rem;
+  border: 0.0625rem solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.5625rem;
+  font-family: var(--mono);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.dsdl-hdr-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+
+@keyframes dsdl-spin {
+  to { transform: rotate(360deg); }
+}
+
+.dsdl-hdr-btn.dsdl-spin svg {
+  animation: dsdl-spin 0.8s linear infinite;
 }
 
 .dsdl-tree-status {
   display: flex;
   align-items: center;
-  gap: 0.3125rem;
+  gap: 0.25rem;
   color: var(--muted);
+  font-size: 0.625rem;
+}
+
+.dsdl-compile-error {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.625rem;
+  font-family: var(--mono);
+  color: var(--danger);
+  background: var(--danger-muted, rgba(239,68,68,0.08));
+  border-bottom: 0.0625rem solid var(--border);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.dsdl-custom-empty {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.6875rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.dsdl-ns-custom {
+  position: relative;
+}
+
+.dsdl-ns-actions {
+  display: none;
+  align-items: center;
+  gap: 0.125rem;
+  margin-left: auto;
+}
+
+.dsdl-ns-custom:hover .dsdl-ns-actions {
+  display: inline-flex;
+}
+
+.dsdl-ns-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.0625rem;
+  padding: 0.0625rem 0.1875rem;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.dsdl-ns-add:hover {
+  color: var(--accent);
+  background: var(--surface-3);
+}
+
+.dsdl-ns-dimmed {
+  opacity: 0.4;
+}
+
+.dsdl-ns-dimmed:hover {
+  opacity: 0.7;
+}
+
+.dsdl-hidden-toggle {
+  display: block;
+  width: 100%;
+  padding: 0.3125rem 0.75rem;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.625rem;
+  font-family: var(--sans);
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.dsdl-hidden-toggle:hover {
+  color: var(--text);
 }
 
 .dsdl-dot {
@@ -4001,6 +4140,7 @@ details.svc-history-entry[open] > summary::before {
 
 .dsdl-search-wrap {
   padding: 0.5rem 0.625rem;
+  border-top: 0.0625rem solid var(--border);
 }
 
 .dsdl-search {
@@ -4023,9 +4163,7 @@ details.svc-history-entry[open] > summary::before {
 }
 
 .dsdl-tree {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0.375rem 0;
+  padding: 0.25rem 0;
 }
 
 .dsdl-tree-empty {
@@ -4140,6 +4278,13 @@ details.svc-history-entry[open] > summary::before {
 }
 
 /* ── Detail panel ── */
+
+.dsdl-detail-area {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+}
 
 .dsdl-detail-panel {
   flex: 1;
@@ -4496,4 +4641,516 @@ details.svc-history-entry[open] > summary::before {
 .dsdl-bus-toggle:hover {
   color: var(--text);
   background: var(--border);
+}
+
+/* ── Inline namespace dialog ── */
+
+.dsdl-inline-dialog {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  background: var(--surface-3);
+  border-bottom: 0.0625rem solid var(--border);
+}
+
+.dsdl-dialog-input {
+  flex: 1;
+  padding: 0.3125rem 0.5rem;
+  border: 0.0625rem solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  outline: none;
+}
+
+.dsdl-dialog-input:focus {
+  border-color: var(--accent);
+}
+
+.dsdl-dialog-ok,
+.dsdl-dialog-cancel {
+  padding: 0.25rem 0.625rem;
+  border: 0.0625rem solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.625rem;
+  cursor: pointer;
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.dsdl-dialog-ok {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+
+.dsdl-dialog-ok:hover { opacity: 0.85; }
+.dsdl-dialog-cancel:hover { color: var(--text); }
+
+/* ── Editor panel ── */
+
+.dsdl-editor-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface-2);
+  min-width: 12.5rem;
+}
+
+.dsdl-editor-handle {
+  width: 0.25rem;
+  cursor: col-resize;
+  background: var(--border);
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.dsdl-editor-handle:hover,
+.dsdl-editor-handle.dragging {
+  background: var(--accent);
+}
+
+.dsdl-editor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 0.0625rem solid var(--border);
+}
+
+.dsdl-editor-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dsdl-editor-close {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 1.125rem;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+.dsdl-editor-close:hover {
+  color: var(--text);
+}
+
+.dsdl-editor-form {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 0.625rem 0.75rem;
+  gap: 0.5rem;
+  overflow-y: auto;
+}
+
+.dsdl-editor-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.dsdl-editor-row-inline {
+  flex-direction: row;
+  gap: 0.5rem;
+}
+
+.dsdl-editor-row-inline > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex: 1;
+}
+
+.dsdl-editor-row-inline > div:last-child {
+  flex: 0.6;
+}
+
+.dsdl-editor-row-grow {
+  flex: 1;
+  min-height: 0;
+}
+
+.dsdl-editor-label {
+  font-size: 0.625rem;
+  font-weight: 500;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03125rem;
+}
+
+.dsdl-editor-input,
+.dsdl-editor-select {
+  padding: 0.3125rem 0.5rem;
+  border: 0.0625rem solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  outline: none;
+}
+
+.dsdl-editor-input:focus,
+.dsdl-editor-select:focus {
+  border-color: var(--accent);
+}
+
+.dsdl-editor-ns-wrap {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.dsdl-editor-ns-wrap > select {
+  flex: 1;
+}
+
+.dsdl-editor-ns-new {
+  flex: 1;
+}
+
+.dsdl-editor-ver {
+  max-width: 4rem;
+}
+
+.dsdl-editor-port {
+  max-width: 5rem;
+}
+
+.dsdl-editor-source-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dsdl-editor-source {
+  flex: 1;
+  min-height: 4rem;
+  padding: 0.5rem;
+  border: 0.0625rem solid var(--border);
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+  tab-size: 4;
+}
+
+.dsdl-editor-source:focus {
+  border-color: var(--accent);
+}
+
+.dsdl-editor-preview-handle {
+  height: 0.25rem;
+  cursor: row-resize;
+  background: var(--border);
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.dsdl-editor-preview-handle:hover,
+.dsdl-editor-preview-handle.dragging {
+  background: var(--accent);
+}
+
+.dsdl-editor-preview {
+  flex: 1;
+  min-height: 2rem;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 0.0625rem solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: var(--surface);
+}
+
+.dsdl-editor-preview-label {
+  font-size: 0.5625rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03125rem;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 0.0625rem solid var(--border);
+  flex-shrink: 0;
+}
+
+.dsdl-editor-preview-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.6875rem;
+}
+
+.dsdl-preview-section {
+  margin-bottom: 0.375rem;
+}
+
+.dsdl-preview-label {
+  font-size: 0.5625rem;
+  font-weight: 500;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03125rem;
+  display: block;
+  margin-bottom: 0.125rem;
+}
+
+.dsdl-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding-top: 0.25rem;
+}
+
+.dsdl-editor-status {
+  flex: 1;
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
+.dsdl-editor-ok { color: var(--ok); }
+.dsdl-editor-error { color: var(--danger); }
+
+.dsdl-editor-btn {
+  padding: 0.3125rem 0.75rem;
+  border: 0.0625rem solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.6875rem;
+  font-family: var(--sans);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.dsdl-editor-btn-save {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.dsdl-editor-btn-save:hover {
+  border-color: var(--accent);
+}
+
+.dsdl-editor-btn-compile {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+
+.dsdl-editor-btn-compile:hover {
+  opacity: 0.85;
+}
+
+.dsdl-editor-btn-danger {
+  background: var(--surface);
+  color: var(--error);
+  border-color: var(--border);
+}
+
+.dsdl-editor-btn-danger:hover {
+  border-color: var(--error);
+  background: var(--error-muted);
+}
+
+.dsdl-doc-actions {
+  display: flex;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+}
+
+.dsdl-confirm-bar {
+  justify-content: space-between;
+}
+
+.dsdl-confirm-text {
+  flex: 1;
+  font-size: 0.6875rem;
+  color: var(--text);
+}
+
+.dsdl-confirm-code {
+  font-family: var(--mono);
+  color: var(--text-bright);
+}
+
+.dsdl-dialog-danger {
+  background: var(--error);
+  color: var(--on-accent);
+  border-color: var(--error);
+}
+
+.dsdl-dialog-danger:hover {
+  opacity: 0.85;
+}
+
+.dsdl-type-row.dsdl-type-compiled {
+  opacity: 0.55;
+}
+
+.dsdl-type-row.dsdl-type-compiled.dsdl-type-selected {
+  opacity: 0.85;
+}
+
+.dsdl-info-tip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.875rem;
+  height: 0.875rem;
+  margin-left: 0.25rem;
+  border-radius: 50%;
+  border: 0.0625rem solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 0.625rem;
+  font-family: var(--mono);
+  font-weight: 600;
+  cursor: help;
+  user-select: none;
+  outline: none;
+}
+
+.dsdl-info-tip:hover,
+.dsdl-info-tip:focus {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.dsdl-info-tip[data-tip]:hover::after,
+.dsdl-info-tip[data-tip]:focus::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 0.375rem);
+  right: 0;
+  width: 18rem;
+  padding: 0.5rem 0.625rem;
+  background: var(--surface-3);
+  border: 0.0625rem solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.6875rem;
+  font-family: var(--sans);
+  font-weight: 400;
+  color: var(--text);
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  z-index: 100;
+  box-shadow: 0 0.25rem 0.75rem rgba(0,0,0,0.18);
+  pointer-events: none;
+}
+
+/* ── Editor toolbar actions group ── */
+
+.dsdl-editor-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+/* ── Editor: hint when no namespaces ── */
+
+.dsdl-editor-hint {
+  padding: 0.375rem 0.5rem;
+  margin-bottom: 0.5rem;
+  background: var(--warn-muted);
+  color: var(--warn);
+  border-radius: var(--radius);
+  font-size: 0.6875rem;
+  line-height: 1.4;
+}
+
+/* ── Editor locked state ── */
+
+.dsdl-editor-locked-banner {
+  padding: 0.5rem 0.75rem;
+  background: var(--warn-muted);
+  color: var(--warn);
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  border-bottom: 0.0625rem solid var(--border);
+}
+
+.dsdl-editor-locked .dsdl-editor-form {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.dsdl-editor-locked .dsdl-editor-btn-save {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Preview: stronger message-vs-service differentiation ── */
+
+.dsdl-preview-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.375rem;
+  border-bottom: 0.0625rem solid var(--border);
+}
+
+.dsdl-preview-divider {
+  text-align: center;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.25rem;
+  margin: 0.5rem 0;
+  user-select: none;
+}
+
+.dsdl-preview-section-req .dsdl-preview-label-req {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.dsdl-preview-section-res .dsdl-preview-label-res {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.dsdl-preview-section-req,
+.dsdl-preview-section-res {
+  border-left: 0.125rem solid transparent;
+  padding-left: 0.375rem;
+}
+
+.dsdl-preview-section-req { border-left-color: var(--accent); }
+.dsdl-preview-section-res { border-left-color: var(--warn); }
+
+/* ── Toast ── */
+
+.dsdl-toast {
+  position: absolute;
+  bottom: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.375rem 1rem;
+  border-radius: var(--radius);
+  font-size: 0.6875rem;
+  z-index: 10;
+  animation: dsdl-fade-in 0.2s ease-out;
+}
+
+.dsdl-toast-ok { background: var(--ok-muted); color: var(--ok); }
+.dsdl-toast-error { background: var(--danger-muted, rgba(239,68,68,0.15)); color: var(--danger); }
+
+@keyframes dsdl-fade-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(0.5rem); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }

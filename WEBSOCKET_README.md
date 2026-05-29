@@ -218,17 +218,21 @@ Response:
     "paths": [{"path": "...", "label": "Public regulated types", "source": "regulated"}],
     "compiled": true,
     "last_compiled": 1773832423.0,
+    "last_public_compiled": 1773832423.0,
+    "last_custom_compiled": null,
     "source_types": 257,
     "custom_types": 0
 }
 ```
+
+`last_public_compiled` covers the `uavcan/` and `reg/` namespaces only; `last_custom_compiled` covers every other top-level namespace under `python_compiled_messages/` (i.e. user-created custom types). `last_compiled` is the max of both, kept for backward compatibility.
 
 **DSDL namespace tree:**
 ```bash
 curl http://localhost:8080/api/dsdl/namespaces
 ```
 
-Returns a nested tree of namespaces with type entries. Each type includes `short_name`, `full_name`, `version`, `kind` (`"message"` or `"service"`), `fixed_port_id`, and `source`.
+Returns a nested tree of namespaces with type entries. Each type includes `short_name`, `full_name`, `version`, `kind` (`"message"` or `"service"`), `fixed_port_id`, `source` (`"regulated"` or `"custom"`), and `compiled` (`true` if a corresponding `.py` exists in `python_compiled_messages/`).
 
 **DSDL type detail:**
 ```bash
@@ -236,6 +240,56 @@ curl http://localhost:8080/api/dsdl/type/uavcan.node.Heartbeat.1.0
 ```
 
 Returns full type info: fields (with types), constants, dependencies, compilation status, and raw `.dsdl` source text. For services, fields are split into `request` and `response`.
+
+**Create custom namespace:**
+```bash
+curl -X POST http://localhost:8080/api/dsdl/custom/namespace \
+  -H 'Content-Type: application/json' \
+  -d '{"namespace": "myapp.sensors"}'
+```
+Returns `201` with `{"namespace": "myapp.sensors", "path": "..."}`.
+
+**List custom namespaces:**
+```bash
+curl http://localhost:8080/api/dsdl/custom/namespaces
+```
+Returns `{"namespaces": ["myapp", "myapp.sensors"]}`.
+
+**Save custom DSDL type:**
+```bash
+curl -X POST http://localhost:8080/api/dsdl/custom/type \
+  -H 'Content-Type: application/json' \
+  -d '{"namespace": "myapp.sensors", "type_name": "Temperature", "version": "1.0", "source_text": "float32 celsius\nfloat32 fahrenheit\n@sealed", "fixed_port_id": null}'
+```
+Returns `201` with `{"full_name": "myapp.sensors.Temperature.1.0", "path": "..."}`.
+
+Pass `"overwrite": true` to replace an existing custom type's source. Only allowed while the type is **not compiled** — the server returns `409` if a compiled `.py` already exists in `python_compiled_messages/` for this type.
+
+**Delete custom DSDL type:**
+```bash
+curl -X DELETE http://localhost:8080/api/dsdl/custom/type/myapp.sensors.Temperature.1.0
+```
+Returns `200` with `{"full_name": "myapp.sensors.Temperature.1.0", "deleted": true}`.
+Returns `404` if the source file is missing, `409` if the type is already compiled (delete the corresponding entry in `python_compiled_messages/` first if you really need to remove it), or `400` on a malformed name.
+
+**Compile DSDL types:**
+```bash
+# Compile custom namespaces only
+curl -X POST http://localhost:8080/api/dsdl/compile \
+  -H 'Content-Type: application/json' \
+  -d '{"scope": "custom"}'
+
+# Recompile public (regulated) types only — reg + uavcan
+curl -X POST http://localhost:8080/api/dsdl/compile \
+  -H 'Content-Type: application/json' \
+  -d '{"scope": "public"}'
+
+# Recompile everything (regulated + custom)
+curl -X POST http://localhost:8080/api/dsdl/compile \
+  -H 'Content-Type: application/json' \
+  -d '{"scope": "all"}'
+```
+Returns `200` with `{"ok": true}` on success, or `422` with `{"ok": false, "errors": [...]}`.
 
 **Get latest event for a subject:**
 ```bash
