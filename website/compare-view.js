@@ -365,6 +365,7 @@ const _buildGraphCard = (graph) => {
     invalidate: () => { graph._fingerprint = ''; },
     rerender: () => _renderCompareGraphNow(graph, plotArea),
     restart: () => _renderOneGraph(graph),
+    includeDraw: true,
   };
   const allControls = buildPlotControls(opts);
   const timeControls = document.createElement('div');

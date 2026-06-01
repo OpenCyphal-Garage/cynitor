@@ -557,68 +557,70 @@ const buildPlotControls = (opts = {}) => {
   gridLabel.append(' Grid');
   wrap.appendChild(gridLabel);
 
-  const drawSep = document.createElement('span');
-  drawSep.className = 'plot-controls-sep';
-  wrap.appendChild(drawSep);
+  if (opts.includeDraw) {
+    const drawSep = document.createElement('span');
+    drawSep.className = 'plot-controls-sep';
+    wrap.appendChild(drawSep);
 
-  const drawGroup = document.createElement('div');
-  drawGroup.className = 'plot-draw-group';
+    const drawGroup = document.createElement('div');
+    drawGroup.className = 'plot-draw-group';
 
-  const drawIcon = document.createElement('span');
-  drawIcon.className = 'plot-draw-icon';
-  drawIcon.textContent = '✎';
-  drawGroup.appendChild(drawIcon);
+    const drawIcon = document.createElement('span');
+    drawIcon.className = 'plot-draw-icon';
+    drawIcon.textContent = '✎';
+    drawGroup.appendChild(drawIcon);
 
-  const drawInfo = document.createElement('span');
-  drawInfo.className = 'plot-info-icon';
-  drawInfo.textContent = '?';
-  const drawTip = 'Shift+click: add/edit marker · Click on marker: edit · Alt+drag: freehand draw · Alt+dblclick: clear drawings · Click: pause/resume · Dblclick: reset zoom';
-  drawInfo.title = drawTip;
-  drawInfo.setAttribute('aria-label', drawTip);
-  drawGroup.appendChild(drawInfo);
+    const drawInfo = document.createElement('span');
+    drawInfo.className = 'plot-info-icon';
+    drawInfo.textContent = '?';
+    const drawTip = 'Shift+click: add/edit marker · Click on marker: edit · Alt+drag: freehand draw · Alt+dblclick: clear drawings · Click: pause/resume · Dblclick: reset zoom';
+    drawInfo.title = drawTip;
+    drawInfo.setAttribute('aria-label', drawTip);
+    drawGroup.appendChild(drawInfo);
 
-  const drawColorWrap = document.createElement('div');
-  drawColorWrap.className = 'plot-draw-color-wrap';
-  const drawSwatch = document.createElement('span');
-  drawSwatch.className = 'plot-draw-swatch';
-  drawSwatch.style.background = cfg._drawColor || '#ef4444';
-  const drawColorInput = document.createElement('input');
-  drawColorInput.type = 'color';
-  drawColorInput.value = _colorToHex(cfg._drawColor || '#ef4444');
-  drawColorInput.setAttribute('aria-label', 'Drawing color');
-  drawColorInput.addEventListener('input', () => {
-    cfg._drawColor = drawColorInput.value;
-    drawSwatch.style.background = drawColorInput.value;
-  });
-  drawColorWrap.appendChild(drawSwatch);
-  drawColorWrap.appendChild(drawColorInput);
-  drawGroup.appendChild(drawColorWrap);
+    const drawColorWrap = document.createElement('div');
+    drawColorWrap.className = 'plot-draw-color-wrap';
+    const drawSwatch = document.createElement('span');
+    drawSwatch.className = 'plot-draw-swatch';
+    drawSwatch.style.background = cfg._drawColor || '#ef4444';
+    const drawColorInput = document.createElement('input');
+    drawColorInput.type = 'color';
+    drawColorInput.value = _colorToHex(cfg._drawColor || '#ef4444');
+    drawColorInput.setAttribute('aria-label', 'Drawing color');
+    drawColorInput.addEventListener('input', () => {
+      cfg._drawColor = drawColorInput.value;
+      drawSwatch.style.background = drawColorInput.value;
+    });
+    drawColorWrap.appendChild(drawSwatch);
+    drawColorWrap.appendChild(drawColorInput);
+    drawGroup.appendChild(drawColorWrap);
 
-  const drawStyleSel = document.createElement('select');
-  drawStyleSel.className = 'plot-draw-style';
-  drawStyleSel.setAttribute('aria-label', 'Drawing line style');
-  for (const key of ['solid', 'dashed', 'dotted']) {
-    const opt = document.createElement('option');
-    opt.value = key;
-    opt.textContent = key;
-    drawStyleSel.appendChild(opt);
+    const drawStyleSel = document.createElement('select');
+    drawStyleSel.className = 'plot-draw-style';
+    drawStyleSel.setAttribute('aria-label', 'Drawing line style');
+    for (const key of ['solid', 'dashed', 'dotted']) {
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = key;
+      drawStyleSel.appendChild(opt);
+    }
+    drawStyleSel.value = cfg._drawStyle || 'solid';
+    drawStyleSel.addEventListener('change', () => { cfg._drawStyle = drawStyleSel.value; });
+    drawGroup.appendChild(drawStyleSel);
+
+    const drawSizeSlider = document.createElement('input');
+    drawSizeSlider.type = 'range';
+    drawSizeSlider.className = 'plot-slider plot-draw-size';
+    drawSizeSlider.min = '1';
+    drawSizeSlider.max = '6';
+    drawSizeSlider.step = '0.5';
+    drawSizeSlider.value = String(cfg._drawWidth || 2);
+    drawSizeSlider.setAttribute('aria-label', 'Drawing line size');
+    drawSizeSlider.addEventListener('input', () => { cfg._drawWidth = Number(drawSizeSlider.value); });
+    drawGroup.appendChild(drawSizeSlider);
+
+    wrap.appendChild(drawGroup);
   }
-  drawStyleSel.value = cfg._drawStyle || 'solid';
-  drawStyleSel.addEventListener('change', () => { cfg._drawStyle = drawStyleSel.value; });
-  drawGroup.appendChild(drawStyleSel);
-
-  const drawSizeSlider = document.createElement('input');
-  drawSizeSlider.type = 'range';
-  drawSizeSlider.className = 'plot-slider plot-draw-size';
-  drawSizeSlider.min = '1';
-  drawSizeSlider.max = '6';
-  drawSizeSlider.step = '0.5';
-  drawSizeSlider.value = String(cfg._drawWidth || 2);
-  drawSizeSlider.setAttribute('aria-label', 'Drawing line size');
-  drawSizeSlider.addEventListener('input', () => { cfg._drawWidth = Number(drawSizeSlider.value); });
-  drawGroup.appendChild(drawSizeSlider);
-
-  wrap.appendChild(drawGroup);
 
   return wrap;
 };
@@ -1895,16 +1897,13 @@ const renderPlot = (container) => {
 
   const titleEl = plotArea.querySelector('.plot-title');
   if (titleEl) {
-    let ctx;
+    let next = `Subject ${sid}`;
     if (state.activeView === 'subjects') {
       const event = state.latestBySubject.get(sid);
-      ctx = event?.message_type || 'network';
+      next += ` · ${event?.message_type || 'network'}`;
     } else if (state.selectedDetailTab === 'subscribers') {
-      ctx = 'network broadcast';
-    } else {
-      ctx = `published by node ${state.selectedNodeId ?? '?'}`;
+      next += ' · network broadcast';
     }
-    const next = `Subject ${sid} · ${ctx}`;
     if (titleEl.textContent !== next) titleEl.textContent = next;
   }
 
