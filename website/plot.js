@@ -91,6 +91,12 @@ const _openSwatchPicker = (swatch, currentColor, onChange) => {
   }
 };
 
+const _resetSmoothCaches = (cfg) => {
+  cfg._smoothBufs = null;
+  cfg._rawCursors = null;
+  cfg._activeInterps = null;
+};
+
 const _processSmooth = (cfg, keys) => {
   if (!cfg.smooth || cfg.smooth <= 0) return;
   if (!cfg._smoothBufs) cfg._smoothBufs = new Map();
@@ -414,6 +420,7 @@ const buildPlotControls = (opts = {}) => {
     if (cfg.paused) {
       cfg._resumeFrom = cfg.pausedAt;
       cfg._resumeStart = Date.now() / 1000;
+      _resetSmoothCaches(cfg);
     }
     cfg.paused = !cfg.paused;
     cfg.pausedAt = cfg.paused ? Date.now() / 1000 : null;
@@ -499,7 +506,7 @@ const buildPlotControls = (opts = {}) => {
   strokeGroup.className = 'plot-slider-group';
   const strokeLbl = document.createElement('span');
   strokeLbl.className = 'plot-slider-label';
-  strokeLbl.textContent = 'Size';
+  strokeLbl.textContent = 'Line width';
   strokeGroup.appendChild(strokeLbl);
   const strokeSlider = document.createElement('input');
   strokeSlider.type = 'range';
@@ -508,7 +515,7 @@ const buildPlotControls = (opts = {}) => {
   strokeSlider.max = '5';
   strokeSlider.step = '0.5';
   strokeSlider.value = String(cfg.stroke);
-  strokeSlider.setAttribute('aria-label', 'Line and point size');
+  strokeSlider.setAttribute('aria-label', 'Line width');
   strokeSlider.addEventListener('input', () => {
     cfg.stroke = Number(strokeSlider.value);
     invalidate();
@@ -574,10 +581,10 @@ const buildPlotControls = (opts = {}) => {
   drawColorWrap.className = 'plot-draw-color-wrap';
   const drawSwatch = document.createElement('span');
   drawSwatch.className = 'plot-draw-swatch';
-  drawSwatch.style.background = cfg._drawColor || 'var(--accent)';
+  drawSwatch.style.background = cfg._drawColor || '#ef4444';
   const drawColorInput = document.createElement('input');
   drawColorInput.type = 'color';
-  drawColorInput.value = _colorToHex(cfg._drawColor || '#0969da');
+  drawColorInput.value = _colorToHex(cfg._drawColor || '#ef4444');
   drawColorInput.setAttribute('aria-label', 'Drawing color');
   drawColorInput.addEventListener('input', () => {
     cfg._drawColor = drawColorInput.value;
@@ -1143,6 +1150,13 @@ const _renderMarkers = (container, markers, xScale, h) => {
   items.exit().remove();
 };
 
+const _drawDashFor = (style, width) => {
+  const w = Math.max(0.5, Number(width) || 2);
+  if (style === 'dashed') return `${w * 3} ${w * 2}`;
+  if (style === 'dotted') return `0 ${w * 2}`;
+  return 'none';
+};
+
 const _renderDrawings = (container, drawings, xScale, panelH) => {
   let dG = container.select('.plot-drawings');
   if (!drawings || !drawings.length) {
@@ -1151,14 +1165,13 @@ const _renderDrawings = (container, drawings, xScale, panelH) => {
   }
   if (dG.empty()) dG = container.append('g').attr('class', 'plot-drawings').attr('pointer-events', 'none');
   const paths = dG.selectAll('path').data(drawings);
-  const DRAW_DASH_RENDER = { solid: 'none', dashed: '6 3', dotted: '2 3' };
   paths.enter().append('path')
     .attr('fill', 'none')
     .merge(paths)
-    .attr('stroke', d => d.color || 'var(--accent)')
+    .attr('stroke', d => d.color || '#ef4444')
     .attr('stroke-width', d => d.width || 2)
-    .attr('stroke-dasharray', d => DRAW_DASH_RENDER[d.dash] || 'none')
-    .attr('stroke-linecap', 'round')
+    .attr('stroke-dasharray', d => _drawDashFor(d.dash, d.width || 2))
+    .attr('stroke-linecap', d => d.dash === 'dotted' ? 'round' : (d.dash === 'dashed' ? 'butt' : 'round'))
     .attr('stroke-linejoin', 'round')
     .attr('d', d => {
       if (!d.points || d.points.length < 2) return null;
@@ -1634,14 +1647,16 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
         const ctx = plotArea._plotCtx || {};
         const curXScale = ctx.xScale || xScale;
         const totalH = parseFloat(g.select('.plot-overlay').attr('height')) || 200;
-        const DRAW_DASH = { solid: 'none', dashed: '6 3', dotted: '2 3' };
+        const width = cfg._drawWidth || 2;
+        const style = cfg._drawStyle || 'solid';
         drawingStroke = {
           points: [{ t: curXScale.invert(mx), y: my / totalH }],
-          color: cfg._drawColor || 'var(--accent)',
-          width: cfg._drawWidth || 2,
-          dash: cfg._drawStyle || 'solid',
+          color: cfg._drawColor || '#ef4444',
+          width,
+          dash: style,
           _totalH: totalH,
-          _dashArray: DRAW_DASH[cfg._drawStyle] || 'none',
+          _dashArray: _drawDashFor(style, width),
+          _linecap: style === 'dashed' ? 'butt' : 'round',
         };
         svgEl.style.cursor = 'crosshair';
         return;
@@ -1667,7 +1682,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
             .attr('fill', 'none').attr('stroke', drawingStroke.color)
             .attr('stroke-width', drawingStroke.width)
             .attr('stroke-dasharray', drawingStroke._dashArray)
-            .attr('stroke-linecap', 'round').attr('stroke-linejoin', 'round').attr('pointer-events', 'none')
+            .attr('stroke-linecap', drawingStroke._linecap).attr('stroke-linejoin', 'round').attr('pointer-events', 'none')
             .attr('d', d);
         } else {
           tempPath.attr('d', d);
@@ -1694,7 +1709,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
         g.select('.plot-drawing-temp').remove();
         if (drawingStroke.points.length >= 2) {
           if (!cfg.drawings) cfg.drawings = [];
-          const { _totalH, _dashArray, ...stroke } = drawingStroke;
+          const { _totalH, _dashArray, _linecap, ...stroke } = drawingStroke;
           cfg.drawings.push(stroke);
           cfg._fingerprint = '';
           saveSettings();
@@ -1756,6 +1771,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
           if (cfg.paused) {
             cfg._resumeFrom = cfg.pausedAt;
             cfg._resumeStart = Date.now() / 1000;
+            _resetSmoothCaches(cfg);
           }
           cfg.paused = !cfg.paused;
           cfg.pausedAt = cfg.paused ? Date.now() / 1000 : null;

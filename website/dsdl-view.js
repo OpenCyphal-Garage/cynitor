@@ -330,6 +330,20 @@ const DsdlView = (() => {
     _updateBusDots();
   };
 
+  const _hasUncompiledTypes = (node) => {
+    if (node.types) {
+      for (const t of node.types) {
+        if (!t.compiled) return true;
+      }
+    }
+    if (node.children) {
+      for (const child of Object.values(node.children)) {
+        if (_hasUncompiledTypes(child)) return true;
+      }
+    }
+    return false;
+  };
+
   const _renderCustomNsNode = (name, fullPath, node, depth, searchTerm, dimmed = false) => {
     const filteredTypes = _filterTypes(node.types || [], searchTerm);
     let childHtml = '';
@@ -355,10 +369,10 @@ const DsdlView = (() => {
         ? `<span class="dsdl-port-id">${t.fixed_port_id}</span>`
         : '';
       const selected = _selectedType === t.full_name ? ' dsdl-type-selected' : '';
-      const lockedCls = t.compiled ? ' dsdl-type-compiled' : '';
+      const lockedCls = t.compiled ? ' dsdl-type-compiled' : ' dsdl-type-uncompiled';
       const lockTitle = t.compiled
         ? ' title="Compiled — locked. Clear python_compiled_messages/ and recompile to edit."'
-        : '';
+        : ' title="Not compiled — recompile to load this type into the running runtime."';
       typesHtml += `
         <div class="dsdl-type-row${selected}${lockedCls}" data-type="${escapeHtml(t.full_name)}"${lockTitle}
              style="padding-left: ${(depth + 1) * 1.125 + 1}rem">
@@ -396,11 +410,12 @@ const DsdlView = (() => {
     </span>`;
 
     const dimCls = dimmed ? ' dsdl-ns-dimmed' : '';
+    const uncompiledCls = _hasUncompiledTypes(node) ? ' dsdl-ns-uncompiled' : '';
 
     if (childCount === 0 && !searchTerm) {
       return `
         <div class="dsdl-ns${dimCls}">
-          <div class="dsdl-ns-row dsdl-ns-custom" data-ns="${escapeHtml(fullPath)}"
+          <div class="dsdl-ns-row dsdl-ns-custom${uncompiledCls}" data-ns="${escapeHtml(fullPath)}"
                style="padding-left: ${depth * 1.125 + 0.5}rem">
             ${chevron}
             <span class="dsdl-ns-label">${escapeHtml(name)}</span>
@@ -415,7 +430,7 @@ const DsdlView = (() => {
 
     return `
       <div class="dsdl-ns${dimCls}">
-        <div class="dsdl-ns-row dsdl-ns-custom" data-ns="${escapeHtml(fullPath)}"
+        <div class="dsdl-ns-row dsdl-ns-custom${uncompiledCls}" data-ns="${escapeHtml(fullPath)}"
              style="padding-left: ${depth * 1.125 + 0.5}rem">
           ${chevron}
           <span class="dsdl-ns-label">${escapeHtml(name)}</span>

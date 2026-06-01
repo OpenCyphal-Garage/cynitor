@@ -80,7 +80,10 @@ const initCompareView = () => {
     for (const graph of state.compareGraphs) {
       graph.paused = !allPaused;
       graph.pausedAt = graph.paused ? now : null;
-      if (!graph.paused) graph._resumeFrom = now;
+      if (!graph.paused) {
+        graph._resumeFrom = now;
+        _resetSmoothCaches(graph);
+      }
     }
     saveSettings();
     if (allPaused) startCompareAnim();
@@ -107,7 +110,7 @@ const initCompareView = () => {
   const savedBtn = document.createElement('button');
   savedBtn.className = 'compare-saved-btn';
   savedBtn.type = 'button';
-  savedBtn.textContent = 'Presets ▾';
+  savedBtn.textContent = 'Saved graphs ▾';
   savedBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     _refreshSavedMenu(savedMenu, cardsContainer);
@@ -222,7 +225,7 @@ const _refreshSavedMenu = (menu, cardsContainer) => {
   if (!state.savedCompareConfigs.length) {
     const empty = document.createElement('div');
     empty.className = 'compare-saved-empty';
-    empty.textContent = 'No saved configurations';
+    empty.textContent = 'No saved graphs';
     menu.appendChild(empty);
     return;
   }
