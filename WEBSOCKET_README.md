@@ -688,16 +688,104 @@ Response (success):
 
 Returns `400` if required fields (`name`, `value`, `type`) are missing, the register is read-only, or the type is incompatible. Returns `503` if CAN is not connected.
 
+### Recordings (`/api/recordings*`)
+
+Named captures with optional length/event-count limits. Two storage modes:
+
+- **`dedicated`** (default for new recordings) — matching subject events and service calls stream into a per-recording table (`recording_events`) from the moment the recording starts. Survives the global buffer's retention. Quick-save snapshots matching events from the global buffer into the same table at creation time.
+- **`global`** — Phase 1 bookmarks. Metadata only; export reads from the shared `events` table within the recording's time-range × filter. Subject to global retention.
+
+All recording endpoints return `503` if no `event_logger` is initialized (no CAN session yet).
+
+#### List, create, inspect
+
+```http
+GET    /api/recordings                       → { recordings: [...] }
+GET    /api/recordings/{rec_id}              → { recording: { ...stats } }
+GET    /api/recordings/buffer                → { buffer: { ...global buffer stats } }
+POST   /api/recordings                       body: { name, filter?, notes?, max_length_seconds?, max_events?, stop_on_limit? } → 201 { recording }
+POST   /api/recordings/{rec_id}/stop         → { recording }
+PATCH  /api/recordings/{rec_id}              body: { name?, notes? } → { recording }
+DELETE /api/recordings/{rec_id}[?purge=true] → { deleted, purged }
+```
+
+A POST without `end_unix` starts a live recording; `end_unix` stays `null` until stopped (manually or by hitting a limit). Stats use `now()` for the upper bound.
+
+A recording row contains: `id`, `name`, `start_unix`, `end_unix`, `filter`, `notes`, `created_at`, `max_length_seconds`, `max_events`, `stop_on_limit`, `auto_stopped`, `event_count`, `events_source`, plus computed `subjects`, `duration_seconds`.
+
+#### Limits and auto-stop
+
+`max_length_seconds` and `max_events` are optional caps. With `stop_on_limit: true` (default off — opt in per recording), the recording auto-stops on the first limit breach: `end_unix` is set, `auto_stopped` becomes `true`, and the recording disappears from the active-routing registry. With `stop_on_limit: false`, the limits are soft targets — the recording keeps capturing past 100%, useful for showing progress bars in the UI without enforcing a cap.
+
+Auto-stop is checked both on each matching event (during ingest) and via a 5-second background sweep (catches time-based limits when the bus is silent).
+
+#### Retroactive "Quick save"
+
+```http
+POST   /api/recordings/quick   body: { name, last_seconds, filter?, notes? }
+```
+
+Snapshots matching events from the global buffer in `[now - last_seconds, now]` into the recording's dedicated store at creation time. Useful workflow: "the bus just glitched, save the last 30 seconds." Returns `201` with the full recording row.
+
+#### Filter shape (OR-across-dimensions)
+
+```json
+{
+  "subject_ids":   [7509, 7510],
+  "service_ids":   [384],
+  "node_ids":      [42],
+  "message_types": ["Heartbeat_1_0"]
+}
+```
+
+An event matches if it satisfies **any** dimension (subject in `subject_ids` OR node in `node_ids` OR service in `service_ids` OR type in `message_types`). Empty/missing keys impose no restriction on that dimension. Empty filter overall = capture everything. Unknown keys are ignored. Invalid types are dropped silently (non-integer ids, non-string types). `service_ids` matches `service_call` rows; it has no effect against the global `events` table for legacy bookmarks.
+
+#### Export
+
+```http
+GET    /api/recordings/{rec_id}/export?format=csv     → text/csv stream
+GET    /api/recordings/{rec_id}/export?format=json    → application/json
+```
+
+CSV columns: `recording_id, timestamp_unix, timestamp, subject_id, publisher_node_id, unique_id, message_type, rate, attribute, value, unit`. One row per attribute (events with N attributes → N rows). Service-call rows currently appear with their `service_id` in the `subject_id` column and service metadata in `attributes_json` — a future CSV revision may add a dedicated `kind`/`service_id` column.
+
+JSON returns `{ recording, events: [...], truncated, exported_at_unix }`. Each event carries a `kind` field (`'subject'` or `'service_call'`) and either `subject_id` or `service_id`. Buffered with a hard cap of 200,000 events; set `truncated=true` if reached. Use CSV for larger windows.
+
+Both formats set `Content-Disposition: attachment; filename="<sanitized-name>.<ext>"`.
+
+#### Global buffer (`GET /api/recordings/buffer`)
+
+Stats about the shared `events` ring used by legacy bookmarks and quick-save:
+
+```json
+{
+  "buffer": {
+    "retention_seconds": 86400,
+    "max_events": 5000000,
+    "event_count": 142057,
+    "oldest_event_unix": 1748742543.21,
+    "newest_event_unix": 1748828943.18,
+    "db_size_bytes": 38420480
+  }
+}
+```
+
+Use this to surface "what's available for quick-save" and to estimate observed message rate (count / (newest - oldest)).
+
 ### Event Logger (SQLite)
 
-Events are automatically logged to `telemetry_events.db` with fields:
+Events are automatically logged to `telemetry_events.db`. The `events` table has fields:
 - `id` (auto-increment)
 - `subject_id`
 - `timestamp`, `timestamp_unix`
 - `rate`, `message_type`
-- `publisher_node_id`
+- `publisher_node_id`, `unique_id`
 - `attributes` (JSON)
 - `created_at` (database timestamp)
+
+**Retention.** The global `events` table is pruned by **time-based retention** (default 24 hours). A hard event-count cap (`max_events`, default 5,000,000) acts as a safety net only — it bounds disk if rate × retention would otherwise blow past it. Pruning runs every 1000 writes; configure both via `EventLogger(retention_seconds=..., max_events=...)`.
+
+Per-recording event stores (`recording_events`) are **not** subject to retention — they only grow until the recording is deleted (with `?purge=true`) or stopped. Recording rows survive global retention by definition.
 
 **Query logged events programmatically:**
 ```python

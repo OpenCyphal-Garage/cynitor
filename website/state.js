@@ -69,6 +69,16 @@ const state = {
   favouriteSubjectIds: new Set(),
   hiddenSubjectIds: new Set(),
   subjectsTableSort: { key: 'id', dir: 'asc' },
+  recordings: [],
+  activeRecordingId: null,
+  recordBuffer: null,
+  recordFilterDraft: {
+    subject_ids: [], service_ids: [], node_ids: [], message_types: [],
+    name: '', notes: '',
+    max_length_seconds: 3600,
+    max_events: 100_000,
+    stop_on_limit: true,
+  },
 };
 
 // Derived accessors for CAN connection state — keeps existing code readable
@@ -437,6 +447,7 @@ const _writeSettingsNow = () => {
     hiddenSubjectIds: [...state.hiddenSubjectIds],
     subjectsTableSort: state.subjectsTableSort,
     subjectsHeaderFilters: typeof getSubjectsHeaderFilters === 'function' ? getSubjectsHeaderFilters() : null,
+    recordFilterDraft: state.recordFilterDraft,
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
 };
@@ -528,8 +539,22 @@ const loadSettings = () => {
   if (settings.nodeAliases && typeof settings.nodeAliases === 'object') {
     state.nodeAliases = settings.nodeAliases;
   }
-  if (settings.activeView === 'subjects' || settings.activeView === 'graph' || settings.activeView === 'compare' || settings.activeView === 'dsdl') {
+  if (['subjects', 'graph', 'compare', 'dsdl', 'record'].includes(settings.activeView)) {
     state.activeView = settings.activeView;
+  }
+  if (settings.recordFilterDraft && typeof settings.recordFilterDraft === 'object') {
+    const d = settings.recordFilterDraft;
+    state.recordFilterDraft = {
+      subject_ids: Array.isArray(d.subject_ids) ? d.subject_ids.filter(Number.isInteger) : [],
+      service_ids: Array.isArray(d.service_ids) ? d.service_ids.filter(Number.isInteger) : [],
+      node_ids: Array.isArray(d.node_ids) ? d.node_ids.filter(Number.isInteger) : [],
+      message_types: Array.isArray(d.message_types) ? d.message_types.filter(s => typeof s === 'string') : [],
+      name: typeof d.name === 'string' ? d.name : '',
+      notes: typeof d.notes === 'string' ? d.notes : '',
+      max_length_seconds: typeof d.max_length_seconds === 'number' && d.max_length_seconds > 0 ? d.max_length_seconds : 3600,
+      max_events: typeof d.max_events === 'number' && d.max_events > 0 ? d.max_events : 100_000,
+      stop_on_limit: d.stop_on_limit !== false,
+    };
   }
   if (Array.isArray(settings.favouriteSubjectIds)) {
     state.favouriteSubjectIds = new Set(settings.favouriteSubjectIds);

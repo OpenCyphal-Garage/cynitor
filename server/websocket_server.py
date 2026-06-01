@@ -3,9 +3,20 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import Optional, Set, Any
 from aiohttp import web, WSCloseCode
+
+
+def _csv_escape(value: Any) -> str:
+    """Escape a value for inclusion in a CSV cell."""
+    if value is None:
+        return ""
+    s = str(value)
+    if any(c in s for c in (",", '"', "\n", "\r")):
+        s = '"' + s.replace('"', '""') + '"'
+    return s
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +82,7 @@ class WebSocketServer:
                 response = ex
         response.headers["Access-Control-Allow-Origin"] = "*"
         response.headers["Access-Control-Allow-Headers"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS"
+        response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
         return response
 
     def _setup_routes(self) -> None:
@@ -98,6 +109,16 @@ class WebSocketServer:
         self.app.router.add_delete('/api/identity/{unique_id}', self._delete_identity)
         self.app.router.add_post('/api/can/connect', self._can_connect)
         self.app.router.add_post('/api/can/disconnect', self._can_disconnect)
+
+        self.app.router.add_get('/api/recordings', self._get_recordings)
+        self.app.router.add_post('/api/recordings', self._post_recording)
+        self.app.router.add_post('/api/recordings/quick', self._post_quick_recording)
+        self.app.router.add_get('/api/recordings/buffer', self._get_recordings_buffer)
+        self.app.router.add_get('/api/recordings/{rec_id}', self._get_recording)
+        self.app.router.add_patch('/api/recordings/{rec_id}', self._patch_recording)
+        self.app.router.add_delete('/api/recordings/{rec_id}', self._delete_recording)
+        self.app.router.add_post('/api/recordings/{rec_id}/stop', self._post_recording_stop)
+        self.app.router.add_get('/api/recordings/{rec_id}/export', self._export_recording)
 
         self.app.router.add_get('/api/dsdl/status', self._dsdl_status)
         self.app.router.add_get('/api/dsdl/namespaces', self._dsdl_namespaces)
@@ -435,6 +456,271 @@ class WebSocketServer:
                         entry["node_unique_id"] = node_info.get("unique_id")
 
         return web.json_response({"service_id": service_id, "history": history})
+
+    # ------------------------------------------------------------------
+    # Recordings (named time-range bookmarks over the events log)
+    # ------------------------------------------------------------------
+
+    _MAX_REC_ID = 2**31 - 1
+    _EXPORT_PAGE_SIZE = 2000
+    _EXPORT_JSON_LIMIT = 200_000
+
+    async def _read_json_body(self, request: web.Request) -> tuple[Optional[dict], Optional[web.Response]]:
+        try:
+            body = await request.json()
+        except Exception:
+            return None, web.json_response({"error": "Invalid JSON body"}, status=400)
+        if not isinstance(body, dict):
+            return None, web.json_response({"error": "JSON body must be an object"}, status=400)
+        return body, None
+
+    def _require_event_logger(self) -> Optional[web.Response]:
+        if not self.session.event_logger:
+            return web.json_response({"error": "Event logger not available"}, status=503)
+        return None
+
+    async def _get_recordings(self, request: web.Request) -> web.Response:
+        err = self._require_event_logger()
+        if err:
+            return err
+        recs = await self.session.event_logger.list_recordings()
+        return web.json_response({"recordings": recs})
+
+    @staticmethod
+    def _parse_limits(body: dict) -> tuple[Optional[float], Optional[int], bool, Optional[web.Response]]:
+        """Extract (max_length_seconds, max_events, stop_on_limit) from a POST
+        body. Returns the parsed values + an optional error response."""
+        max_length = body.get("max_length_seconds")
+        if max_length is not None:
+            if isinstance(max_length, bool) or not isinstance(max_length, (int, float)) or max_length <= 0:
+                return None, None, False, web.json_response(
+                    {"error": "max_length_seconds must be a positive number"}, status=400
+                )
+            max_length = float(max_length)
+        max_events = body.get("max_events")
+        if max_events is not None:
+            if isinstance(max_events, bool) or not isinstance(max_events, int) or max_events <= 0:
+                return None, None, False, web.json_response(
+                    {"error": "max_events must be a positive integer"}, status=400
+                )
+        stop_on_limit = bool(body.get("stop_on_limit", False))
+        return max_length, max_events, stop_on_limit, None
+
+    async def _post_recording(self, request: web.Request) -> web.Response:
+        err = self._require_event_logger()
+        if err:
+            return err
+        body, err = await self._read_json_body(request)
+        if err:
+            return err
+        name = body.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return web.json_response({"error": "Name is required"}, status=400)
+        max_length, max_events, stop_on_limit, err = self._parse_limits(body)
+        if err:
+            return err
+        notes = body.get("notes")
+        rec_id = await self.session.event_logger.create_recording(
+            name=name.strip(),
+            filter_spec=body.get("filter"),
+            notes=notes if isinstance(notes, str) else None,
+            max_length_seconds=max_length,
+            max_events=max_events,
+            stop_on_limit=stop_on_limit,
+        )
+        rec = await self.session.event_logger.get_recording_stats(rec_id)
+        return web.json_response({"recording": rec}, status=201)
+
+    async def _post_quick_recording(self, request: web.Request) -> web.Response:
+        err = self._require_event_logger()
+        if err:
+            return err
+        body, err = await self._read_json_body(request)
+        if err:
+            return err
+        name = body.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return web.json_response({"error": "Name is required"}, status=400)
+        last_seconds = body.get("last_seconds")
+        if not isinstance(last_seconds, (int, float)) or isinstance(last_seconds, bool) or last_seconds <= 0:
+            return web.json_response({"error": "last_seconds must be a positive number"}, status=400)
+        notes = body.get("notes")
+        now = time.time()
+        rec_id = await self.session.event_logger.create_recording(
+            name=name.strip(),
+            start_unix=now - float(last_seconds),
+            end_unix=now,
+            filter_spec=body.get("filter"),
+            notes=notes if isinstance(notes, str) else None,
+        )
+        rec = await self.session.event_logger.get_recording_stats(rec_id)
+        return web.json_response({"recording": rec}, status=201)
+
+    async def _get_recordings_buffer(self, request: web.Request) -> web.Response:
+        err = self._require_event_logger()
+        if err:
+            return err
+        stats = await self.session.event_logger.get_buffer_stats()
+        return web.json_response({"buffer": stats})
+
+    async def _post_recording_stop(self, request: web.Request) -> web.Response:
+        rec_id, err = _parse_int(request.match_info.get('rec_id'), 'recording_id', 1, self._MAX_REC_ID)
+        if err:
+            return err
+        if (e := self._require_event_logger()):
+            return e
+        ok = await self.session.event_logger.stop_recording(rec_id)
+        if not ok:
+            return web.json_response({"error": "Recording not found or already stopped"}, status=404)
+        rec = await self.session.event_logger.get_recording_stats(rec_id)
+        return web.json_response({"recording": rec})
+
+    async def _patch_recording(self, request: web.Request) -> web.Response:
+        rec_id, err = _parse_int(request.match_info.get('rec_id'), 'recording_id', 1, self._MAX_REC_ID)
+        if err:
+            return err
+        if (e := self._require_event_logger()):
+            return e
+        body, err = await self._read_json_body(request)
+        if err:
+            return err
+        name = body.get("name")
+        notes = body.get("notes")
+        if name is not None and (not isinstance(name, str) or not name.strip()):
+            return web.json_response({"error": "Name must be a non-empty string"}, status=400)
+        if notes is not None and not isinstance(notes, str):
+            return web.json_response({"error": "Notes must be a string"}, status=400)
+
+        max_length = body.get("max_length_seconds")
+        if max_length is not None:
+            if isinstance(max_length, bool) or not isinstance(max_length, (int, float)) or max_length <= 0:
+                return web.json_response({"error": "max_length_seconds must be a positive number"}, status=400)
+            max_length = float(max_length)
+        max_events = body.get("max_events")
+        if max_events is not None:
+            if isinstance(max_events, bool) or not isinstance(max_events, int) or max_events <= 0:
+                return web.json_response({"error": "max_events must be a positive integer"}, status=400)
+        stop_on_limit = body.get("stop_on_limit")
+        if stop_on_limit is not None and not isinstance(stop_on_limit, bool):
+            return web.json_response({"error": "stop_on_limit must be a boolean"}, status=400)
+
+        ok = await self.session.event_logger.update_recording(
+            rec_id,
+            name=name.strip() if isinstance(name, str) else None,
+            notes=notes,
+            max_length_seconds=max_length,
+            max_events=max_events,
+            stop_on_limit=stop_on_limit,
+        )
+        if not ok:
+            existing = await self.session.event_logger.get_recording(rec_id)
+            if not existing:
+                return web.json_response({"error": "Recording not found"}, status=404)
+            return web.json_response({"error": "Nothing to update"}, status=400)
+        rec = await self.session.event_logger.get_recording_stats(rec_id)
+        return web.json_response({"recording": rec})
+
+    async def _get_recording(self, request: web.Request) -> web.Response:
+        rec_id, err = _parse_int(request.match_info.get('rec_id'), 'recording_id', 1, self._MAX_REC_ID)
+        if err:
+            return err
+        if (e := self._require_event_logger()):
+            return e
+        rec = await self.session.event_logger.get_recording_stats(rec_id)
+        if not rec:
+            return web.json_response({"error": "Recording not found"}, status=404)
+        return web.json_response({"recording": rec})
+
+    async def _delete_recording(self, request: web.Request) -> web.Response:
+        rec_id, err = _parse_int(request.match_info.get('rec_id'), 'recording_id', 1, self._MAX_REC_ID)
+        if err:
+            return err
+        if (e := self._require_event_logger()):
+            return e
+        purge = request.query.get("purge", "false").lower() == "true"
+        ok = await self.session.event_logger.delete_recording(rec_id, purge_events=purge)
+        if not ok:
+            return web.json_response({"error": "Recording not found"}, status=404)
+        return web.json_response({"deleted": True, "purged": purge})
+
+    async def _export_recording(self, request: web.Request) -> web.StreamResponse:
+        rec_id, err = _parse_int(request.match_info.get('rec_id'), 'recording_id', 1, self._MAX_REC_ID)
+        if err:
+            return err
+        if (e := self._require_event_logger()):
+            return e
+        fmt = request.query.get("format", "csv").lower()
+        if fmt not in ("csv", "json"):
+            return web.json_response({"error": "format must be csv or json"}, status=400)
+        rec = await self.session.event_logger.get_recording(rec_id)
+        if not rec:
+            return web.json_response({"error": "Recording not found"}, status=404)
+
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", rec["name"])[:60] or f"recording-{rec_id}"
+        if fmt == "csv":
+            return await self._export_recording_csv(request, rec, safe_name)
+        return await self._export_recording_json(rec, safe_name)
+
+    async def _export_recording_csv(self, request: web.Request, rec: dict, safe_name: str) -> web.StreamResponse:
+        resp = web.StreamResponse(
+            headers={
+                "Content-Type": "text/csv; charset=utf-8",
+                "Content-Disposition": f'attachment; filename="{safe_name}.csv"',
+            }
+        )
+        await resp.prepare(request)
+        header = "recording_id,timestamp_unix,timestamp,subject_id,publisher_node_id,unique_id,message_type,rate,attribute,value,unit\n"
+        await resp.write(header.encode("utf-8"))
+
+        offset = 0
+        while True:
+            events = await self.session.event_logger.get_recording_events(
+                rec["id"], limit=self._EXPORT_PAGE_SIZE, offset=offset
+            )
+            if not events:
+                break
+            lines: list[str] = []
+            for ev in events:
+                base = [
+                    str(rec["id"]),
+                    f"{ev['timestamp_unix']:.6f}" if ev.get("timestamp_unix") is not None else "",
+                    _csv_escape(ev.get("timestamp")),
+                    _csv_escape(ev.get("subject_id")),
+                    _csv_escape(ev.get("publisher_node_id")),
+                    _csv_escape(ev.get("unique_id")),
+                    _csv_escape(ev.get("message_type")),
+                    _csv_escape(ev.get("rate")),
+                ]
+                attrs = ev.get("attributes") or []
+                if not attrs:
+                    lines.append(",".join(base + ["", "", ""]))
+                else:
+                    for a in attrs:
+                        lines.append(",".join(base + [
+                            _csv_escape(a.get("attribute")),
+                            _csv_escape(a.get("value")),
+                            _csv_escape(a.get("unit")),
+                        ]))
+            await resp.write(("\n".join(lines) + "\n").encode("utf-8"))
+            offset += len(events)
+            if len(events) < self._EXPORT_PAGE_SIZE:
+                break
+        await resp.write_eof()
+        return resp
+
+    async def _export_recording_json(self, rec: dict, safe_name: str) -> web.Response:
+        events = await self.session.event_logger.get_recording_events(
+            rec["id"], limit=self._EXPORT_JSON_LIMIT, offset=0
+        )
+        payload = {
+            "recording": rec,
+            "events": events,
+            "truncated": len(events) >= self._EXPORT_JSON_LIMIT,
+            "exported_at_unix": time.time(),
+        }
+        return web.json_response(payload, headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}.json"',
+        })
 
     # ------------------------------------------------------------------
     # WebSocket handler

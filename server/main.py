@@ -196,7 +196,11 @@ class CANSession:
                 await self.telemetry.start()
 
                 logger.info("Initializing EventLogger...")
-                self.event_logger = EventLogger(db_path="telemetry_events.db", max_events=100000)
+                self.event_logger = EventLogger(
+                    db_path="telemetry_events.db",
+                    retention_seconds=86400.0,   # keep last 24h of bus traffic
+                    max_events=5_000_000,        # safety cap; bounds disk
+                )
                 await self.event_logger.start()
 
                 saved_identities = await self.event_logger.load_identity_map()

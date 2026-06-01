@@ -82,6 +82,12 @@
           </svg>
           <span>DSDL</span>
         </button>
+        <button class="view-graph-btn" data-view="record" role="tab" aria-selected="false" id="viewTabRecord" aria-controls="recordContainer">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="5" fill="currentColor"/>
+          </svg>
+          <span>Record</span>
+        </button>
       </div>
 
       <div class="sidebar-footer">
@@ -116,6 +122,7 @@
       <div id="graphContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabGraph"></div>
       <div id="compareContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabCompare"></div>
       <div id="dsdlContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabDsdl"></div>
+      <div id="recordContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabRecord"></div>
       <div class="detail-resize-handle" id="detailResizeHandle">
         <button class="detail-collapse-btn" id="detailCollapseBtn" aria-label="Toggle detail panel">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -170,6 +177,7 @@
   <script src="./subjects-panel.js"></script>
   <script src="./graph-view.js"></script>
   <script src="./dsdl-view.js"></script>
+  <script src="./record-view.js"></script>
   <script src="./connection.js"></script>
   <script src="./app.js"></script>
 </body>
