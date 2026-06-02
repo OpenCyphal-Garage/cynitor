@@ -934,7 +934,19 @@ class ScannerNode:
                                                 if t > timestamp - self.MESSAGE_RATE_WINDOW_SECONDS]
         return round(self.get_message_rate(subject_id))
 
-    async def _queue_event(self, subject_id: int, message_type: str, attributes: list, publisher_node_id: int) -> None:
+    @staticmethod
+    def _transfer_payload_bytes(transfer) -> Optional[int]:
+        """Best-effort size of a received transfer's serialized payload, in bytes."""
+        payload = getattr(transfer, "fragmented_payload", None)
+        if payload is None:
+            return None
+        try:
+            return sum(len(fragment) for fragment in payload)
+        except (TypeError, AttributeError):
+            return None
+
+    async def _queue_event(self, subject_id: int, message_type: str, attributes: list,
+                           publisher_node_id: int, payload_bytes: Optional[int] = None) -> None:
         """Build a standardized event dict and put it on the message queue."""
         timestamp = time.time()
         rate = self._track_rate(subject_id, timestamp)
@@ -947,6 +959,7 @@ class ScannerNode:
             "attributes": attributes,
             "publisher_node_id": publisher_node_id,
             "unique_id": self._get_node_unique_id_hex(publisher_node_id) or self.identity_map.get_uid(publisher_node_id),
+            "payload_bytes": payload_bytes,
         }
         try:
             self.message_queue.put_nowait(event)
@@ -966,6 +979,7 @@ class ScannerNode:
             message_type=msg.__class__.__name__,
             attributes=attributes,
             publisher_node_id=transfer.source_node_id,
+            payload_bytes=self._transfer_payload_bytes(transfer),
         )
 
     async def set_register(self, node_id: int, register_name: str, value: str, reg_type: str) -> Any | None:

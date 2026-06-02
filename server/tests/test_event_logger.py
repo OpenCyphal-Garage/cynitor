@@ -4,7 +4,7 @@ import asyncio
 import os
 import tempfile
 import pytest
-from event_logger import EventLogger
+from event_logger import EventLogger, FilterMatcher
 
 
 def _sample_event(subject_id=100, node_id=42, msg_type="Heartbeat_1_0", unique_id=None):
@@ -88,12 +88,49 @@ class TestEventLogger:
 
     @pytest.mark.asyncio
     async def test_max_events_pruning(self, db_path):
-        logger = EventLogger(db_path=db_path, max_events=3)
+        """Safety-cap pruning. Disable time-based retention so only the count
+        cap can trigger; write enough events to clear the trigger threshold."""
+        logger = EventLogger(db_path=db_path, retention_seconds=0, max_events=3)
         logger.init_db_sync()
-        events = [_sample_event(subject_id=i) for i in range(5)]
+        # Need >= 1000 events to cross the prune trigger; only the newest 3 survive.
+        events = [_sample_event(subject_id=i) for i in range(1005)]
         logger._write_events_sync(events)
         count = logger._get_event_count_sync()
         assert count == 3
+
+    @pytest.mark.asyncio
+    async def test_time_based_pruning(self, db_path):
+        """Events older than retention_seconds are deleted on the next prune."""
+        import time as _t
+        logger = EventLogger(db_path=db_path, retention_seconds=60, max_events=0)
+        logger.init_db_sync()
+        now = _t.time()
+        # 1000 old (well past retention) + 5 fresh
+        old = [{**_sample_event(subject_id=i), "timestamp_unix": now - 3600} for i in range(1000)]
+        fresh = [{**_sample_event(subject_id=i + 1000), "timestamp_unix": now} for i in range(5)]
+        logger._write_events_sync(old + fresh)
+        # Prune should have fired (>=1000 writes since last prune).
+        count = logger._get_event_count_sync()
+        assert count == 5
+        # All survivors are within retention.
+        events = logger._get_events_sync(limit=10)
+        for ev in events:
+            assert ev["timestamp_unix"] >= now - 60
+
+    @pytest.mark.asyncio
+    async def test_buffer_stats(self, logger):
+        import time as _t
+        now = _t.time()
+        logger._write_events_sync([
+            {**_sample_event(subject_id=1), "timestamp_unix": now - 10},
+            {**_sample_event(subject_id=2), "timestamp_unix": now},
+        ])
+        stats = await logger.get_buffer_stats()
+        assert stats["event_count"] == 2
+        assert stats["oldest_event_unix"] is not None
+        assert stats["newest_event_unix"] >= stats["oldest_event_unix"]
+        assert stats["retention_seconds"] > 0
+        assert stats["db_size_bytes"] > 0
 
     @pytest.mark.asyncio
     async def test_query_limit_and_offset(self, logger):
@@ -294,6 +331,359 @@ class TestEventLogger:
         loaded = logger._load_all_node_data_sync()
         assert loaded["uid2"]["software_version"] is None
         assert loaded["uid2"]["publishers"] == []
+
+    # ------------------------------------------------------------------
+    # Recordings (named time-range bookmarks)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_create_and_get_recording(self, logger):
+        rec_id = await logger.create_recording(name="boot sequence")
+        assert isinstance(rec_id, int) and rec_id > 0
+        rec = await logger.get_recording(rec_id)
+        assert rec["name"] == "boot sequence"
+        assert rec["end_unix"] is None
+        assert rec["filter"] == {}
+
+    @pytest.mark.asyncio
+    async def test_create_recording_with_filter(self, logger):
+        rec_id = await logger.create_recording(
+            name="filtered",
+            filter_spec={"subject_ids": [100, 200], "node_ids": [42], "message_types": ["Heartbeat_1_0"]},
+            notes="hello",
+        )
+        rec = await logger.get_recording(rec_id)
+        assert rec["filter"]["subject_ids"] == [100, 200]
+        assert rec["filter"]["node_ids"] == [42]
+        assert rec["filter"]["message_types"] == ["Heartbeat_1_0"]
+        assert rec["notes"] == "hello"
+
+    @pytest.mark.asyncio
+    async def test_create_recording_filter_rejects_garbage(self, logger):
+        rec_id = await logger.create_recording(
+            name="x",
+            filter_spec={"subject_ids": ["abc", 100, True], "garbage_key": [1, 2], "message_types": ["", "ok", 5]},
+        )
+        rec = await logger.get_recording(rec_id)
+        # True is bool — rejected; "abc" — rejected; True is bool not int — rejected
+        assert rec["filter"]["subject_ids"] == [100]
+        assert "garbage_key" not in rec["filter"]
+        assert rec["filter"]["message_types"] == ["ok"]
+
+    @pytest.mark.asyncio
+    async def test_stop_recording(self, logger):
+        rec_id = await logger.create_recording(name="x")
+        stopped = await logger.stop_recording(rec_id)
+        assert stopped is True
+        rec = await logger.get_recording(rec_id)
+        assert rec["end_unix"] is not None
+        # Stopping again should be a no-op
+        assert await logger.stop_recording(rec_id) is False
+
+    @pytest.mark.asyncio
+    async def test_update_recording(self, logger):
+        rec_id = await logger.create_recording(name="orig")
+        assert await logger.update_recording(rec_id, name="renamed", notes="why") is True
+        rec = await logger.get_recording(rec_id)
+        assert rec["name"] == "renamed"
+        assert rec["notes"] == "why"
+        # Empty update returns False
+        assert await logger.update_recording(rec_id) is False
+
+    @pytest.mark.asyncio
+    async def test_list_recordings_orders_by_start_desc(self, logger):
+        import time as _time
+        a = await logger.create_recording(name="a", start_unix=_time.time() - 100)
+        b = await logger.create_recording(name="b", start_unix=_time.time())
+        recs = await logger.list_recordings()
+        ids = [r["id"] for r in recs]
+        assert ids.index(b) < ids.index(a)
+
+    @pytest.mark.asyncio
+    async def test_delete_recording_metadata_only(self, logger):
+        # Write some events inside the window
+        import time as _time
+        now = _time.time()
+        logger._write_events_sync([
+            {**_sample_event(subject_id=100), "timestamp_unix": now},
+        ])
+        rec_id = await logger.create_recording(name="x", start_unix=now - 1, end_unix=now + 1, events_source="global")
+        assert await logger.delete_recording(rec_id, purge_events=False) is True
+        assert await logger.get_recording(rec_id) is None
+        # Events remain
+        assert logger._get_event_count_sync() == 1
+
+    @pytest.mark.asyncio
+    async def test_delete_recording_purge_events(self, logger):
+        import time as _time
+        now = _time.time()
+        logger._write_events_sync([
+            {**_sample_event(subject_id=100), "timestamp_unix": now},
+            {**_sample_event(subject_id=200), "timestamp_unix": now + 0.5},
+            {**_sample_event(subject_id=300), "timestamp_unix": now + 1000},  # outside window
+        ])
+        rec_id = await logger.create_recording(name="x", start_unix=now - 1, end_unix=now + 1, events_source="global")
+        assert await logger.delete_recording(rec_id, purge_events=True) is True
+        assert logger._get_event_count_sync() == 1  # only the out-of-window one survives
+
+    @pytest.mark.asyncio
+    async def test_delete_recording_purge_respects_filter(self, logger):
+        import time as _time
+        now = _time.time()
+        logger._write_events_sync([
+            {**_sample_event(subject_id=100), "timestamp_unix": now},
+            {**_sample_event(subject_id=200), "timestamp_unix": now},
+        ])
+        rec_id = await logger.create_recording(
+            name="x", start_unix=now - 1, end_unix=now + 1,
+            filter_spec={"subject_ids": [100]},
+            events_source="global",
+        )
+        await logger.delete_recording(rec_id, purge_events=True)
+        events = logger._get_events_sync()
+        assert [e["subject_id"] for e in events] == [200]
+
+    @pytest.mark.asyncio
+    async def test_recording_stats(self, logger):
+        import time as _time
+        now = _time.time()
+        logger._write_events_sync([
+            {**_sample_event(subject_id=100, node_id=1), "timestamp_unix": now},
+            {**_sample_event(subject_id=200, node_id=1), "timestamp_unix": now + 0.5},
+            {**_sample_event(subject_id=100, node_id=2), "timestamp_unix": now + 0.7},
+        ])
+        rec_id = await logger.create_recording(name="x", start_unix=now - 1, end_unix=now + 1, events_source="global")
+        stats = await logger.get_recording_stats(rec_id)
+        assert stats["event_count"] == 3
+        assert stats["subjects"] == [100, 200]
+        assert stats["duration_seconds"] > 0
+
+    @pytest.mark.asyncio
+    async def test_recording_stats_with_filter(self, logger):
+        import time as _time
+        now = _time.time()
+        logger._write_events_sync([
+            {**_sample_event(subject_id=100, node_id=1), "timestamp_unix": now},
+            {**_sample_event(subject_id=200, node_id=2), "timestamp_unix": now},
+        ])
+        rec_id = await logger.create_recording(
+            name="x", start_unix=now - 1, end_unix=now + 1,
+            filter_spec={"subject_ids": [100]},
+            events_source="global",
+        )
+        stats = await logger.get_recording_stats(rec_id)
+        assert stats["event_count"] == 1
+        assert stats["subjects"] == [100]
+
+    @pytest.mark.asyncio
+    async def test_recording_events_ordered(self, logger):
+        import time as _time
+        now = _time.time()
+        logger._write_events_sync([
+            {**_sample_event(subject_id=200), "timestamp_unix": now + 0.5},
+            {**_sample_event(subject_id=100), "timestamp_unix": now},
+        ])
+        rec_id = await logger.create_recording(name="x", start_unix=now - 1, end_unix=now + 1, events_source="global")
+        events = await logger.get_recording_events(rec_id)
+        # ascending timestamp_unix
+        assert [e["subject_id"] for e in events] == [100, 200]
+
+    @pytest.mark.asyncio
+    async def test_recording_live_end_defaults_to_now(self, logger):
+        """An unstopped legacy bookmark's stats include events up to 'now'."""
+        import time as _time
+        now = _time.time()
+        rec_id = await logger.create_recording(name="x", start_unix=now - 1, events_source="global")
+        logger._write_events_sync([
+            {**_sample_event(subject_id=100), "timestamp_unix": now},
+        ])
+        stats = await logger.get_recording_stats(rec_id)
+        assert stats["event_count"] == 1
+        assert stats["end_unix"] is None
+
+    # ------------------------------------------------------------------
+    # Phase 2: filter matcher, dedicated mode, live routing, auto-stop
+    # ------------------------------------------------------------------
+
+    def test_filter_matcher_empty_matches_all(self):
+        m = FilterMatcher({})
+        assert m.matches_subject({"subject_id": 1, "publisher_node_id": 1, "message_type": "X"})
+        assert m.matches_service({"service_id": 1, "node_id": 1})
+
+    def test_filter_matcher_or_across_dimensions(self):
+        m = FilterMatcher({"subject_ids": [100], "node_ids": [42]})
+        # Subject hit
+        assert m.matches_subject({"subject_id": 100, "publisher_node_id": 1, "message_type": "X"})
+        # Node hit
+        assert m.matches_subject({"subject_id": 999, "publisher_node_id": 42, "message_type": "X"})
+        # No match
+        assert not m.matches_subject({"subject_id": 999, "publisher_node_id": 1, "message_type": "X"})
+
+    def test_filter_matcher_service_dimension(self):
+        m = FilterMatcher({"service_ids": [384], "node_ids": [42]})
+        assert m.matches_service({"service_id": 384, "node_id": 99})
+        assert m.matches_service({"service_id": 1, "node_id": 42})
+        assert not m.matches_service({"service_id": 1, "node_id": 99})
+
+    @pytest.mark.asyncio
+    async def test_dedicated_recording_routes_live_events(self, logger):
+        await logger.start()
+        try:
+            rec_id = await logger.create_recording(
+                name="live", filter_spec={"subject_ids": [100]},
+            )
+            logger._write_events_sync([
+                _sample_event(subject_id=100),
+                _sample_event(subject_id=200),  # filtered out
+                _sample_event(subject_id=100),
+            ])
+            events = await logger.get_recording_events(rec_id)
+            assert len(events) == 2
+            assert all(e["subject_id"] == 100 for e in events)
+            stats = await logger.get_recording_stats(rec_id)
+            assert stats["event_count"] == 2
+        finally:
+            await logger.stop()
+
+    @pytest.mark.asyncio
+    async def test_dedicated_recording_no_filter_captures_all(self, logger):
+        await logger.start()
+        try:
+            rec_id = await logger.create_recording(name="all")
+            logger._write_events_sync([
+                _sample_event(subject_id=100),
+                _sample_event(subject_id=200),
+            ])
+            events = await logger.get_recording_events(rec_id)
+            assert len(events) == 2
+        finally:
+            await logger.stop()
+
+    @pytest.mark.asyncio
+    async def test_stopped_recording_stops_receiving(self, logger):
+        await logger.start()
+        try:
+            rec_id = await logger.create_recording(name="x")
+            logger._write_events_sync([_sample_event(subject_id=100)])
+            await logger.stop_recording(rec_id)
+            logger._write_events_sync([_sample_event(subject_id=100)])
+            events = await logger.get_recording_events(rec_id)
+            assert len(events) == 1  # only the pre-stop event
+        finally:
+            await logger.stop()
+
+    @pytest.mark.asyncio
+    async def test_max_events_auto_stop(self, logger):
+        await logger.start()
+        try:
+            rec_id = await logger.create_recording(
+                name="capped", max_events=3, stop_on_limit=True,
+            )
+            await logger._write_events([_sample_event(subject_id=100) for _ in range(5)])
+            # First 3 fire auto-stop; events 4-5 arrive after unregister so they don't get captured.
+            rec = await logger.get_recording(rec_id)
+            assert rec["end_unix"] is not None
+            assert rec["auto_stopped"] is True
+            assert rec["event_count"] == 3
+        finally:
+            await logger.stop()
+
+    @pytest.mark.asyncio
+    async def test_max_events_soft_no_auto_stop(self, logger):
+        """stop_on_limit=False: limits are targets, recording stays open."""
+        await logger.start()
+        try:
+            rec_id = await logger.create_recording(
+                name="soft", max_events=2, stop_on_limit=False,
+            )
+            await logger._write_events([_sample_event(subject_id=100) for _ in range(5)])
+            rec = await logger.get_recording(rec_id)
+            assert rec["end_unix"] is None
+            assert rec["auto_stopped"] is False
+            assert rec["event_count"] == 5
+        finally:
+            await logger.stop()
+
+    @pytest.mark.asyncio
+    async def test_quick_save_copies_from_global(self, logger):
+        """Quick-save (end_unix set, events_source='dedicated') snapshots
+        matching events from the global buffer."""
+        import time as _t
+        now = _t.time()
+        logger._write_events_sync([
+            {**_sample_event(subject_id=100), "timestamp_unix": now - 5},
+            {**_sample_event(subject_id=200), "timestamp_unix": now - 4},
+            {**_sample_event(subject_id=100), "timestamp_unix": now - 3},
+        ])
+        rec_id = await logger.create_recording(
+            name="quick", start_unix=now - 10, end_unix=now,
+            filter_spec={"subject_ids": [100]},
+        )
+        events = await logger.get_recording_events(rec_id)
+        assert len(events) == 2
+        assert all(e["subject_id"] == 100 for e in events)
+        rec = await logger.get_recording(rec_id)
+        assert rec["event_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_service_call_routes_to_recording(self, logger):
+        await logger.start()
+        try:
+            rec_id = await logger.create_recording(
+                name="svc", filter_spec={"service_ids": [384]},
+            )
+            await logger.log_node_event(
+                node_id=42, event_type="service_call",
+                detail={"service_id": 384, "service_type": "GetInfo", "status": "ok",
+                        "latency_ms": 5.0, "response": {"x": 1}},
+                unique_id="aaa",
+            )
+            await asyncio.sleep(0.05)
+            events = await logger.get_recording_events(rec_id)
+            assert len(events) == 1
+            assert events[0]["kind"] == "service_call"
+            assert events[0]["service_id"] == 384
+            assert events[0]["message_type"] == "GetInfo"
+        finally:
+            await logger.stop()
+
+    @pytest.mark.asyncio
+    async def test_dedicated_purge_does_not_touch_global(self, logger):
+        """Deleting a dedicated recording removes its dedicated rows but
+        leaves the global events table alone."""
+        await logger.start()
+        try:
+            rec_id = await logger.create_recording(name="x")
+            logger._write_events_sync([_sample_event(subject_id=100)])
+            assert logger._get_event_count_sync() == 1
+            await logger.delete_recording(rec_id, purge_events=True)
+            # Dedicated rows gone; global event remains.
+            assert logger._get_event_count_sync() == 1
+        finally:
+            await logger.stop()
+
+    @pytest.mark.asyncio
+    async def test_active_recordings_rehydrate_on_start(self, db_path):
+        """Live recordings persist their registration via the DB so a
+        backend restart picks them back up."""
+        el1 = EventLogger(db_path=db_path)
+        el1.init_db_sync()
+        await el1.start()
+        try:
+            rec_id = await el1.create_recording(name="alive")
+        finally:
+            await el1.stop()
+        # Simulate restart with a fresh EventLogger pointing at the same DB.
+        el2 = EventLogger(db_path=db_path)
+        await el2.start()
+        try:
+            assert rec_id in el2._active_recordings
+            # Live ingest still routes:
+            el2._write_events_sync([_sample_event(subject_id=100)])
+            events = await el2.get_recording_events(rec_id)
+            assert len(events) == 1
+        finally:
+            await el2.stop()
 
     @pytest.mark.asyncio
     async def test_save_load_node_data_async(self, logger):

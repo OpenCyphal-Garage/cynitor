@@ -66,6 +66,7 @@ EventLogger.start()        SQLite persistence
 | `startup_setup.py` | DSDL compilation via `nnvg`, sets `UAVCAN__CAN__IFACE` / `UAVCAN__CAN__MTU`, calls `yakut accommodate` for node ID |
 | `node_identity_map.py` | Bidirectional `unique_id ↔ node_id` mapping with displacement detection, snapshot storage, and SQLite-backed persistence |
 | `log_store.py` | In-memory deque (max 5000) fed by a `logging.Handler`; exposed via `/api/logs` |
+| `dsdl_manager.py` | DSDL discovery, namespace tree, source/compiled state, custom-type CRUD under `dsdl_messages/custom/`, recompile orchestration |
 
 ### CLI flags
 
@@ -89,7 +90,7 @@ dsdl_messages/
 
 ## Frontend
 
-All frontend code lives in `website/`. Plain HTML/CSS/JS. No build step. D3 (CDN) for plots and force graph; Tabulator (CDN) for data tables. Twelve concern-focused script files load in order:
+All frontend code lives in `website/`. Plain HTML/CSS/JS. No build step. D3 (CDN) for plots and force graph; Tabulator (CDN) for data tables. Concern-focused script files load in order:
 
 | File | Role |
 |------|------|
@@ -104,7 +105,10 @@ All frontend code lives in `website/`. Plain HTML/CSS/JS. No build step. D3 (CDN
 | `history-panel.js` | Node lifecycle history: timeline rendering, event labels/badges, subject activity summary, time-range filtering |
 | `subjects-panel.js` | Subject browser: Tabulator-based table of all subjects and services, inline service expansion with node selector, integrated persistent history. Uses a stash/unstash pattern to protect the inline service detail DOM node from Tabulator's virtual re-renders |
 | `graph-view.js` | Network topology: D3 force-directed bipartite graph of device and subject nodes, drag-to-pin with persistent positions, adjacency highlighting, info panel overlay, subject toggle |
-| `connection.js` | WebSocket lifecycle, REST polling (status, nodes, interfaces), throughput meter, semaphores, `disconnectAll` shared teardown |
+| `dsdl-view.js` | DSDL Inspector tab: namespace tree with bus-activity badges, field-level search, dependency navigation, custom-type editor with compile-state lock |
+| `record-view.js` | Record tab: subject/service/node pickers, per-recording cards with progress bars (with "no limit" rendering for unbounded recordings), live polling, edit-limits modal, duplicate, CSV/JSON export |
+| `log-panel.js` | Right log panel: collapsible/resizable shell, ring buffer (cap 2000, not persisted), Cyphal feed (diagnostic.Record + user-added text subjects), Server poller (`/api/logs` every 2s), severity floor across sources, per-source toggle pills with count badges, disconnect indicator on the Server pill |
+| `connection.js` | WebSocket lifecycle, REST polling (status, nodes, interfaces), throughput meter, semaphores, `disconnectAll` shared teardown; forwards every event to `ingestLogEvent` for the log panel |
 | `app.js` | Boot file: DOM event wiring (`bind`), settings restore, frontend-server heartbeat, sidebar view tab switching |
 
 Top-level `const`/`let` declarations are shared globals across script tags (no modules). Cross-file references resolve at function-call time, not at load time, so script order matters: any dependent file must come after the one declaring its symbols.
@@ -131,10 +135,15 @@ Page load → loadSettings() → bind() → updateSemaphores()
 
 The frontend never blocks on a single source. WebSocket is for live events; REST is for structural snapshots and connection metadata.
 
-Three views share the same WebSocket and REST data:
+Six views share the same WebSocket and REST data:
 - **Nodes view** — Tabulator table of nodes (with ghost rows for displaced identities pinned to bottom), detail panel below with tabs (Publishers, Subscribers, Servers, Clients, Registers, History).
 - **Subjects view** — Tabulator table of all subjects and services across the network. Services can be expanded inline with a node selector and request form. Both views use `services-panel.js` for service interaction but maintain isolated state via the `forSubjects` parameter pattern.
 - **Graph view** — D3 force-directed bipartite topology showing device nodes (circles) and subject nodes (diamonds) with directional pub/sub links. Supports drag-to-pin with persistent positions, zoom/pan, adjacency highlighting, and a toggle to collapse subjects into device-to-device edges.
+- **Compare view** — independent graphs for side-by-side multi-series comparison.
+- **DSDL view** — namespace tree of loaded types with bus-activity badges, custom-type editor.
+- **Record view** — capture filtered events into per-recording SQLite stores with limits.
+
+Independent of the views, the **Right log panel** (toggled from the right edge) is a unified timeline of Cyphal diagnostic messages, user-picked text subjects, and the backend's `/api/logs` stream.
 
 ### State
 
@@ -210,6 +219,7 @@ cynitor/
     allocator.py            Node-ID allocation management
     startup_setup.py        DSDL compilation, env setup
     log_store.py            In-memory log buffer for /api/logs
+    dsdl_manager.py         DSDL discovery, namespace tree, custom-type CRUD
     requirements.txt        Python deps
     tests/                  pytest unit tests
   website/
@@ -217,6 +227,7 @@ cynitor/
     state.js                Global state, settings, API helpers
     cache.js                Telemetry cache + per-node accessors
     plot.js                 Multi-panel D3 time-series plot
+    compare-view.js         Multi-graph compare view
     detail-panel.js         Detail panel, tab rendering, subject cards
     nodes-table.js          Tabulator (nodes view) with ghost row support
     services-panel.js       Service interaction UI and persistent history
@@ -224,10 +235,15 @@ cynitor/
     history-panel.js        Node lifecycle history timeline
     subjects-panel.js       Subject browser (subjects view) with inline service expansion
     graph-view.js           D3 force-directed network topology
+    dsdl-view.js            DSDL Inspector view + custom-type editor
+    record-view.js          Record tab: pickers, per-recording cards, export
+    log-panel.js            Right log panel: Cyphal + Server feeds, picker, filters
     connection.js           WS + polling + lifecycle
     app.js                  Boot, bindings, heartbeat, view switching
     styles.css              Theme and layout
-  dsdl_messages/            DSDL type definitions (public_regulated_data_types submodule)
+  dsdl_messages/
+    public_regulated_data_types/   git submodule (uavcan/, reg/)
+    custom/                        user-created DSDL types (gitignored content)
   python_compiled_messages/ nnvg output (gitignored)
   README.md                 User-facing intro
   TECHNICAL.md              This file

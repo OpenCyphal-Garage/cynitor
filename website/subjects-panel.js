@@ -633,6 +633,8 @@ const switchView = (view) => {
   const subjectsEl = el('subjectsTable');
   const graphEl = el('graphContainer');
   const compareEl = el('compareContainer');
+  const dsdlEl = el('dsdlContainer');
+  const recordEl = el('recordContainer');
   const detailHandle = el('detailResizeHandle');
   const detailPanel = el('detailPanel');
 
@@ -654,6 +656,10 @@ const switchView = (view) => {
     stopCompareAnim();
   } else if (prevView === 'graph') {
     GraphView.hide();
+  } else if (prevView === 'dsdl') {
+    DsdlView.hide();
+  } else if (prevView === 'record') {
+    setRecordViewActive(false);
   }
 
   // Hide all content panes
@@ -661,6 +667,8 @@ const switchView = (view) => {
   subjectsEl.classList.add('hidden');
   graphEl.classList.add('hidden');
   compareEl.classList.add('hidden');
+  dsdlEl.classList.add('hidden');
+  recordEl.classList.add('hidden');
 
   // Activate target view
   if (view === 'subjects') {
@@ -694,6 +702,17 @@ const switchView = (view) => {
     detailHandle.classList.add('hidden');
     detailPanel.classList.add('hidden');
     GraphView.show();
+  } else if (view === 'dsdl') {
+    detailHandle.classList.add('hidden');
+    detailPanel.classList.add('hidden');
+    dsdlEl.classList.remove('hidden');
+    DsdlView.init();
+  } else if (view === 'record') {
+    detailHandle.classList.add('hidden');
+    detailPanel.classList.add('hidden');
+    recordEl.classList.remove('hidden');
+    initRecordView();
+    setRecordViewActive(true);
   } else {
     state.selectedPlotSubject = state._nodesPlotSubject ?? null;
     stopPlotAnim();

@@ -144,6 +144,7 @@ Telemetry events (filtered per client):
     "rate": 10,
     "message_type": "Heartbeat_1_0",
     "publisher_node_id": 42,
+    "payload_bytes": 7,
     "attributes": [
         {"attribute": "uptime", "value": 12345, "unit": "s"},
         {"attribute": "health", "value": "NOMINAL"},
@@ -152,6 +153,8 @@ Telemetry events (filtered per client):
     ]
 }
 ```
+
+`payload_bytes` is the size, in bytes, of the received transfer's serialized payload (sum of `transfer.fragmented_payload` fragment lengths). It is `null` if the transport did not expose the fragmented payload (best-effort field).
 
 Metrics (sent to all clients every 1 second):
 ```json
@@ -206,6 +209,90 @@ Response:
 ```
 
 Returns `409` if not connected.
+
+**DSDL status (does not require CAN connection):**
+```bash
+curl http://localhost:8080/api/dsdl/status
+```
+
+Response:
+```json
+{
+    "paths": [{"path": "...", "label": "Public regulated types", "source": "regulated"}],
+    "compiled": true,
+    "last_compiled": 1773832423.0,
+    "last_public_compiled": 1773832423.0,
+    "last_custom_compiled": null,
+    "source_types": 257,
+    "custom_types": 0
+}
+```
+
+`last_public_compiled` covers the `uavcan/` and `reg/` namespaces only; `last_custom_compiled` covers every other top-level namespace under `python_compiled_messages/` (i.e. user-created custom types). `last_compiled` is the max of both, kept for backward compatibility.
+
+**DSDL namespace tree:**
+```bash
+curl http://localhost:8080/api/dsdl/namespaces
+```
+
+Returns a nested tree of namespaces with type entries. Each type includes `short_name`, `full_name`, `version`, `kind` (`"message"` or `"service"`), `fixed_port_id`, `source` (`"regulated"` or `"custom"`), and `compiled` (`true` if a corresponding `.py` exists in `python_compiled_messages/`).
+
+**DSDL type detail:**
+```bash
+curl http://localhost:8080/api/dsdl/type/uavcan.node.Heartbeat.1.0
+```
+
+Returns full type info: fields (with types), constants, dependencies, compilation status, and raw `.dsdl` source text. For services, fields are split into `request` and `response`.
+
+**Create custom namespace:**
+```bash
+curl -X POST http://localhost:8080/api/dsdl/custom/namespace \
+  -H 'Content-Type: application/json' \
+  -d '{"namespace": "myapp.sensors"}'
+```
+Returns `201` with `{"namespace": "myapp.sensors", "path": "..."}`.
+
+**List custom namespaces:**
+```bash
+curl http://localhost:8080/api/dsdl/custom/namespaces
+```
+Returns `{"namespaces": ["myapp", "myapp.sensors"]}`.
+
+**Save custom DSDL type:**
+```bash
+curl -X POST http://localhost:8080/api/dsdl/custom/type \
+  -H 'Content-Type: application/json' \
+  -d '{"namespace": "myapp.sensors", "type_name": "Temperature", "version": "1.0", "source_text": "float32 celsius\nfloat32 fahrenheit\n@sealed", "fixed_port_id": null}'
+```
+Returns `201` with `{"full_name": "myapp.sensors.Temperature.1.0", "path": "..."}`.
+
+Pass `"overwrite": true` to replace an existing custom type's source. Only allowed while the type is **not compiled** — the server returns `409` if a compiled `.py` already exists in `python_compiled_messages/` for this type.
+
+**Delete custom DSDL type:**
+```bash
+curl -X DELETE http://localhost:8080/api/dsdl/custom/type/myapp.sensors.Temperature.1.0
+```
+Returns `200` with `{"full_name": "myapp.sensors.Temperature.1.0", "deleted": true}`.
+Returns `404` if the source file is missing, `409` if the type is already compiled (delete the corresponding entry in `python_compiled_messages/` first if you really need to remove it), or `400` on a malformed name.
+
+**Compile DSDL types:**
+```bash
+# Compile custom namespaces only
+curl -X POST http://localhost:8080/api/dsdl/compile \
+  -H 'Content-Type: application/json' \
+  -d '{"scope": "custom"}'
+
+# Recompile public (regulated) types only — reg + uavcan
+curl -X POST http://localhost:8080/api/dsdl/compile \
+  -H 'Content-Type: application/json' \
+  -d '{"scope": "public"}'
+
+# Recompile everything (regulated + custom)
+curl -X POST http://localhost:8080/api/dsdl/compile \
+  -H 'Content-Type: application/json' \
+  -d '{"scope": "all"}'
+```
+Returns `200` with `{"ok": true}` on success, or `422` with `{"ok": false, "errors": [...]}`.
 
 **Get latest event for a subject:**
 ```bash
@@ -604,16 +691,104 @@ Response (success):
 
 Returns `400` if required fields (`name`, `value`, `type`) are missing, the register is read-only, or the type is incompatible. Returns `503` if CAN is not connected.
 
+### Recordings (`/api/recordings*`)
+
+Named captures with optional length/event-count limits. Two storage modes:
+
+- **`dedicated`** (default for new recordings) — matching subject events and service calls stream into a per-recording table (`recording_events`) from the moment the recording starts. Survives the global buffer's retention. Quick-save snapshots matching events from the global buffer into the same table at creation time.
+- **`global`** — Phase 1 bookmarks. Metadata only; export reads from the shared `events` table within the recording's time-range × filter. Subject to global retention.
+
+All recording endpoints return `503` if no `event_logger` is initialized (no CAN session yet).
+
+#### List, create, inspect
+
+```http
+GET    /api/recordings                       → { recordings: [...] }
+GET    /api/recordings/{rec_id}              → { recording: { ...stats } }
+GET    /api/recordings/buffer                → { buffer: { ...global buffer stats } }
+POST   /api/recordings                       body: { name, filter?, notes?, max_length_seconds?, max_events?, stop_on_limit? } → 201 { recording }
+POST   /api/recordings/{rec_id}/stop         → { recording }
+PATCH  /api/recordings/{rec_id}              body: { name?, notes? } → { recording }
+DELETE /api/recordings/{rec_id}[?purge=true] → { deleted, purged }
+```
+
+A POST without `end_unix` starts a live recording; `end_unix` stays `null` until stopped (manually or by hitting a limit). Stats use `now()` for the upper bound.
+
+A recording row contains: `id`, `name`, `start_unix`, `end_unix`, `filter`, `notes`, `created_at`, `max_length_seconds`, `max_events`, `stop_on_limit`, `auto_stopped`, `event_count`, `events_source`, plus computed `subjects`, `duration_seconds`.
+
+#### Limits and auto-stop
+
+`max_length_seconds` and `max_events` are optional caps. With `stop_on_limit: true` (default off — opt in per recording), the recording auto-stops on the first limit breach: `end_unix` is set, `auto_stopped` becomes `true`, and the recording disappears from the active-routing registry. With `stop_on_limit: false`, the limits are soft targets — the recording keeps capturing past 100%, useful for showing progress bars in the UI without enforcing a cap.
+
+Auto-stop is checked both on each matching event (during ingest) and via a 5-second background sweep (catches time-based limits when the bus is silent).
+
+#### Retroactive "Quick save"
+
+```http
+POST   /api/recordings/quick   body: { name, last_seconds, filter?, notes? }
+```
+
+Snapshots matching events from the global buffer in `[now - last_seconds, now]` into the recording's dedicated store at creation time. Useful workflow: "the bus just glitched, save the last 30 seconds." Returns `201` with the full recording row.
+
+#### Filter shape (OR-across-dimensions)
+
+```json
+{
+  "subject_ids":   [7509, 7510],
+  "service_ids":   [384],
+  "node_ids":      [42],
+  "message_types": ["Heartbeat_1_0"]
+}
+```
+
+An event matches if it satisfies **any** dimension (subject in `subject_ids` OR node in `node_ids` OR service in `service_ids` OR type in `message_types`). Empty/missing keys impose no restriction on that dimension. Empty filter overall = capture everything. Unknown keys are ignored. Invalid types are dropped silently (non-integer ids, non-string types). `service_ids` matches `service_call` rows; it has no effect against the global `events` table for legacy bookmarks.
+
+#### Export
+
+```http
+GET    /api/recordings/{rec_id}/export?format=csv     → text/csv stream
+GET    /api/recordings/{rec_id}/export?format=json    → application/json
+```
+
+CSV columns: `recording_id, timestamp_unix, timestamp, subject_id, publisher_node_id, unique_id, message_type, rate, attribute, value, unit`. One row per attribute (events with N attributes → N rows). Service-call rows currently appear with their `service_id` in the `subject_id` column and service metadata in `attributes_json` — a future CSV revision may add a dedicated `kind`/`service_id` column.
+
+JSON returns `{ recording, events: [...], truncated, exported_at_unix }`. Each event carries a `kind` field (`'subject'` or `'service_call'`) and either `subject_id` or `service_id`. Buffered with a hard cap of 200,000 events; set `truncated=true` if reached. Use CSV for larger windows.
+
+Both formats set `Content-Disposition: attachment; filename="<sanitized-name>.<ext>"`.
+
+#### Global buffer (`GET /api/recordings/buffer`)
+
+Stats about the shared `events` ring used by legacy bookmarks and quick-save:
+
+```json
+{
+  "buffer": {
+    "retention_seconds": 86400,
+    "max_events": 5000000,
+    "event_count": 142057,
+    "oldest_event_unix": 1748742543.21,
+    "newest_event_unix": 1748828943.18,
+    "db_size_bytes": 38420480
+  }
+}
+```
+
+Use this to surface "what's available for quick-save" and to estimate observed message rate (count / (newest - oldest)).
+
 ### Event Logger (SQLite)
 
-Events are automatically logged to `telemetry_events.db` with fields:
+Events are automatically logged to `telemetry_events.db`. The `events` table has fields:
 - `id` (auto-increment)
 - `subject_id`
 - `timestamp`, `timestamp_unix`
 - `rate`, `message_type`
-- `publisher_node_id`
+- `publisher_node_id`, `unique_id`
 - `attributes` (JSON)
 - `created_at` (database timestamp)
+
+**Retention.** The global `events` table is pruned by **time-based retention** (default 24 hours). A hard event-count cap (`max_events`, default 5,000,000) acts as a safety net only — it bounds disk if rate × retention would otherwise blow past it. Pruning runs every 1000 writes; configure both via `EventLogger(retention_seconds=..., max_events=...)`.
+
+Per-recording event stores (`recording_events`) are **not** subject to retention — they only grow until the recording is deleted (with `?purge=true`) or stopped. Recording rows survive global retention by definition.
 
 **Query logged events programmatically:**
 ```python

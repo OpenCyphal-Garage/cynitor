@@ -1,6 +1,53 @@
+## Cynitor v0.3.1
+
+### Graph view — major upgrade
+
+- **Live traffic on links** — stroke width encodes publish rate (log-scaled), and active edges render an animated dash so the topology shows *traffic*, not just *wiring*.
+- **Per-device pulse** — devices that are actively publishing pulse in the accent color; idle and offline devices stay quiet.
+- **Filter bar** — free-text search across device name/ID and subject ID/type, plus a "Hide offline" toggle. When a filter is active, direct neighbors of matches are kept visible so subjects don't orphan.
+- **Snap-to-grid placement** — dragging a node snaps it to a regular grid pitch on release, so pinned layouts stay tidy.
+- **Faint dot-grid backdrop** — toggleable via a new "Show grid" checkbox; pans and zooms with the graph.
+- **Bipartite layout bias** — when subjects are shown, devices and subjects gravitate to separate bands; collapsed mode keeps the canvas free for devices.
+- **Smarter labels** — long DSDL type names truncate with ellipsis; per-node "above vs below" placement based on neighbor direction; one-pass collision resolution after layout settle; halo behind labels so crossing edges don't shred them.
+- **Gravity dropdown** — pick which metric pulls heavier nodes toward center: *Total links*, *Subject channels*, *Service channels*, *Publish rate*, or *Payload size*. Persisted per session.
+- **Info panel follows the selected node** — instead of docking in the corner, the panel anchors next to the selected node, flips side when near canvas edges, clamps inside the viewport, and follows the node during drag, settle, zoom, and resize.
+- **Per-link rate / payload overlay** — new "Show link stats" checkbox draws `12 Hz · 7 B` style readouts at link midpoints; collapsed device-to-device links show summed traffic.
+- **Click-deselect** — fixed an operator-precedence bug that prevented background-click deselection in some cases.
+
+### Backend
+
+- **`payload_bytes` on telemetry events** — publisher events now carry the serialized transfer size in bytes (summed from `transfer.fragmented_payload`). Best-effort: `null` if the transport does not expose fragmented payload. Documented in `WEBSOCKET_README.md`. Powers the *Payload size* gravity option in the graph view.
+
 ## Cynitor v0.3.0
 
-### New Features
+### Right log panel (new)
+
+- **Collapsible/resizable right sidebar** — hidden by default, mirrors left-sidebar collapse + persistence; drag the left edge to resize, double-click to reset.
+- **Cyphal log feed** — `uavcan.diagnostic.Record` (subject 8184) auto-streams; row layout is `time · n<id> · s<id> · MessageType · text`. Severity drives row tinting; alert/critical get a red wash.
+- **Add text subjects** — `+` button opens a picker listing every subject whose payload carries a string field (excluding 8184). Pick any to feed into the log alongside diagnostics. Selection persists.
+- **Server log toggle** — `SERVER` pill pulls Python `logging` records from `GET /api/logs` every 2 s. Pill turns amber with a corner dot when the backend is unreachable.
+- **Per-source counters** — small live badge on each pill shows how many entries from that source are in the buffer.
+- **Severity floor** — `Min: TRACE…ALERT` dropdown filters across all sources via mapped levels; user-added text subjects always show.
+- **Buffer cap** — 2000-entry in-memory ring; never persisted.
+
+### Record tab (new)
+
+- **Per-recording event stores** — every recording streams matching events into its own SQLite-backed `recording_events` table, independent of the global buffer.
+- **Picker UI** — select subjects, services, and nodes to filter what each recording captures.
+- **Limits** — per-recording `max_length_seconds`, `max_events`, and `stop_on_limit` caps with progress bars. Unlimited recordings now show "· no limit" with a dashed bar so empty progress doesn't read as a stuck recording.
+- **Quick-save** — snapshot the last N seconds from the global buffer into a dedicated recording.
+- **Edit-limits modal** — change caps on a live recording without stopping it.
+- **Duplicate** — "New like this" starts a fresh recording with the same filter + limits.
+- **CSV / JSON export** per recording.
+- New API: `GET/POST /api/recordings`, `GET/PATCH/DELETE /api/recordings/{id}`, `POST /api/recordings/{id}/stop`, `POST /api/recordings/quick`, `GET /api/recordings/{id}/export?format={csv,json}`, `GET /api/recordings/buffer`.
+
+### DSDL Inspector (new)
+
+- **DSDL tab** — searchable tree of all loaded DSDL types with bus-activity indicators (which types are actually being seen on the wire), field-level search, and dependency navigation.
+- **Custom DSDL types** — create, edit, and delete user types under `dsdl_messages/custom/`; compile-state lock prevents edits while a recompile is in flight.
+- New API: `GET /api/dsdl/status`, `GET /api/dsdl/namespaces`, `GET /api/dsdl/type/{full_name}`, `POST /api/dsdl/custom/namespace`, `GET /api/dsdl/custom/namespaces`, `POST /api/dsdl/custom/type`, `DELETE /api/dsdl/custom/type/{full_name}`, `POST /api/dsdl/compile`.
+
+### Compare view
 
 - **Compare view** — new sidebar tab with independent graphs for side-by-side multi-series comparison. Add any subject + attribute from the network to any graph.
 - **Derived series** — computed from raw series at render time: delta (A−B), ratio (A/B), moving average (windowed), min/max envelope (rolling), and rate of change (Δv/Δt).
@@ -11,13 +58,27 @@
 - **Workspace export/import** — serialize the full compare workspace (all graphs, presets, markers, drawings) as a JSON file.
 - **Presets** — save and load named graph configurations in compare view.
 
-### Plot Improvements
+### Plot improvements
 
 - **Live tooltip updates** — tooltip values update in real time as data scrolls under a stationary cursor, instead of requiring mouse movement.
 - **Click-to-pause** — single click pauses/resumes the plot. Double-click resets zoom and pan.
 - **Drag-to-pan** — hold and drag to navigate the X axis. Scroll wheel to zoom centered on cursor.
 - **Interactive three-zone legend** — color picker swatch (click to change), center label (click to toggle visibility), style indicator (click to cycle through 9 line styles: 5 dash patterns + 4 marker shapes), and remove button.
 - **Marker shapes** — circle, square, triangle, and diamond markers for distinguishing overlapping series.
+
+### Cross-platform
+
+- **Windows and macOS support** for the backend. Any interface string containing `:` is passed through to pycyphal verbatim (e.g. `pythoncan:pcan:PCAN_USBBUS1` on Windows, `socketcan:vcan0` cross-platform); bare names like `vcan0` still implicitly prefix `socketcan:` to preserve the original Linux UX.
+- **Graceful degradation** when Linux-only tools are absent: `BusLoadMonitor` self-disables when `canbusload` is not on `PATH` (utilization stays at 0%, no spurious "monitor exited" fatal disconnect); `_check_can_health` returns healthy on non-Linux instead of tripping the watchdog 3 seconds in.
+- **Correct `PATH` separator** when extending `CYPHAL_PATH` / `PYTHONPATH` (`os.pathsep` instead of hardcoded `:`).
+- Interface dropdown still populates from SocketCAN sysfs on Linux; on Windows/macOS it stays empty — connect by passing the full transport string via `POST /api/can/connect` or `--can <transport-spec>`.
+
+### Fixes
+
+- DSDL tree readability and sidebar tab alignment.
+- Compare view smooth/pause interaction.
+- Brush styling consistency in plots.
+- Plot drawing controls now gated behind `opts.includeDraw` so views without drawing intent don't render unused toolbar buttons.
 
 ---
 

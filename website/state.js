@@ -49,6 +49,15 @@ const state = {
   _busFullArmed: true,
   tableSort: { key: 'id', dir: 'asc' },
   sidebarCollapsed: false,
+  logPanelCollapsed: true,
+  logPanelWidth: null,
+  logBuffer: [],
+  logSeverityFloor: 0,
+  logAutoscroll: true,
+  logSubjectIds: new Set(),
+  logShowCyphal: true,
+  logShowServer: false,
+  _logSeq: 0,
   detailPanelHeight: null,
   detailPanelCollapsed: false,
   _nodesDetailHeight: null,
@@ -69,6 +78,16 @@ const state = {
   favouriteSubjectIds: new Set(),
   hiddenSubjectIds: new Set(),
   subjectsTableSort: { key: 'id', dir: 'asc' },
+  recordings: [],
+  activeRecordingId: null,
+  recordBuffer: null,
+  recordFilterDraft: {
+    subject_ids: [], service_ids: [], node_ids: [], message_types: [],
+    name: '', notes: '',
+    max_length_seconds: 3600,
+    max_events: 100_000,
+    stop_on_limit: true,
+  },
 };
 
 // Derived accessors for CAN connection state — keeps existing code readable
@@ -361,7 +380,9 @@ const requestJson = async (path, options = {}) => {
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.error || `HTTP ${response.status} for ${path}`);
+    const detail = data.error
+      || (Array.isArray(data.errors) && data.errors.length ? data.errors.join('\n') : null);
+    throw new Error(detail || `HTTP ${response.status} for ${path}`);
   }
   return data;
 };
@@ -403,6 +424,13 @@ const _writeSettingsNow = () => {
     selectedDetailTab: state.selectedDetailTab,
     tableSort: state.tableSort,
     sidebarCollapsed: state.sidebarCollapsed,
+    logPanelCollapsed: state.logPanelCollapsed,
+    logPanelWidth: state.logPanelWidth,
+    logSeverityFloor: state.logSeverityFloor,
+    logAutoscroll: state.logAutoscroll,
+    logSubjectIds: [...state.logSubjectIds],
+    logShowCyphal: state.logShowCyphal,
+    logShowServer: state.logShowServer,
     detailPanelHeight: state.detailPanelHeight,
     detailPanelCollapsed: state.detailPanelCollapsed,
     nodesDetailHeight: state._nodesDetailHeight,
@@ -435,6 +463,7 @@ const _writeSettingsNow = () => {
     hiddenSubjectIds: [...state.hiddenSubjectIds],
     subjectsTableSort: state.subjectsTableSort,
     subjectsHeaderFilters: typeof getSubjectsHeaderFilters === 'function' ? getSubjectsHeaderFilters() : null,
+    recordFilterDraft: state.recordFilterDraft,
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
 };
@@ -478,6 +507,25 @@ const loadSettings = () => {
     state.sidebarCollapsed = true;
     document.querySelector('.sidebar')?.classList.add('collapsed');
   }
+  if (settings.logPanelCollapsed === false) {
+    state.logPanelCollapsed = false;
+    document.querySelector('.log-panel')?.classList.remove('collapsed');
+  }
+  if (typeof settings.logPanelWidth === 'number' && settings.logPanelWidth >= 0) {
+    state.logPanelWidth = settings.logPanelWidth;
+  }
+  if (Number.isInteger(settings.logSeverityFloor)
+      && settings.logSeverityFloor >= 0 && settings.logSeverityFloor <= 7) {
+    state.logSeverityFloor = settings.logSeverityFloor;
+  }
+  if (settings.logAutoscroll === false) {
+    state.logAutoscroll = false;
+  }
+  if (Array.isArray(settings.logSubjectIds)) {
+    state.logSubjectIds = new Set(settings.logSubjectIds.filter(Number.isInteger));
+  }
+  if (settings.logShowCyphal === false) state.logShowCyphal = false;
+  if (settings.logShowServer === true) state.logShowServer = true;
   if (typeof settings.detailPanelHeight === 'number') {
     state.detailPanelHeight = settings.detailPanelHeight;
   }
@@ -526,8 +574,22 @@ const loadSettings = () => {
   if (settings.nodeAliases && typeof settings.nodeAliases === 'object') {
     state.nodeAliases = settings.nodeAliases;
   }
-  if (settings.activeView === 'subjects' || settings.activeView === 'graph' || settings.activeView === 'compare') {
+  if (['subjects', 'graph', 'compare', 'dsdl', 'record'].includes(settings.activeView)) {
     state.activeView = settings.activeView;
+  }
+  if (settings.recordFilterDraft && typeof settings.recordFilterDraft === 'object') {
+    const d = settings.recordFilterDraft;
+    state.recordFilterDraft = {
+      subject_ids: Array.isArray(d.subject_ids) ? d.subject_ids.filter(Number.isInteger) : [],
+      service_ids: Array.isArray(d.service_ids) ? d.service_ids.filter(Number.isInteger) : [],
+      node_ids: Array.isArray(d.node_ids) ? d.node_ids.filter(Number.isInteger) : [],
+      message_types: Array.isArray(d.message_types) ? d.message_types.filter(s => typeof s === 'string') : [],
+      name: typeof d.name === 'string' ? d.name : '',
+      notes: typeof d.notes === 'string' ? d.notes : '',
+      max_length_seconds: typeof d.max_length_seconds === 'number' && d.max_length_seconds > 0 ? d.max_length_seconds : 3600,
+      max_events: typeof d.max_events === 'number' && d.max_events > 0 ? d.max_events : 100_000,
+      stop_on_limit: d.stop_on_limit !== false,
+    };
   }
   if (Array.isArray(settings.favouriteSubjectIds)) {
     state.favouriteSubjectIds = new Set(settings.favouriteSubjectIds);

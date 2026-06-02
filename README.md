@@ -42,6 +42,9 @@ Open `http://localhost:5500` and click **Connect** in the sidebar.
 - **Multi-attribute plots** — each numeric attribute gets its own panel with its own y-axis, so a fast-growing uptime doesn't squash a small voltage reading. Interactive three-zone legend pills for color, line style, and visibility.
 - **Hover crosshair + tooltip** with timestamp and per-series values that update in real time as data scrolls under the cursor. Click to pause, drag to pan, scroll to zoom, double-click to reset.
 - **Compare view** — independent graphs for side-by-side multi-series comparison with derived series (delta, ratio, moving average, min/max, rate of change), thresholds, timeline markers (Shift+click), freehand drawing (Alt+drag), crosshair sync across graphs, and workspace export/import.
+- **DSDL Inspector** — searchable tree of all loaded DSDL types with bus-activity indicators (which types are actually being seen on the wire), field-level search, and dependency navigation. Create, edit, and delete custom DSDL types under `dsdl_messages/custom/` with a compile-state lock.
+- **Recordings** — capture filtered events into per-recording SQLite stores with `max_length` / `max_events` limits and `stop_on_limit`. Quick-save the last N seconds from the global buffer, duplicate a configuration with "New like this", edit limits on live recordings without stopping them, and export per recording as CSV or JSON.
+- **Right log panel** — hidden by default, resizable; merges live `uavcan.diagnostic.Record` (subject 8184), any user-added text-bearing subject, and the backend's Python logs (polled from `/api/logs`) into one timeline. Per-source toggle pills with live count badges, severity floor across all sources, amber disconnect indicator when the backend is unreachable.
 - **Dark / light theme**, sidebar collapse, resizable detail panel.
 - **Auto-reconnect** on transient backend or frontend-server outages.
 - **Persisted layout** — connection state, table sort, column widths, filters, theme, panel sizes all restored on reload from `localStorage`.
@@ -54,6 +57,24 @@ Open `http://localhost:5500` and click **Connect** in the sidebar.
 | Selection | `python3 main.py` | You want to pick the interface from the UI dropdown |
 
 In selection mode the HTTP server starts immediately, but pycyphal is not initialized until the user posts to `/api/can/connect`. The same UI flow lets you disconnect and reconnect to a different interface without restarting the backend. Pass `--recompile` to force `nnvg` to regenerate compiled DSDL Python from `dsdl_messages/`.
+
+## Platforms
+
+**Linux** is the primary platform — SocketCAN (`vcan0`, `can0`, `slcan0`, …) is auto-discovered and the bus-load monitor uses `canbusload` from `can-utils`.
+
+**Windows / macOS** are supported with reduced introspection. The interface dropdown will be empty (no SocketCAN equivalent), so connect by passing a full pycyphal transport spec — any string that contains `:` is forwarded to pycyphal unchanged:
+
+```bash
+# Windows example: PCAN USB via python-can
+curl -X POST http://localhost:8080/api/can/connect \
+  -H 'Content-Type: application/json' \
+  -d '{"interface":"pythoncan:pcan:PCAN_USBBUS1"}'
+
+# Or run the backend directly with the same string
+python3 main.py --can pythoncan:pcan:PCAN_USBBUS1
+```
+
+The bus-load monitor self-disables when `canbusload` is not on PATH (utilization stays at 0%); the rest of the stack — REST/WebSocket server, DSDL Inspector, recordings, log panel, telemetry — works the same on all three OSes. Install whichever `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) and pass its transport string.
 
 ## Troubleshooting
 
@@ -69,3 +90,4 @@ In selection mode the HTTP server starts immediately, but pycyphal is not initia
 
 - **[TECHNICAL.md](TECHNICAL.md)** — Architecture, component breakdown, data flow, project structure, extension points.
 - **[WEBSOCKET_README.md](WEBSOCKET_README.md)** — Full REST + WebSocket API contract.
+- **[RELEASE_NOTES.md](RELEASE_NOTES.md)** — Per-version changelog.

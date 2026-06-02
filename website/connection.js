@@ -254,6 +254,7 @@ const connectWs = () => {
         return;
       }
       cacheEvent(event);
+      ingestLogEvent(event);
       scheduleDetailRefresh();
       scheduleTableRefresh();
     } catch (err) {
@@ -550,6 +551,8 @@ const connectDashboard = async () => {
 
   renderNodesTable();
   renderSelectedNodeContent();
+  if (state.activeView === 'dsdl') DsdlView.init();
+  fetchRecordings();
   saveSettings();
 };
 
