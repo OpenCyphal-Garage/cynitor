@@ -19,13 +19,13 @@
 - **Edit-limits modal** — change caps on a live recording without stopping it.
 - **Duplicate** — "New like this" starts a fresh recording with the same filter + limits.
 - **CSV / JSON export** per recording.
-- New API: `POST/GET/PATCH/DELETE /api/recordings`, `POST /api/recordings/{id}/stop`, `GET /api/recordings/{id}/export?format={csv,json}`, `GET /api/recordings/buffer`.
+- New API: `GET/POST /api/recordings`, `GET/PATCH/DELETE /api/recordings/{id}`, `POST /api/recordings/{id}/stop`, `POST /api/recordings/quick`, `GET /api/recordings/{id}/export?format={csv,json}`, `GET /api/recordings/buffer`.
 
 ### DSDL Inspector (new)
 
 - **DSDL tab** — searchable tree of all loaded DSDL types with bus-activity indicators (which types are actually being seen on the wire), field-level search, and dependency navigation.
 - **Custom DSDL types** — create, edit, and delete user types under `dsdl_messages/custom/`; compile-state lock prevents edits while a recompile is in flight.
-- New API: `GET/POST/PATCH/DELETE /api/dsdl/custom`, `POST /api/dsdl/recompile`.
+- New API: `GET /api/dsdl/status`, `GET /api/dsdl/namespaces`, `GET /api/dsdl/type/{full_name}`, `POST /api/dsdl/custom/namespace`, `GET /api/dsdl/custom/namespaces`, `POST /api/dsdl/custom/type`, `DELETE /api/dsdl/custom/type/{full_name}`, `POST /api/dsdl/compile`.
 
 ### Compare view
 

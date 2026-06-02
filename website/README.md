@@ -19,6 +19,9 @@ The current UI is network-centric: it emphasizes topology, live traffic, and sel
 - `history-panel.js` – node lifecycle history timeline with time-range filtering
 - `subjects-panel.js` – subject browser with inline service expansion
 - `graph-view.js` – D3 force-directed network topology with drag-to-pin
+- `dsdl-view.js` – DSDL Inspector: namespace tree, field search, dependency navigation, custom-type editor
+- `record-view.js` – Record tab: subject/service/node pickers, per-recording cards with progress bars, limits, edit-limits modal, duplicate, CSV/JSON export
+- `log-panel.js` – Right log panel: Cyphal + Server feeds, subject picker, severity floor, per-source toggle pills with count badges
 - `connection.js` – WebSocket lifecycle, REST polling, reconnect
 - `app.js` – boot, DOM bindings, view switching
 
@@ -73,6 +76,8 @@ Open in browser:
   - **Subjects** — subject-centric table listing all subjects and services across the network, with inline service expansion
   - **Graph** — D3 force-directed bipartite topology showing device and subject nodes with directional pub/sub links
   - **Compare** — independent graphs for side-by-side multi-series comparison with derived series, thresholds, markers, and freehand drawing
+  - **DSDL** — searchable tree of loaded DSDL types with bus-activity badges, field-level search, dependency navigation, and a custom-type editor under `dsdl_messages/custom/`
+  - **Record** — capture filtered events into per-recording SQLite stores with `max_length` / `max_events` caps, quick-save the last N seconds, edit limits on live recordings, duplicate, and CSV/JSON export
 - Detail panel (below nodes table, nodes view):
   - Tabbed view: Publishers, Subscribers, Servers, Clients, Registers, History (with count badges)
   - Subject cards: each subject displayed as an individual card with subject ID, message type, rate, live dot indicator, and key-value metrics
@@ -82,6 +87,14 @@ Open in browser:
   - Plot legend: three-zone pills with color picker, line style cycling, visibility toggle, and remove
   - Resizable split between card list and plot area (drag handle)
   - Vertical resize handle between nodes table and detail panel
+- Right log panel (hidden by default, toggled from the right edge):
+  - Unified timeline of Cyphal diagnostic messages, user-picked text subjects, and the backend's `/api/logs` stream
+  - Per-source toggle pills (`CYPHAL`, `SERVER`) with live count badges
+  - `Min: TRACE…ALERT` severity floor applies across all sources via mapped levels; user-added subjects always show
+  - `+` button opens a subject picker listing every subject whose payload carries a string field
+  - Cyphal row layout: `time · n<id> · s<id> · MessageType · text`; Server: `time · LEVEL · logger · message`
+  - SERVER pill turns amber with a corner dot when polling without backend connection
+  - Buffer cap: 2000 entries in memory, never persisted
 - Server down overlay:
   - Detects when the frontend web server (port 5500) becomes unreachable
   - Shows full-screen overlay with reconnection status and startup instructions
@@ -113,6 +126,14 @@ Open in browser:
   - `GET /api/services/{service_id}/history` — service call history
   - `GET /api/identity-map` — unique_id to node_id mappings
   - `DELETE /api/identity/{unique_id}` — remove a ghost identity
+  - `GET /api/dsdl/status` / `GET /api/dsdl/namespaces` / `GET /api/dsdl/type/{full_name}` — DSDL Inspector data
+  - `POST /api/dsdl/custom/namespace` / `GET /api/dsdl/custom/namespaces` / `POST /api/dsdl/custom/type` / `DELETE /api/dsdl/custom/type/{full_name}` — custom DSDL CRUD (POST handles both create and save)
+  - `POST /api/dsdl/compile` — force regenerate Python from DSDL
+  - `GET /api/recordings` / `POST /api/recordings` / `PATCH /api/recordings/{id}` / `DELETE /api/recordings/{id}` — recording CRUD
+  - `POST /api/recordings/{id}/stop` — stop a live recording
+  - `POST /api/recordings/quick` — snapshot the last N seconds from the global buffer
+  - `GET /api/recordings/{id}/export?format={csv,json}` — export a recording
+  - `GET /api/recordings/buffer` — global buffer stats (size, byte estimate, oldest-event timestamp)
 - CAN error handling:
   - Auto-disconnect on bus faults (BUS-OFF, ERROR-PASSIVE, interface disappearance)
   - Alert shown to user with error details
