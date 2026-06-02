@@ -145,6 +145,72 @@
       </div>
     </main>
 
+    <!-- ── Right log panel (Phase 1 shell) ── -->
+    <aside class="log-panel collapsed" id="logPanel" aria-label="Log panel">
+      <div class="log-panel-resize-handle" id="logPanelResizeHandle" aria-hidden="true"></div>
+      <div class="log-panel-header">
+        <div class="log-panel-sources" role="group" aria-label="Log sources">
+          <button class="log-source-pill" id="logSrcCyphal" data-source="cyphal" aria-pressed="true">
+            <span class="log-source-label">Cyphal</span>
+            <span class="log-source-count hidden" aria-hidden="true"></span>
+          </button>
+          <button class="log-source-pill" id="logSrcServer" data-source="server" aria-pressed="false">
+            <span class="log-source-label">Server</span>
+            <span class="log-source-count hidden" aria-hidden="true"></span>
+          </button>
+          <button class="log-source-pill" id="logSrcFrontend" data-source="frontend" aria-pressed="false">
+            <span class="log-source-label">Frontend</span>
+            <span class="log-source-count hidden" aria-hidden="true"></span>
+          </button>
+        </div>
+        <div class="log-panel-controls">
+          <label class="log-severity-wrap">
+            <span class="log-severity-label">Min</span>
+            <select id="logSeveritySelect" class="log-severity-select" aria-label="Minimum severity">
+              <option value="0">TRACE</option>
+              <option value="1">DEBUG</option>
+              <option value="2">INFO</option>
+              <option value="3">NOTICE</option>
+              <option value="4">WARNING</option>
+              <option value="5">ERROR</option>
+              <option value="6">CRITICAL</option>
+              <option value="7">ALERT</option>
+            </select>
+          </label>
+          <button class="log-icon-btn" id="logAddSubjectBtn" aria-label="Add text subject to log" title="Add subject">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="12" y1="5" x2="12" y2="19"/>
+              <line x1="5" y1="12" x2="19" y2="12"/>
+            </svg>
+          </button>
+          <button class="log-icon-btn" id="logAutoscrollBtn" aria-label="Toggle autoscroll" title="Autoscroll">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="12" y1="5" x2="12" y2="19"/>
+              <polyline points="19 12 12 19 5 12"/>
+            </svg>
+          </button>
+          <button class="log-icon-btn" id="logClearBtn" aria-label="Clear log" title="Clear">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6l-2 14H7L5 6"/>
+              <path d="M10 11v6"/>
+              <path d="M14 11v6"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="log-panel-body" id="logPanelBody">
+        <div class="log-empty" id="logEmpty">Waiting for log messages…</div>
+        <div class="log-list" id="logList" role="log" aria-live="polite"></div>
+      </div>
+    </aside>
+
+    <button class="log-panel-collapse-btn" id="logPanelCollapseBtn" aria-label="Toggle log panel">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="9 18 15 12 9 6"></polyline>
+      </svg>
+    </button>
+
   </div><!-- /app-shell -->
 
   <div id="toastContainer" class="toast-container"></div>
@@ -178,6 +244,7 @@
   <script src="./graph-view.js"></script>
   <script src="./dsdl-view.js"></script>
   <script src="./record-view.js"></script>
+  <script src="./log-panel.js"></script>
   <script src="./connection.js"></script>
   <script src="./app.js"></script>
 </body>

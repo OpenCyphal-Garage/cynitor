@@ -169,6 +169,12 @@ const bind = () => {
       && !subPop.contains(e.target) && e.target !== el('hiddenSubjectsChip')) {
       subPop.classList.add('hidden');
     }
+    const logPick = el('logSubjectPickerPopover');
+    const addBtn = el('logAddSubjectBtn');
+    if (logPick && !logPick.classList.contains('hidden')
+      && !logPick.contains(e.target) && !(addBtn && addBtn.contains(e.target))) {
+      logPick.classList.add('hidden');
+    }
   });
 
   const selectSubjectCard = (card) => {
@@ -199,6 +205,7 @@ const bind = () => {
   });
 
   bindTabs();
+  initLogPanel();
   initNodesTable();
 };
 

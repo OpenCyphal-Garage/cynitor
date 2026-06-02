@@ -261,21 +261,22 @@ const _eventsProgressPct = (rec) => {
 const _formatTimeRight = (rec) => {
   const end = rec.end_unix ?? Date.now() / 1000;
   const elapsed = Math.max(0, end - rec.start_unix);
-  if (!rec.max_length_seconds) return _humanDuration(elapsed);
+  if (!rec.max_length_seconds) return `${_humanDuration(elapsed)} · no limit`;
   return `${_humanDuration(elapsed)} / ${_humanDuration(rec.max_length_seconds)}`;
 };
 
 const _formatEventsRight = (rec) => {
   const n = (rec.event_count || 0).toLocaleString();
-  if (!rec.max_events) return `${n} events`;
+  if (!rec.max_events) return `${n} events · no limit`;
   return `${n} / ${rec.max_events.toLocaleString()}`;
 };
 
-const _progressBarHtml = (label, pct, rightLabel) => {
+const _progressBarHtml = (label, pct, rightLabel, noLimit = false) => {
   const clamped = Math.max(0, Math.min(100, pct));
   const overflow = pct > 100;
+  const mod = (overflow ? ' overflow' : '') + (noLimit ? ' no-limit' : '');
   return `
-    <div class="rec-bar${overflow ? ' overflow' : ''}">
+    <div class="rec-bar${mod}">
       <span class="rec-bar-label">${label}</span>
       <div class="rec-bar-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${clamped.toFixed(0)}">
         <div class="rec-bar-fill" style="width:${clamped}%"></div>
@@ -335,8 +336,8 @@ const _buildCard = (rec) => {
       <span class="record-meta">${escapeHtml(_formatCardMeta(rec))}</span>
     </div>
     <div class="record-card-bars">
-      ${_progressBarHtml('Time', _timeProgressPct(rec), _formatTimeRight(rec))}
-      ${_progressBarHtml('Events', _eventsProgressPct(rec), _formatEventsRight(rec))}
+      ${_progressBarHtml('Time', _timeProgressPct(rec), _formatTimeRight(rec), !rec.max_length_seconds)}
+      ${_progressBarHtml('Events', _eventsProgressPct(rec), _formatEventsRight(rec), !rec.max_events)}
     </div>
     ${filterText ? `<div class="record-card-filter">${escapeHtml(filterText)}</div>` : '<div class="record-card-filter muted">no filter (recording everything)</div>'}
     ${rec.notes ? `<div class="record-card-notes">${escapeHtml(rec.notes)}</div>` : ''}

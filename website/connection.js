@@ -254,6 +254,7 @@ const connectWs = () => {
         return;
       }
       cacheEvent(event);
+      ingestLogEvent(event);
       scheduleDetailRefresh();
       scheduleTableRefresh();
     } catch (err) {

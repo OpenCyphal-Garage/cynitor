@@ -49,6 +49,16 @@ const state = {
   _busFullArmed: true,
   tableSort: { key: 'id', dir: 'asc' },
   sidebarCollapsed: false,
+  logPanelCollapsed: true,
+  logPanelWidth: null,
+  logBuffer: [],
+  logSeverityFloor: 0,
+  logAutoscroll: true,
+  logSubjectIds: new Set(),
+  logShowCyphal: true,
+  logShowServer: false,
+  logShowFrontend: false,
+  _logSeq: 0,
   detailPanelHeight: null,
   detailPanelCollapsed: false,
   _nodesDetailHeight: null,
@@ -415,6 +425,14 @@ const _writeSettingsNow = () => {
     selectedDetailTab: state.selectedDetailTab,
     tableSort: state.tableSort,
     sidebarCollapsed: state.sidebarCollapsed,
+    logPanelCollapsed: state.logPanelCollapsed,
+    logPanelWidth: state.logPanelWidth,
+    logSeverityFloor: state.logSeverityFloor,
+    logAutoscroll: state.logAutoscroll,
+    logSubjectIds: [...state.logSubjectIds],
+    logShowCyphal: state.logShowCyphal,
+    logShowServer: state.logShowServer,
+    logShowFrontend: state.logShowFrontend,
     detailPanelHeight: state.detailPanelHeight,
     detailPanelCollapsed: state.detailPanelCollapsed,
     nodesDetailHeight: state._nodesDetailHeight,
@@ -491,6 +509,26 @@ const loadSettings = () => {
     state.sidebarCollapsed = true;
     document.querySelector('.sidebar')?.classList.add('collapsed');
   }
+  if (settings.logPanelCollapsed === false) {
+    state.logPanelCollapsed = false;
+    document.querySelector('.log-panel')?.classList.remove('collapsed');
+  }
+  if (typeof settings.logPanelWidth === 'number' && settings.logPanelWidth >= 0) {
+    state.logPanelWidth = settings.logPanelWidth;
+  }
+  if (Number.isInteger(settings.logSeverityFloor)
+      && settings.logSeverityFloor >= 0 && settings.logSeverityFloor <= 7) {
+    state.logSeverityFloor = settings.logSeverityFloor;
+  }
+  if (settings.logAutoscroll === false) {
+    state.logAutoscroll = false;
+  }
+  if (Array.isArray(settings.logSubjectIds)) {
+    state.logSubjectIds = new Set(settings.logSubjectIds.filter(Number.isInteger));
+  }
+  if (settings.logShowCyphal === false) state.logShowCyphal = false;
+  if (settings.logShowServer === true) state.logShowServer = true;
+  if (settings.logShowFrontend === true) state.logShowFrontend = true;
   if (typeof settings.detailPanelHeight === 'number') {
     state.detailPanelHeight = settings.detailPanelHeight;
   }
