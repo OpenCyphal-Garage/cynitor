@@ -144,6 +144,7 @@ Telemetry events (filtered per client):
     "rate": 10,
     "message_type": "Heartbeat_1_0",
     "publisher_node_id": 42,
+    "payload_bytes": 7,
     "attributes": [
         {"attribute": "uptime", "value": 12345, "unit": "s"},
         {"attribute": "health", "value": "NOMINAL"},
@@ -152,6 +153,8 @@ Telemetry events (filtered per client):
     ]
 }
 ```
+
+`payload_bytes` is the size, in bytes, of the received transfer's serialized payload (sum of `transfer.fragmented_payload` fragment lengths). It is `null` if the transport did not expose the fragmented payload (best-effort field).
 
 Metrics (sent to all clients every 1 second):
 ```json
