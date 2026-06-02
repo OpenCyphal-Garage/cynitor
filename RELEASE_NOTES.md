@@ -1,3 +1,23 @@
+## Cynitor v0.3.1
+
+### Graph view — major upgrade
+
+- **Live traffic on links** — stroke width encodes publish rate (log-scaled), and active edges render an animated dash so the topology shows *traffic*, not just *wiring*.
+- **Per-device pulse** — devices that are actively publishing pulse in the accent color; idle and offline devices stay quiet.
+- **Filter bar** — free-text search across device name/ID and subject ID/type, plus a "Hide offline" toggle. When a filter is active, direct neighbors of matches are kept visible so subjects don't orphan.
+- **Snap-to-grid placement** — dragging a node snaps it to a regular grid pitch on release, so pinned layouts stay tidy.
+- **Faint dot-grid backdrop** — toggleable via a new "Show grid" checkbox; pans and zooms with the graph.
+- **Bipartite layout bias** — when subjects are shown, devices and subjects gravitate to separate bands; collapsed mode keeps the canvas free for devices.
+- **Smarter labels** — long DSDL type names truncate with ellipsis; per-node "above vs below" placement based on neighbor direction; one-pass collision resolution after layout settle; halo behind labels so crossing edges don't shred them.
+- **Gravity dropdown** — pick which metric pulls heavier nodes toward center: *Total links*, *Subject channels*, *Service channels*, *Publish rate*, or *Payload size*. Persisted per session.
+- **Info panel follows the selected node** — instead of docking in the corner, the panel anchors next to the selected node, flips side when near canvas edges, clamps inside the viewport, and follows the node during drag, settle, zoom, and resize.
+- **Per-link rate / payload overlay** — new "Show link stats" checkbox draws `12 Hz · 7 B` style readouts at link midpoints; collapsed device-to-device links show summed traffic.
+- **Click-deselect** — fixed an operator-precedence bug that prevented background-click deselection in some cases.
+
+### Backend
+
+- **`payload_bytes` on telemetry events** — publisher events now carry the serialized transfer size in bytes (summed from `transfer.fragmented_payload`). Best-effort: `null` if the transport does not expose fragmented payload. Documented in `WEBSOCKET_README.md`. Powers the *Payload size* gravity option in the graph view.
+
 ## Cynitor v0.3.0
 
 ### Right log panel (new)
