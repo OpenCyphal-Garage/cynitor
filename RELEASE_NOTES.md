@@ -46,6 +46,13 @@
 - **Interactive three-zone legend** — color picker swatch (click to change), center label (click to toggle visibility), style indicator (click to cycle through 9 line styles: 5 dash patterns + 4 marker shapes), and remove button.
 - **Marker shapes** — circle, square, triangle, and diamond markers for distinguishing overlapping series.
 
+### Cross-platform
+
+- **Windows and macOS support** for the backend. Any interface string containing `:` is passed through to pycyphal verbatim (e.g. `pythoncan:pcan:PCAN_USBBUS1` on Windows, `socketcan:vcan0` cross-platform); bare names like `vcan0` still implicitly prefix `socketcan:` to preserve the original Linux UX.
+- **Graceful degradation** when Linux-only tools are absent: `BusLoadMonitor` self-disables when `canbusload` is not on `PATH` (utilization stays at 0%, no spurious "monitor exited" fatal disconnect); `_check_can_health` returns healthy on non-Linux instead of tripping the watchdog 3 seconds in.
+- **Correct `PATH` separator** when extending `CYPHAL_PATH` / `PYTHONPATH` (`os.pathsep` instead of hardcoded `:`).
+- Interface dropdown still populates from SocketCAN sysfs on Linux; on Windows/macOS it stays empty — connect by passing the full transport string via `POST /api/can/connect` or `--can <transport-spec>`.
+
 ### Fixes
 
 - DSDL tree readability and sidebar tab alignment.
