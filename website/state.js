@@ -57,7 +57,6 @@ const state = {
   logSubjectIds: new Set(),
   logShowCyphal: true,
   logShowServer: false,
-  logShowFrontend: false,
   _logSeq: 0,
   detailPanelHeight: null,
   detailPanelCollapsed: false,
@@ -432,7 +431,6 @@ const _writeSettingsNow = () => {
     logSubjectIds: [...state.logSubjectIds],
     logShowCyphal: state.logShowCyphal,
     logShowServer: state.logShowServer,
-    logShowFrontend: state.logShowFrontend,
     detailPanelHeight: state.detailPanelHeight,
     detailPanelCollapsed: state.detailPanelCollapsed,
     nodesDetailHeight: state._nodesDetailHeight,
@@ -528,7 +526,6 @@ const loadSettings = () => {
   }
   if (settings.logShowCyphal === false) state.logShowCyphal = false;
   if (settings.logShowServer === true) state.logShowServer = true;
-  if (settings.logShowFrontend === true) state.logShowFrontend = true;
   if (typeof settings.detailPanelHeight === 'number') {
     state.detailPanelHeight = settings.detailPanelHeight;
   }

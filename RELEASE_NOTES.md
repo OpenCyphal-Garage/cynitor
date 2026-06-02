@@ -1,6 +1,33 @@
 ## Cynitor v0.3.0
 
-### New Features
+### Right log panel (new)
+
+- **Collapsible/resizable right sidebar** — hidden by default, mirrors left-sidebar collapse + persistence; drag the left edge to resize, double-click to reset.
+- **Cyphal log feed** — `uavcan.diagnostic.Record` (subject 8184) auto-streams; row layout is `time · n<id> · s<id> · MessageType · text`. Severity drives row tinting; alert/critical get a red wash.
+- **Add text subjects** — `+` button opens a picker listing every subject whose payload carries a string field (excluding 8184). Pick any to feed into the log alongside diagnostics. Selection persists.
+- **Server log toggle** — `SERVER` pill pulls Python `logging` records from `GET /api/logs` every 2 s. Pill turns amber with a corner dot when the backend is unreachable.
+- **Per-source counters** — small live badge on each pill shows how many entries from that source are in the buffer.
+- **Severity floor** — `Min: TRACE…ALERT` dropdown filters across all sources via mapped levels; user-added text subjects always show.
+- **Buffer cap** — 2000-entry in-memory ring; never persisted.
+
+### Record tab (new)
+
+- **Per-recording event stores** — every recording streams matching events into its own SQLite-backed `recording_events` table, independent of the global buffer.
+- **Picker UI** — select subjects, services, and nodes to filter what each recording captures.
+- **Limits** — per-recording `max_length_seconds`, `max_events`, and `stop_on_limit` caps with progress bars. Unlimited recordings now show "· no limit" with a dashed bar so empty progress doesn't read as a stuck recording.
+- **Quick-save** — snapshot the last N seconds from the global buffer into a dedicated recording.
+- **Edit-limits modal** — change caps on a live recording without stopping it.
+- **Duplicate** — "New like this" starts a fresh recording with the same filter + limits.
+- **CSV / JSON export** per recording.
+- New API: `POST/GET/PATCH/DELETE /api/recordings`, `POST /api/recordings/{id}/stop`, `GET /api/recordings/{id}/export?format={csv,json}`, `GET /api/recordings/buffer`.
+
+### DSDL Inspector (new)
+
+- **DSDL tab** — searchable tree of all loaded DSDL types with bus-activity indicators (which types are actually being seen on the wire), field-level search, and dependency navigation.
+- **Custom DSDL types** — create, edit, and delete user types under `dsdl_messages/custom/`; compile-state lock prevents edits while a recompile is in flight.
+- New API: `GET/POST/PATCH/DELETE /api/dsdl/custom`, `POST /api/dsdl/recompile`.
+
+### Compare view
 
 - **Compare view** — new sidebar tab with independent graphs for side-by-side multi-series comparison. Add any subject + attribute from the network to any graph.
 - **Derived series** — computed from raw series at render time: delta (A−B), ratio (A/B), moving average (windowed), min/max envelope (rolling), and rate of change (Δv/Δt).
@@ -11,13 +38,20 @@
 - **Workspace export/import** — serialize the full compare workspace (all graphs, presets, markers, drawings) as a JSON file.
 - **Presets** — save and load named graph configurations in compare view.
 
-### Plot Improvements
+### Plot improvements
 
 - **Live tooltip updates** — tooltip values update in real time as data scrolls under a stationary cursor, instead of requiring mouse movement.
 - **Click-to-pause** — single click pauses/resumes the plot. Double-click resets zoom and pan.
 - **Drag-to-pan** — hold and drag to navigate the X axis. Scroll wheel to zoom centered on cursor.
 - **Interactive three-zone legend** — color picker swatch (click to change), center label (click to toggle visibility), style indicator (click to cycle through 9 line styles: 5 dash patterns + 4 marker shapes), and remove button.
 - **Marker shapes** — circle, square, triangle, and diamond markers for distinguishing overlapping series.
+
+### Fixes
+
+- DSDL tree readability and sidebar tab alignment.
+- Compare view smooth/pause interaction.
+- Brush styling consistency in plots.
+- Plot drawing controls now gated behind `opts.includeDraw` so views without drawing intent don't render unused toolbar buttons.
 
 ---
 

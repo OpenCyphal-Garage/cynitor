@@ -1,14 +1,12 @@
 // Right-side log panel: shell (collapse/resize/persistence) + live log feed
-// from three independently-toggled sources:
-//   - cyphal:   uavcan.diagnostic.Record + user-added text subjects (WS push)
-//   - server:   GET /api/logs poller (Python `logging` records)
-//   - frontend: console.{debug,log,info,warn,error} hook
+// from two independently-toggled sources:
+//   - cyphal: uavcan.diagnostic.Record + user-added text subjects (WS push)
+//   - server: GET /api/logs poller (Python `logging` records)
 //
 // Source of truth: state.logBuffer (in-memory ring buffer, NOT persisted).
 // Persisted UI: state.logPanelCollapsed, state.logPanelWidth,
 //               state.logSeverityFloor, state.logAutoscroll,
-//               state.logSubjectIds,
-//               state.logShowCyphal, state.logShowServer, state.logShowFrontend.
+//               state.logSubjectIds, state.logShowCyphal, state.logShowServer.
 
 const LOG_PANEL_MIN_WIDTH_PX = 224;   // ~14rem
 const LOG_PANEL_MAX_WIDTH_PX = 800;   // ~50rem
@@ -24,20 +22,16 @@ const SEVERITY_CSS = ['trace', 'debug', 'info', 'notice', 'warning', 'error', 'c
 const SERVER_LEVEL_TO_SEVERITY = {
   DEBUG: 1, INFO: 2, WARNING: 4, ERROR: 5, CRITICAL: 6,
 };
-const CONSOLE_METHOD_TO_SEVERITY = {
-  debug: 1, log: 2, info: 2, warn: 4, error: 5,
-};
 
 const DIAGNOSTIC_SUBJECT_ID = 8184;
 
 // Per-source entry counters mirror state.logBuffer composition.
 // Kept in sync via _pushEntry, _onClearLog, _recomputeSrcCounts.
-const _srcCounts = { cyphal: 0, server: 0, frontend: 0 };
+const _srcCounts = { cyphal: 0, server: 0 };
 
 const _recomputeSrcCounts = () => {
   _srcCounts.cyphal = 0;
   _srcCounts.server = 0;
-  _srcCounts.frontend = 0;
   for (const e of state.logBuffer) {
     if (e.source in _srcCounts) _srcCounts[e.source]++;
   }
@@ -148,26 +142,6 @@ const buildServerEntry = (raw) => {
   };
 };
 
-const stringifyConsoleArg = (a) => {
-  if (a == null) return String(a);
-  if (typeof a === 'string') return a;
-  if (typeof a === 'number' || typeof a === 'boolean') return String(a);
-  if (a instanceof Error) return a.stack || `${a.name}: ${a.message}`;
-  try { return JSON.stringify(a); }
-  catch { return String(a); }
-};
-
-const buildFrontendEntry = (method, args) => {
-  return {
-    id: ++state._logSeq,
-    t: Date.now() / 1000,
-    source: 'frontend',
-    severity: CONSOLE_METHOD_TO_SEVERITY[method] ?? 2,
-    consoleMethod: method,
-    text: args.map(stringifyConsoleArg).join(' '),
-  };
-};
-
 // ── Render ──────────────────────────────────────────────────────────
 
 const formatLogTime = (unix) => {
@@ -175,42 +149,11 @@ const formatLogTime = (unix) => {
   const hh = String(d.getHours()).padStart(2, '0');
   const mm = String(d.getMinutes()).padStart(2, '0');
   const ss = String(d.getSeconds()).padStart(2, '0');
-  const ms = String(d.getMilliseconds()).padStart(3, '0');
-  return `${hh}:${mm}:${ss}.${ms}`;
+  return `${hh}:${mm}:${ss}`;
 };
 
 const isAtBottom = (container) => {
   return container.scrollHeight - container.scrollTop - container.clientHeight <= AUTOSCROLL_STICKY_PX;
-};
-
-const _rowLabelAndContext = (entry) => {
-  if (entry.source === 'cyphal') {
-    if (entry.kind === 'diagnostic') {
-      return {
-        label: entry.severity != null ? SEVERITY_LABELS[entry.severity] : '—',
-        context: entry.nodeId != null ? `n${entry.nodeId}` : '—',
-        title: '',
-      };
-    }
-    return {
-      label: entry.subjectName || `s${entry.subjectId ?? '?'}`,
-      context: entry.nodeId != null ? `n${entry.nodeId}` : '—',
-      title: entry.subjectId != null ? `subject ${entry.subjectId} (${entry.subjectName || ''})` : '',
-    };
-  }
-  if (entry.source === 'server') {
-    return {
-      label: entry.level || '—',
-      context: entry.loggerName || 'server',
-      title: entry.loggerName ? `logger: ${entry.loggerName}` : '',
-    };
-  }
-  // frontend
-  return {
-    label: (entry.consoleMethod || 'log').toUpperCase(),
-    context: 'console',
-    title: `console.${entry.consoleMethod || 'log'}`,
-  };
 };
 
 const renderLogRow = (entry) => {
@@ -220,13 +163,35 @@ const renderLogRow = (entry) => {
   row.className = `log-row ${sevClass} log-row-src-${entry.source}${kindClass}`;
   row.dataset.severity = String(entry.severity ?? -1);
   row.dataset.source = entry.source;
-  const { label, context, title } = _rowLabelAndContext(entry);
-  row.innerHTML = `
-    <span class="log-row-time">${escapeHtml(formatLogTime(entry.t))}</span>
-    <span class="log-row-sev" title="${escapeHtml(title)}">${escapeHtml(label)}</span>
-    <span class="log-row-node">${escapeHtml(context)}</span>
-    <span class="log-row-text">${escapeHtml(entry.text)}</span>
-  `;
+  const time = escapeHtml(formatLogTime(entry.t));
+  const text = escapeHtml(entry.text);
+
+  if (entry.source === 'cyphal') {
+    const nodeStr = entry.nodeId != null ? `n${entry.nodeId}` : '—';
+    const subjectStr = entry.subjectId != null ? `s${entry.subjectId}` : '—';
+    const msgType = entry.subjectName || '—';
+    const typeTitle = entry.subjectId != null
+      ? `subject ${entry.subjectId} (${entry.subjectName || ''})`
+      : '';
+    row.innerHTML = `
+      <span class="log-row-time">${time}</span>
+      <span class="log-row-node">${escapeHtml(nodeStr)}</span>
+      <span class="log-row-subj">${escapeHtml(subjectStr)}</span>
+      <span class="log-row-type" title="${escapeHtml(typeTitle)}">${escapeHtml(msgType)}</span>
+      <span class="log-row-text">${text}</span>
+    `;
+  } else {
+    // server
+    const label = entry.level || '—';
+    const logger = entry.loggerName || 'server';
+    const loggerTitle = entry.loggerName ? `logger: ${entry.loggerName}` : '';
+    row.innerHTML = `
+      <span class="log-row-time">${time}</span>
+      <span class="log-row-sev">${escapeHtml(label)}</span>
+      <span class="log-row-node" title="${escapeHtml(loggerTitle)}">${escapeHtml(logger)}</span>
+      <span class="log-row-text">${text}</span>
+    `;
+  }
   return row;
 };
 
@@ -235,7 +200,6 @@ const renderLogRow = (entry) => {
 const _sourceIsShown = (src) => {
   if (src === 'cyphal') return state.logShowCyphal;
   if (src === 'server') return state.logShowServer;
-  if (src === 'frontend') return state.logShowFrontend;
   return true;
 };
 
@@ -256,7 +220,7 @@ const reapplyFiltersToAllRows = () => {
 const updateEmptyHint = () => {
   const empty = el('logEmpty');
   if (!empty) return;
-  const allOff = !state.logShowCyphal && !state.logShowServer && !state.logShowFrontend;
+  const allOff = !state.logShowCyphal && !state.logShowServer;
   const noEntries = state.logBuffer.length === 0;
   if (allOff) {
     empty.textContent = 'All log sources are off — enable one above.';
@@ -311,10 +275,6 @@ const ingestLogEvent = (event) => {
 
 const ingestServerEntry = (raw) => {
   _pushEntry(buildServerEntry(raw));
-};
-
-const ingestFrontendEntry = (method, args) => {
-  _pushEntry(buildFrontendEntry(method, args));
 };
 
 // ── Rebuild (used after major UI state changes) ─────────────────────
@@ -378,11 +338,11 @@ const renderLogPickerPopover = () => {
     listHtml = '<div class="hidden-popover-list">';
     for (const c of candidates) {
       const checked = state.logSubjectIds.has(c.subjectId);
+      const title = c.messageType ? `subject ${c.subjectId} — ${c.messageType}` : `subject ${c.subjectId}`;
       listHtml += `
-        <label class="log-subject-row">
-          <input type="checkbox" class="log-subject-checkbox" data-subject-id="${c.subjectId}" ${checked ? 'checked' : ''}>
+        <label class="log-subject-row" title="${escapeHtml(title)}">
           <span class="hidden-popover-id">${escapeHtml(String(c.subjectId))}</span>
-          <span class="hidden-popover-name">${escapeHtml(c.messageType || '—')}</span>
+          <input type="checkbox" class="log-subject-checkbox" data-subject-id="${c.subjectId}" ${checked ? 'checked' : ''}>
         </label>
       `;
     }
@@ -391,7 +351,7 @@ const renderLogPickerPopover = () => {
 
   popover.innerHTML = `
     <div class="hidden-popover-header">
-      <span>Text subjects in log</span>
+      <span>Subjects</span>
     </div>
     ${listHtml}
   `;
@@ -460,26 +420,6 @@ const stopServerLogPoll = () => {
   }
 };
 
-// ── Frontend console hook ───────────────────────────────────────────
-
-let _consoleHookInstalled = false;
-const _origConsole = {};
-
-const installConsoleHook = () => {
-  if (_consoleHookInstalled) return;
-  _consoleHookInstalled = true;
-  for (const method of ['debug', 'log', 'info', 'warn', 'error']) {
-    _origConsole[method] = console[method].bind(console);
-    console[method] = (...args) => {
-      _origConsole[method](...args);
-      if (state.logShowFrontend) {
-        try { ingestFrontendEntry(method, args); }
-        catch { /* never let logging break the app */ }
-      }
-    };
-  }
-};
-
 // ── Toolbar bits ────────────────────────────────────────────────────
 
 const updateAutoscrollBtn = () => {
@@ -492,13 +432,11 @@ const updateAutoscrollBtn = () => {
 const _isSourceOn = (src) =>
   src === 'cyphal' ? state.logShowCyphal
   : src === 'server' ? state.logShowServer
-  : src === 'frontend' ? state.logShowFrontend
   : false;
 
 const _setSourceOn = (src, on) => {
   if (src === 'cyphal') state.logShowCyphal = on;
   else if (src === 'server') state.logShowServer = on;
-  else if (src === 'frontend') state.logShowFrontend = on;
 };
 
 const _refreshSourcePill = (pill) => {
@@ -616,7 +554,6 @@ const initLogPanel = () => {
       state.logBuffer.length = 0;
       _srcCounts.cyphal = 0;
       _srcCounts.server = 0;
-      _srcCounts.frontend = 0;
       const list = el('logList');
       if (list) list.replaceChildren();
       _refreshSourcePillBadges();
@@ -638,7 +575,6 @@ const initLogPanel = () => {
     pill.addEventListener('click', () => _onSourceToggle(pill));
   }
 
-  installConsoleHook();
   if (state.logShowServer) startServerLogPoll();
 
   _recomputeSrcCounts();
