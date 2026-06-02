@@ -58,6 +58,24 @@ Open `http://localhost:5500` and click **Connect** in the sidebar.
 
 In selection mode the HTTP server starts immediately, but pycyphal is not initialized until the user posts to `/api/can/connect`. The same UI flow lets you disconnect and reconnect to a different interface without restarting the backend. Pass `--recompile` to force `nnvg` to regenerate compiled DSDL Python from `dsdl_messages/`.
 
+## Platforms
+
+**Linux** is the primary platform — SocketCAN (`vcan0`, `can0`, `slcan0`, …) is auto-discovered and the bus-load monitor uses `canbusload` from `can-utils`.
+
+**Windows / macOS** are supported with reduced introspection. The interface dropdown will be empty (no SocketCAN equivalent), so connect by passing a full pycyphal transport spec — any string that contains `:` is forwarded to pycyphal unchanged:
+
+```bash
+# Windows example: PCAN USB via python-can
+curl -X POST http://localhost:8080/api/can/connect \
+  -H 'Content-Type: application/json' \
+  -d '{"interface":"pythoncan:pcan:PCAN_USBBUS1"}'
+
+# Or run the backend directly with the same string
+python3 main.py --can pythoncan:pcan:PCAN_USBBUS1
+```
+
+The bus-load monitor self-disables when `canbusload` is not on PATH (utilization stays at 0%); the rest of the stack — REST/WebSocket server, DSDL Inspector, recordings, log panel, telemetry — works the same on all three OSes. Install whichever `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) and pass its transport string.
+
 ## Troubleshooting
 
 **"Frontend Server Unavailable" overlay appears.** The static-file server on port 5500 stopped responding. Restart it with `cd website && python3 -m http.server 5500`. Cynitor reloads automatically once it's back.

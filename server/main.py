@@ -5,12 +5,16 @@ import argparse
 import asyncio
 import logging
 import re
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
 from log_store import InMemoryLogStore, APILogHandler
 from startup_setup import prepare_runtime
+
+IS_LINUX = sys.platform.startswith("linux")
 
 # Configure logging
 logging.basicConfig(
@@ -89,16 +93,26 @@ def _get_can_bitrate(iface: str) -> int:
 
 
 class BusLoadMonitor:
-    """Runs canbusload as a subprocess and exposes the latest utilization %."""
+    """Runs canbusload as a subprocess and exposes the latest utilization %.
+
+    `canbusload` ships with Linux `can-utils`. If it is not on PATH (any non-
+    Linux OS, or a minimal Linux install) the monitor becomes a permanent
+    no-op: utilization stays 0, `is_alive` reports True so the health watchdog
+    in `_register_loop` does not trip a disconnect.
+    """
 
     def __init__(self, iface: str) -> None:
         self._iface = iface
         self._bitrate = _get_can_bitrate(iface)
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._task: Optional[asyncio.Task] = None
+        self._disabled = shutil.which("canbusload") is None
         self.utilization: float = 0.0
 
     async def start(self) -> None:
+        if self._disabled:
+            logger.info("BusLoadMonitor disabled: 'canbusload' not on PATH (install can-utils on Linux for bus-load metrics)")
+            return
         self._proc = await asyncio.create_subprocess_exec(
             "canbusload", f"{self._iface}@{self._bitrate}", "-b",
             stdout=asyncio.subprocess.PIPE,
@@ -126,6 +140,8 @@ class BusLoadMonitor:
 
     @property
     def is_alive(self) -> bool:
+        if self._disabled:
+            return True
         return self._proc is not None and self._proc.returncode is None
 
     async def _read_loop(self) -> None:
@@ -331,7 +347,13 @@ async def register_nodes(scanner, registered_nodes_set: set[int]) -> None:
 # ---------------------------------------------------------------------------
 
 def _check_can_health(iface: str) -> Optional[str]:
-    """Check CAN interface health via system. Returns error message or None."""
+    """Check CAN interface health via system. Returns error message or None.
+
+    SocketCAN-specific (Linux sysfs + iproute2). On non-Linux platforms we have
+    no equivalent introspection; report healthy so the watchdog does not trip.
+    """
+    if not IS_LINUX:
+        return None
     iface_path = Path("/sys/class/net") / iface
     if not iface_path.exists():
         return f"Interface {iface} no longer exists"

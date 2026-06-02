@@ -14,9 +14,9 @@ logger = logging.getLogger(__name__)
 def _prepend_env_path(var_name: str, path: Path) -> None:
     resolved = str(path.resolve())
     current = os.environ.get(var_name, "")
-    parts = [item for item in current.split(":") if item]
+    parts = [item for item in current.split(os.pathsep) if item]
     if resolved not in parts:
-        os.environ[var_name] = ":".join([resolved, *parts]) if parts else resolved
+        os.environ[var_name] = os.pathsep.join([resolved, *parts]) if parts else resolved
 
 
 def _ensure_sys_path(path: Path) -> None:
@@ -128,7 +128,12 @@ def prepare_runtime(can_iface: str = "can0", force_compile: bool = False) -> Non
     _prepend_env_path("PYTHONPATH", python_output_dir)
     _ensure_sys_path(python_output_dir)
 
-    os.environ["UAVCAN__CAN__IFACE"] = f"socketcan:{can_iface}"
+    # If the user passed a full pycyphal transport spec (contains ":") use it
+    # verbatim — e.g. "pythoncan:pcan:PCAN_USBBUS1" on Windows or
+    # "socketcan:vcan0" cross-platform. Otherwise default to socketcan, which
+    # is the Linux SocketCAN path the original CLI was built around.
+    iface_spec = can_iface if ":" in can_iface else f"socketcan:{can_iface}"
+    os.environ["UAVCAN__CAN__IFACE"] = iface_spec
     os.environ["UAVCAN__CAN__MTU"] = "8"
 
     if "UAVCAN__NODE__ID" not in os.environ:
