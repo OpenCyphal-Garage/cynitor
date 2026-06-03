@@ -566,6 +566,24 @@ const GraphView = (() => {
   const _render = (graph) => {
     const { deviceNodes, subjectNodes, links, collapsedLinks, adjacency } = graph;
 
+    const placeholderHtml = typeof connectionPlaceholder === 'function'
+      ? connectionPlaceholder('view the topology graph') : null;
+    const svgWrap = svg?.node()?.parentNode;
+    if (svgWrap) {
+      let overlay = svgWrap.querySelector('.graph-conn-overlay');
+      if (placeholderHtml) {
+        if (!overlay) {
+          overlay = document.createElement('div');
+          overlay.className = 'graph-conn-overlay';
+          svgWrap.appendChild(overlay);
+        }
+        overlay.innerHTML = placeholderHtml;
+        prevSnapshot = null;
+        return;
+      }
+      if (overlay) overlay.remove();
+    }
+
     const showSubs = _showSubs();
     const subjectsOnTop = gState.view === 'subject-centric';
     const filterStr = (gState.filterText || '').trim().toLowerCase();

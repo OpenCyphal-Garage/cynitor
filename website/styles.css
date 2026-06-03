@@ -1480,6 +1480,22 @@ button:focus-visible,
   font-size: 0.8125rem;
 }
 
+.plot-empty-window {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  padding: 0.25rem 0.5rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  z-index: 1;
+}
+
 .plot-header {
   display: flex;
   flex-wrap: wrap;
@@ -4173,6 +4189,16 @@ details.svc-history-entry[open] > summary::before {
   min-height: 0;
   background: var(--bg);
   position: relative;
+}
+
+.graph-conn-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  z-index: 2;
 }
 
 .graph-svg-wrap svg {

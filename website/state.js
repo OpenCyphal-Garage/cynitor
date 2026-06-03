@@ -18,6 +18,7 @@ const state = {
   nodesTimer: null,
   throughputTimer: null,
   dashboardConnected: false,
+  dashboardConnecting: false,
   canState: CONN.IDLE,
   preferredCanInterface: '',
   favouriteNodeIds: new Set(),
@@ -232,6 +233,9 @@ const getHealthColor = (health) => HEALTH_CSS_COLOR[classifyHealth(health)] || '
 
 const connectionPlaceholder = (context) => {
   if (!state.dashboardConnected) {
+    if (state.dashboardConnecting) {
+      return svcStateMsg('<span class="svc-spinner"></span>', 'Connecting to backend…', 'Reaching the backend server.');
+    }
     if (state.pendingReconnect) {
       return svcStateMsg('<span class="svc-spinner"></span>', 'Reconnecting to backend…', 'Restoring previous session.');
     }

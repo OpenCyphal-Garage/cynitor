@@ -1886,6 +1886,27 @@ const renderPlot = (container) => {
 
   const { xScale, yScales, panelH } = computePlotScales(visible, w, totalPanelsH);
 
+  const [tLeft, tRight] = xScale.domain();
+  let inWindow = 0;
+  for (const s of visible) {
+    for (const p of s.data) {
+      if (p.t >= tLeft && p.t <= tRight) { inWindow++; break; }
+    }
+    if (inWindow) break;
+  }
+  let emptyOverlay = plotArea.querySelector('.plot-empty-window');
+  if (!inWindow && visible.length) {
+    const windowSecs = Math.max(0, Math.round(tRight - tLeft));
+    if (!emptyOverlay) {
+      emptyOverlay = document.createElement('div');
+      emptyOverlay.className = 'plot-empty-window';
+      plotArea.appendChild(emptyOverlay);
+    }
+    emptyOverlay.textContent = `No data in last ${windowSecs}s`;
+  } else if (emptyOverlay) {
+    emptyOverlay.remove();
+  }
+
   let gNode = plotArea.querySelector('.plot-root');
   if (!gNode || !gNode.querySelector('.plot-panels') || !plotArea.querySelector('.plot-header') || plotArea.dataset.plotView !== state.activeView) {
     gNode = setupPlotSvg(plotArea, PLOT_MARGIN);

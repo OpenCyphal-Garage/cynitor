@@ -153,8 +153,12 @@ const updateDashboardConnectButton = () => {
   if (!button) {
     return;
   }
-  button.textContent = state.dashboardConnected ? 'Disconnect' : 'Connect';
-  button.disabled = state.canConnecting || state.canDisconnecting;
+  if (state.dashboardConnecting) {
+    button.textContent = 'Connecting…';
+  } else {
+    button.textContent = state.dashboardConnected ? 'Disconnect' : 'Connect';
+  }
+  button.disabled = state.canConnecting || state.canDisconnecting || state.dashboardConnecting;
   updateSemaphores();
 };
 
@@ -541,14 +545,24 @@ const connectDashboard = async () => {
     return;
   }
 
+  state.dashboardConnecting = true;
+  updateDashboardConnectButton();
+  renderNodesTable();
+  renderSelectedNodeContent();
+
   let statusData;
   try {
     statusData = await requestJson('/api/status');
-  } catch {
-    updateSemaphores();
+  } catch (error) {
+    state.dashboardConnecting = false;
+    updateDashboardConnectButton();
+    renderNodesTable();
+    renderSelectedNodeContent();
+    showToast(`Backend unreachable: ${error.message}`, 'error');
     return;
   }
 
+  state.dashboardConnecting = false;
   state.dashboardConnected = true;
   updateDashboardConnectButton();
   startStatusPolling();
