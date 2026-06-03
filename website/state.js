@@ -387,7 +387,13 @@ const requestJson = async (path, options = {}) => {
   if (!response.ok) {
     const detail = data.error
       || (Array.isArray(data.errors) && data.errors.length ? data.errors.join('\n') : null);
-    throw new Error(detail || `HTTP ${response.status} for ${path}`);
+    const err = new Error(detail || `HTTP ${response.status} for ${path}`);
+    // Attach the raw status and body so callers can distinguish e.g. a 504
+    // service-call timeout (body carries {status: "timeout", latency_ms, error})
+    // from a generic 500 with the same envelope.
+    err.status = response.status;
+    err.data = data;
+    throw err;
   }
   return data;
 };

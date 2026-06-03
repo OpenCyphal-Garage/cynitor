@@ -794,20 +794,38 @@ class WebSocketServer:
 
         return ws
 
+    # Cap how long a single send may block waiting for a slow client. If TCP
+    # backpressure stalls the send beyond this, the connection is considered
+    # dead and the consumer exits — the handler then tears the WS down and
+    # the broadcast loop stops queuing for the orphaned subscriber. Cynitor
+    # broadcasts at most ~1 kHz of small JSON frames, so 10 s is far above
+    # any healthy peer's worst-case latency.
+    _WS_SEND_TIMEOUT = 10.0
+
     async def _consume_and_send(self, ws: web.WebSocketResponse, queue: asyncio.Queue) -> None:
         while self._running and not ws.closed:
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=5.0)
-
-                if self._event_matches_filter(event, ws):
-                    await ws.send_json(event)
-
             except asyncio.TimeoutError:
-                pass
+                continue  # no events in the last 5s; loop back and re-check ws.closed
+            except asyncio.CancelledError:
+                break
+
+            if not self._event_matches_filter(event, ws):
+                continue
+
+            try:
+                await asyncio.wait_for(ws.send_json(event), timeout=self._WS_SEND_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "WebSocket send blocked > %ss — closing slow/stuck client",
+                    self._WS_SEND_TIMEOUT,
+                )
+                break
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Error sending to client: {e}")
+                logger.error("Error sending to client: %s", e)
                 break
 
     async def _send_metrics_loop(self, ws: web.WebSocketResponse) -> None:
