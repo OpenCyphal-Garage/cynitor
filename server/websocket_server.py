@@ -46,6 +46,10 @@ class WebSocketServer:
     - CORS support for web clients
     """
 
+    # Paths the auth middleware always lets through. /api/health is the only
+    # truly open endpoint (used by load balancers and uptime checks).
+    _AUTH_OPEN_PATHS = frozenset({"/api/health"})
+
     def __init__(
         self,
         session: Any,
@@ -53,23 +57,52 @@ class WebSocketServer:
         port: int = 8080,
         log_store: Optional[Any] = None,
         dsdl_manager: Optional[Any] = None,
+        auth_token: Optional[str] = None,
     ) -> None:
         self.session = session
         self.host = host
         self.port = port
         self.log_store = log_store
         self.dsdl_manager = dsdl_manager
+        # When set, every request outside _AUTH_OPEN_PATHS must present this
+        # token via Authorization: Bearer <token> (REST) or ?token=<token>
+        # (WebSocket). When None, the server runs open — same behaviour as
+        # before this option was added.
+        self.auth_token = auth_token or None
 
         # Client management
         self.clients: Set[web.WebSocketResponse] = set()
         self.client_filters: dict[web.WebSocketResponse, dict[str, Any]] = {}
 
-        # App and runner
-        self.app = web.Application(middlewares=[self._cors_middleware])
+        # App and runner. Auth middleware runs first so unauthorized requests
+        # never reach the CORS layer or the handlers.
+        self.app = web.Application(middlewares=[self._auth_middleware, self._cors_middleware])
         self.runner: Optional[web.AppRunner] = None
         self._running = False
 
         self._setup_routes()
+
+    @web.middleware
+    async def _auth_middleware(self, request: web.Request, handler: Any) -> web.StreamResponse:
+        if self.auth_token is None or request.method == "OPTIONS":
+            return await handler(request)
+        if request.path in self._AUTH_OPEN_PATHS:
+            return await handler(request)
+        token = self._extract_token(request)
+        if token != self.auth_token:
+            return web.json_response({"error": "missing or invalid token"}, status=401)
+        return await handler(request)
+
+    @staticmethod
+    def _extract_token(request: web.Request) -> Optional[str]:
+        # WebSocket clients can't set custom headers in browsers, so the WS
+        # handshake accepts ?token=<value>. REST clients use the standard
+        # Authorization: Bearer <value> header.
+        header = request.headers.get("Authorization", "")
+        if header.startswith("Bearer "):
+            return header[7:].strip() or None
+        qs = request.query.get("token")
+        return qs.strip() if qs else None
 
     @web.middleware
     async def _cors_middleware(self, request: web.Request, handler: Any) -> web.StreamResponse:

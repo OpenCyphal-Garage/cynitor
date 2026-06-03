@@ -231,7 +231,7 @@ const connectWs = () => {
   }
 
   state.userClosedWs = false;
-  state.ws = new WebSocket(`${wsBase()}/ws`);
+  state.ws = new WebSocket(wsUrlWithToken('/ws'));
 
   state.ws.onopen = () => {
     state.wsReconnectAttempts = 0;

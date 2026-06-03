@@ -226,6 +226,21 @@
     </div>
   </div>
 
+  <!-- ── Auth-token modal (shown when the backend requires CYNITOR_AUTH_TOKEN) ── -->
+  <div id="authModal" class="auth-modal hidden" role="dialog" aria-modal="true" aria-labelledby="authModalTitle">
+    <div class="auth-modal-card">
+      <h2 id="authModalTitle">API token required</h2>
+      <p>The backend at <span id="authModalApiBase"></span> requires authentication.
+         Paste the value of <code>CYNITOR_AUTH_TOKEN</code> from the server's environment.</p>
+      <label for="authModalInput" class="auth-modal-label">Token</label>
+      <input type="password" id="authModalInput" class="auth-modal-input" autocomplete="off" spellcheck="false" />
+      <div id="authModalError" class="auth-modal-error hidden"></div>
+      <div class="auth-modal-actions">
+        <button class="auth-modal-btn" id="authModalSave">Save and retry</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
   <script src="https://unpkg.com/tabulator-tables@6.4.0/dist/js/tabulator.min.js"></script>
   <script src="./state.js"></script>

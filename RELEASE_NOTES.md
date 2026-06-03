@@ -1,3 +1,18 @@
+## Unreleased
+
+### Security
+
+- **Optional bearer-token auth.** Set `CYNITOR_AUTH_TOKEN` in the backend's environment and every REST/WebSocket request outside `/api/health` must present the token. REST uses `Authorization: Bearer <token>`; WebSocket uses `?token=<token>` query parameter (browsers can't set headers on WS handshakes). Unauthenticated requests get `HTTP 401`. The frontend prompts the user to paste the token on the first 401 and persists it in `localStorage`. Recommended whenever `--bind 0.0.0.0` is used.
+
+### Frontend
+
+- **Service-call timeouts now read "Timed out".** `requestJson` attaches `err.status` and `err.data` to thrown errors so the services panel's catch path can distinguish a 504 timeout (body carries `{status: "timeout", latency_ms}`) from a generic 500. Previously every backend error rendered as a flat "Request failed" — including timeouts that the panel could have surfaced with their real latency.
+
+### Backend
+
+- **WebSocket send-side timeout.** `_consume_and_send` now caps `ws.send_json` at 10 s via `asyncio.wait_for`. A client whose TCP buffer is full (slow peer, congested network, dead-but-not-closed socket) no longer wedges its consumer task indefinitely; the handler logs a warning and tears the connection down. Broadcast already drops oldest on queue-full, so this prevents the orphan-consumer leak.
+- **Allocator constructor stays on the asyncio main thread.** The Phase B `asyncio.to_thread` wrap was reverted: pycyphal's `PythonCANMedia.start()` requires an associated event loop in its calling thread, which `to_thread` workers don't have on Python 3.10+ — it broke `/api/can/connect` on the local-allocator path.
+
 ## Cynitor v0.3.2
 
 ### Graph view — continued refinements

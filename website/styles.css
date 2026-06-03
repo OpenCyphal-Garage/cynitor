@@ -3781,6 +3781,109 @@ details.svc-history-entry[open] > summary::before {
   display: none;
 }
 
+.auth-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(0.25rem);
+}
+
+.auth-modal.hidden {
+  display: none;
+}
+
+.auth-modal-card {
+  width: min(28rem, 90vw);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1.75rem 2rem;
+  font-family: var(--sans);
+  color: var(--text);
+}
+
+.auth-modal-card h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.125rem;
+}
+
+.auth-modal-card p {
+  font-size: 0.8125rem;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0 0 1rem;
+}
+
+.auth-modal-card code {
+  background: var(--surface-2);
+  padding: 0.0625rem 0.25rem;
+  border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+.auth-modal-label {
+  display: block;
+  font-size: 0.6875rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.25rem;
+}
+
+.auth-modal-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--mono);
+  font-size: 0.875rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.auth-modal-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.auth-modal-error {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--error);
+}
+
+.auth-modal-error.hidden {
+  display: none;
+}
+
+.auth-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
+.auth-modal-btn {
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: var(--radius);
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+}
+
+.auth-modal-btn:hover {
+  filter: brightness(1.1);
+}
+
 .easter-overlay {
   position: fixed;
   inset: 0;

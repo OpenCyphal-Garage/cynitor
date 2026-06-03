@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -461,12 +462,19 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     project_root = Path(__file__).resolve().parent.parent
     dsdl_mgr = DsdlManager(project_root)
 
+    # Optional bearer-token auth. When CYNITOR_AUTH_TOKEN is set in the
+    # environment, every REST/WS request outside /api/health must present
+    # the token. When unset, the server runs open. Strongly recommended
+    # whenever --bind 0.0.0.0 is used.
+    auth_token = os.environ.get("CYNITOR_AUTH_TOKEN", "").strip() or None
+
     ws_server = WebSocketServer(
         session=session,
         host=bind,
         port=8080,
         log_store=_log_store,
         dsdl_manager=dsdl_mgr,
+        auth_token=auth_token,
     )
     await ws_server.start()
 
@@ -474,8 +482,11 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("SERVER RUNNING")
     logger.info("=" * 60)
     logger.info("Bound to:    %s:8080", bind)
-    if bind == "0.0.0.0":
-        logger.warning("Server is bound to 0.0.0.0 — reachable from any network peer. No auth is enforced.")
+    logger.info("Auth:        %s", "token required (CYNITOR_AUTH_TOKEN set)" if auth_token else "OPEN (no token)")
+    if bind == "0.0.0.0" and not auth_token:
+        logger.warning("Server is bound to 0.0.0.0 with NO auth — reachable from any network peer. Set CYNITOR_AUTH_TOKEN to require a bearer token.")
+    elif bind == "0.0.0.0":
+        logger.info("Server is bound to 0.0.0.0 with token auth — clients must present Authorization: Bearer <token>.")
     logger.info("REST API:    http://localhost:8080/api/")
     logger.info("Health:      http://localhost:8080/api/health")
     logger.info("Status:      http://localhost:8080/api/status")

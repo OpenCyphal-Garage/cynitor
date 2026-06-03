@@ -347,18 +347,46 @@ const showToast = (message, type = 'info', durationMs = 5000) => {
 const apiBase = () => el('apiBase').value.trim().replace(/\/$/, '');
 const wsBase = () => apiBase().replace(/^http/, 'ws');
 
+const AUTH_TOKEN_KEY = 'cynitor.auth.token';
+const getAuthToken = () => {
+  try { return localStorage.getItem(AUTH_TOKEN_KEY) || ''; } catch (_) { return ''; }
+};
+const setAuthToken = (token) => {
+  try {
+    if (token) localStorage.setItem(AUTH_TOKEN_KEY, token);
+    else localStorage.removeItem(AUTH_TOKEN_KEY);
+  } catch (_) {}
+};
+
+// Build a wsBase that carries the auth token as a query param when set —
+// browsers don't let JS attach custom headers to WebSocket handshakes, so
+// query string is the only path for the WS auth check.
+const wsUrlWithToken = (path) => {
+  const base = `${wsBase()}${path}`;
+  const token = getAuthToken();
+  if (!token) return base;
+  const sep = base.includes('?') ? '&' : '?';
+  return `${base}${sep}token=${encodeURIComponent(token)}`;
+};
+
 const withSmartJsonHeaders = (options = {}) => {
   const method = String(options.method || 'GET').toUpperCase();
   const hasBody = options.body !== undefined && options.body !== null;
   const isSimpleMethod = method === 'GET' || method === 'HEAD';
+  const token = getAuthToken();
+  const baseHeaders = {
+    ...(options.headers || {}),
+    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+  };
   if (isSimpleMethod && !hasBody) {
-    return options;
+    if (!token) return options;
+    return { ...options, headers: baseHeaders };
   }
   return {
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      ...(options.headers || {}),
+      ...baseHeaders,
     },
   };
 };
@@ -384,6 +412,16 @@ const requestJson = async (path, options = {}) => {
   }
 
   const data = await response.json().catch(() => ({}));
+  if (response.status === 401) {
+    // Backend requires CYNITOR_AUTH_TOKEN. Drop any stale stored token and
+    // prompt the user. Throws so the caller's catch handler runs.
+    setAuthToken('');
+    showAuthModal(data.error || 'Missing or invalid token');
+    const err = new Error(data.error || 'Authentication required');
+    err.status = 401;
+    err.data = data;
+    throw err;
+  }
   if (!response.ok) {
     const detail = data.error
       || (Array.isArray(data.errors) && data.errors.length ? data.errors.join('\n') : null);
@@ -397,6 +435,62 @@ const requestJson = async (path, options = {}) => {
   }
   return data;
 };
+
+// ── Auth token modal ──
+
+let _authModalResolver = null;
+
+const showAuthModal = (errorMsg) => {
+  const modal = el('authModal');
+  if (!modal) return;
+  const apiBaseEl = el('authModalApiBase');
+  if (apiBaseEl) apiBaseEl.textContent = apiBase();
+  const errEl = el('authModalError');
+  if (errEl) {
+    if (errorMsg) {
+      errEl.textContent = errorMsg;
+      errEl.classList.remove('hidden');
+    } else {
+      errEl.classList.add('hidden');
+    }
+  }
+  const input = el('authModalInput');
+  if (input) {
+    input.value = '';
+    setTimeout(() => input.focus(), 50);
+  }
+  modal.classList.remove('hidden');
+};
+
+const hideAuthModal = () => {
+  const modal = el('authModal');
+  if (modal) modal.classList.add('hidden');
+};
+
+const _bindAuthModalOnce = () => {
+  const btn = el('authModalSave');
+  const input = el('authModalInput');
+  if (!btn || !input || btn.dataset.bound) return;
+  btn.dataset.bound = '1';
+  const commit = () => {
+    const token = input.value.trim();
+    if (!token) return;
+    setAuthToken(token);
+    hideAuthModal();
+    // The caller decides what to retry — most paths will recover on the
+    // next status poll / WS reconnect tick.
+    if (typeof connectDashboard === 'function') {
+      // best-effort reconnect; safe to call even if already connected
+      try { connectDashboard(); } catch (_) {}
+    }
+  };
+  btn.addEventListener('click', commit);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+  });
+};
+
+document.addEventListener('DOMContentLoaded', _bindAuthModalOnce);
 
 // ── localStorage settings ──
 

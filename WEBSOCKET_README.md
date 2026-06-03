@@ -74,7 +74,17 @@ By default the server binds to `127.0.0.1` (localhost only). To expose it on the
 python3 main.py --can vcan0 --bind 0.0.0.0
 ```
 
-No authentication is enforced by the server, so only bind to a non-loopback address on a trusted network or behind a reverse proxy that handles auth.
+When exposed on a non-loopback address, require a bearer token by setting the `CYNITOR_AUTH_TOKEN` environment variable:
+
+```bash
+CYNITOR_AUTH_TOKEN=$(openssl rand -hex 24) python3 main.py --can vcan0 --bind 0.0.0.0
+```
+
+With the variable set, every REST and WebSocket request outside `/api/health` must present the token:
+- REST: `Authorization: Bearer <token>` header
+- WebSocket: `?token=<token>` query parameter (browsers can't attach custom headers on WS handshakes)
+
+Unauthenticated requests get `HTTP 401 {"error": "missing or invalid token"}`. With the variable unset the server runs open — same behaviour as before this option existed. The frontend prompts the user to paste the token on the first 401 and stores it in `localStorage` under `cynitor.auth.token`.
 
 ### 3. Runtime Environment
 
