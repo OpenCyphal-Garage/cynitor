@@ -12,6 +12,7 @@
 
 - **WebSocket send-side timeout.** `_consume_and_send` now caps `ws.send_json` at 10 s via `asyncio.wait_for`. A client whose TCP buffer is full (slow peer, congested network, dead-but-not-closed socket) no longer wedges its consumer task indefinitely; the handler logs a warning and tears the connection down. Broadcast already drops oldest on queue-full, so this prevents the orphan-consumer leak.
 - **Allocator constructor stays on the asyncio main thread.** The Phase B `asyncio.to_thread` wrap was reverted: pycyphal's `PythonCANMedia.start()` requires an associated event loop in its calling thread, which `to_thread` workers don't have on Python 3.10+ — it broke `/api/can/connect` on the local-allocator path.
+- **Service client cleanup on node disappearance.** `cleanup_subscriptions` now closes and drops `service_clients`, `service_metadata`, and `node_service_types` entries for the disappearing node, paralleling the existing publisher-subscriber cleanup. Previously these entries lived until the backend restarted — a one-way ratchet during debug sessions that cycle many short-lived nodes. Identity migration still works because the new node gets fresh clients via `add_servers` on re-registration.
 
 ## Cynitor v0.3.2
 

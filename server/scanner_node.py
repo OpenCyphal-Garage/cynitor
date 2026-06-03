@@ -1166,6 +1166,25 @@ class ScannerNode:
         for subject_id in to_remove:
             del self.active_publishers[subject_id]
 
+        # Release per-node service state. Each entry in service_clients holds a
+        # pycyphal Client object — if we don't close them here, they live until
+        # the backend restarts (one-way ratchet during long debug sessions
+        # that cycle many short-lived nodes). _migrate_node_state still closes
+        # any clients that survive into an identity migration; once cleanup has
+        # run on the old slot, that path is a no-op and the new node gets
+        # fresh clients via add_servers — same end state, no stale references.
+        stale_service_keys = [k for k in self.service_clients if k[0] == node_id]
+        for key in stale_service_keys:
+            client = self.service_clients.pop(key, None)
+            if client is not None:
+                try:
+                    client.close()
+                except Exception as e:
+                    logging.warning(f"Failed to close service client {key}: {e}")
+        for key in [k for k in self.service_metadata if k[0] == node_id]:
+            self.service_metadata.pop(key, None)
+        self.node_service_types.pop(node_id, None)
+
 
     HEALTH_NAMES = {0: "NOMINAL", 1: "ADVISORY", 2: "CAUTION", 3: "WARNING"}
     MODE_NAMES = {0: "OPERATIONAL", 1: "INITIALIZATION", 2: "MAINTENANCE", 3: "SOFTWARE_UPDATE"}
