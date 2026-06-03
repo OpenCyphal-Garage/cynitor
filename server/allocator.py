@@ -129,16 +129,21 @@ class AllocatorManager:
             logger.info("External allocator detected on %s (node-ID %d)", self._iface_name, AllocatorApp.NODE_ID)
         else:
             logger.warning("No allocator detected on %s; starting local allocator", self._iface_name)
-            await self._start_local_allocator()
+            self._start_local_allocator()
 
         self._task = asyncio.create_task(self._monitor_loop())
 
-    async def _start_local_allocator(self) -> None:
+    def _start_local_allocator(self) -> None:
+        # NOTE: This must run on the asyncio main thread, not a worker.
+        # AllocatorApp -> CANTransport -> PythonCANMedia.start() calls
+        # asyncio.get_event_loop() in its calling thread (to capture the loop
+        # for its background reader). On Python 3.10+ get_event_loop() raises
+        # in a worker thread that has no associated loop, so wrapping this in
+        # asyncio.to_thread breaks /api/can/connect for the local-allocator
+        # path. Constructor latency is bounded (subprocess thread spawn) so
+        # the brief loop occupancy is acceptable here.
         if self._allocator is None:
-            # AllocatorApp.__init__ opens SQLite, configures CAN media/transport,
-            # and calls node.start() — all synchronous and potentially slow.
-            # Run on a worker thread so we don't stall the event loop.
-            self._allocator = await asyncio.to_thread(AllocatorApp, self._iface_name)
+            self._allocator = AllocatorApp(iface_name=self._iface_name)
 
     async def _monitor_loop(self) -> None:
         try:
@@ -153,7 +158,7 @@ class AllocatorManager:
                 )
                 if not external_exists:
                     logger.warning("External allocator disappeared; starting local allocator")
-                    await self._start_local_allocator()
+                    self._start_local_allocator()
         except asyncio.CancelledError:
             raise
 
