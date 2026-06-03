@@ -49,7 +49,7 @@ class WebSocketServer:
     def __init__(
         self,
         session: Any,
-        host: str = "0.0.0.0",
+        host: str = "127.0.0.1",
         port: int = 8080,
         log_store: Optional[Any] = None,
         dsdl_manager: Optional[Any] = None,
@@ -368,7 +368,7 @@ class WebSocketServer:
                 "status": "error",
                 "latency_ms": latency_ms,
                 "error": str(e),
-            })
+            }, status=500)
 
     # ------------------------------------------------------------------
     # Node history endpoints

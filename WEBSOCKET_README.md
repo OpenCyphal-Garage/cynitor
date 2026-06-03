@@ -68,6 +68,14 @@ In this mode, the server starts on port 8080 immediately. Use the REST API to co
 
 Once connected, CAN telemetry begins. Disconnect with `POST /api/can/disconnect`.
 
+By default the server binds to `127.0.0.1` (localhost only). To expose it on the network — for example to reach the dashboard from another host on a trusted LAN — pass `--bind`:
+
+```bash
+python3 main.py --can vcan0 --bind 0.0.0.0
+```
+
+No authentication is enforced by the server, so only bind to a non-loopback address on a trusted network or behind a reverse proxy that handles auth.
+
 ### 3. Runtime Environment
 
 At startup, Python setup runs automatically and configures:
@@ -92,11 +100,14 @@ Output:
 ============================================================
 SERVER RUNNING
 ============================================================
+Bound to:    127.0.0.1:8080
 REST API:    http://localhost:8080/api/
 Health:      http://localhost:8080/api/health
 Status:      http://localhost:8080/api/status
 ============================================================
 ```
+
+When `--bind 0.0.0.0` is passed, an additional `WARNING` line is emitted to make the network-exposed posture obvious.
 
 ## Usage
 
@@ -163,6 +174,30 @@ Metrics (sent to all clients every 1 second):
     "bus_utilization": 3.0
 }
 ```
+
+Filter acknowledgement (sent in response to a client `filter` message):
+```json
+{
+    "type": "filter_updated",
+    "subject_ids": [7509, 7510],
+    "node_ids": [1, 2],
+    "message_types": ["Heartbeat_1_0"]
+}
+```
+
+Each field echoes the active filter for the client. Empty / omitted dimensions mean "match anything in that dimension".
+
+Pong (sent in response to a client `ping` message):
+```json
+{ "type": "pong" }
+```
+
+Protocol errors (sent when the client sends a frame the server cannot parse):
+```json
+{ "error": "Invalid JSON" }
+```
+
+These do not include a `type` field; the bare `error` key signals a protocol-level problem rather than a domain event. Subsequent frames are still accepted on the same connection.
 
 ### REST API
 
@@ -526,7 +561,7 @@ Response (success):
 }
 ```
 
-Response (timeout):
+Response (timeout, HTTP `504`):
 ```json
 {
     "status": "timeout",
@@ -535,7 +570,24 @@ Response (timeout):
 }
 ```
 
-Returns `400` for invalid request body or attribute validation errors, `404` if the service is not found on the node, `503` if CAN is not connected.
+Response (service not found, HTTP `404`):
+```json
+{
+    "status": "error",
+    "error": "Service 430 not found on node 37"
+}
+```
+
+Response (generic backend exception, HTTP `500`):
+```json
+{
+    "status": "error",
+    "latency_ms": 42,
+    "error": "<exception message>"
+}
+```
+
+Returns `400` for invalid request body or attribute validation errors, `404` if the service is not found on the node, `500` if the backend hit an unexpected error invoking the service, `503` if CAN is not connected, `504` for timeouts. The body always carries a `status` field whose values are one of `"ok"`, `"timeout"`, or `"error"`, so a client can switch on the body shape regardless of HTTP status. `latency_ms` is omitted only in the `404` case (no call was attempted).
 
 **Get client ports for a node (with type names and server cross-references):**
 ```bash
@@ -814,11 +866,17 @@ count = logger.get_event_count()
 
 ### Port and Host
 
-Edit `main.py`:
+The host is controlled by the `--bind` CLI flag (default `127.0.0.1`):
+
+```bash
+python3 main.py --can vcan0 --bind 0.0.0.0
+```
+
+For non-default ports, edit `main.py` directly:
 ```python
 ws_server = WebSocketServer(
     session=session,
-    host="127.0.0.1",  # Change host
+    host=bind,
     port=9000,          # Change port
     log_store=_log_store,
 )

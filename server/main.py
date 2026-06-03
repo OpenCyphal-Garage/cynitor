@@ -427,7 +427,7 @@ async def _event_logger_loop(event_logger, queue: asyncio.Queue) -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 
-async def main(can_iface: Optional[str] = None, force_compile: bool = False) -> None:
+async def main(can_iface: Optional[str] = None, force_compile: bool = False, bind: str = "127.0.0.1") -> None:
     from websocket_server import WebSocketServer
     from dsdl_manager import DsdlManager
 
@@ -437,7 +437,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False) -> 
 
     ws_server = WebSocketServer(
         session=session,
-        host="0.0.0.0",
+        host=bind,
         port=8080,
         log_store=_log_store,
         dsdl_manager=dsdl_mgr,
@@ -447,6 +447,9 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False) -> 
     logger.info("=" * 60)
     logger.info("SERVER RUNNING")
     logger.info("=" * 60)
+    logger.info("Bound to:    %s:8080", bind)
+    if bind == "0.0.0.0":
+        logger.warning("Server is bound to 0.0.0.0 — reachable from any network peer. No auth is enforced.")
     logger.info("REST API:    http://localhost:8080/api/")
     logger.info("Health:      http://localhost:8080/api/health")
     logger.info("Status:      http://localhost:8080/api/status")
@@ -482,10 +485,15 @@ if __name__ == "__main__":
         action="store_true",
         help="Force DSDL recompilation even if already compiled",
     )
+    parser.add_argument(
+        "--bind",
+        default="127.0.0.1",
+        help="Host/IP to bind the HTTP server to (default: 127.0.0.1; use 0.0.0.0 to expose on the network)",
+    )
     args = parser.parse_args()
 
     try:
-        asyncio.run(main(can_iface=args.can, force_compile=args.recompile))
+        asyncio.run(main(can_iface=args.can, force_compile=args.recompile, bind=args.bind))
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
     except Exception as e:

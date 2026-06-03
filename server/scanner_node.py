@@ -27,9 +27,15 @@ from node_identity_map import NodeIdentityMap
 
 
 def _fire_and_log(coro, context: str = "background task"):
-    """Schedule a coroutine and log any exception instead of silently dropping it."""
+    """Schedule a coroutine and log any exception with full traceback."""
     task = asyncio.ensure_future(coro)
-    task.add_done_callback(lambda t: t.exception() and logging.error(f"{context}: {t.exception()}") if not t.cancelled() and t.exception() else None)
+    def _on_done(t: asyncio.Task) -> None:
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc is not None:
+            logging.error("%s failed", context, exc_info=(type(exc), exc, exc.__traceback__))
+    task.add_done_callback(_on_done)
     return task
 
 class ScannerNode:
