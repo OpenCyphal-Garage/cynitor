@@ -1147,5 +1147,7 @@ class WebSocketServer:
             data = await asyncio.to_thread(self.dsdl_manager.compile_public)
         else:
             data = await asyncio.to_thread(self.dsdl_manager.compile_all)
+        if data.get("ok") and hasattr(self.session, "rescan_registrations"):
+            self.session.rescan_registrations()
         status = 200 if data.get("ok") else 422
         return web.json_response(data, status=status)

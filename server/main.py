@@ -254,6 +254,23 @@ class CANSession:
         async with self._lock:
             await self._teardown()
 
+    def rescan_registrations(self) -> None:
+        """Force the register loop to re-attempt every appeared node on its next tick.
+
+        Call this after a successful DSDL compile so that services/publishers whose
+        type imports failed earlier (because the type wasn't compiled yet) get
+        retried — registered_nodes only re-triggers add_servers / add_subscriptions
+        for nodes not already in registered_nodes, and unavailable service_metadata
+        entries would otherwise stick until the node disappears.
+        """
+        if not self.is_running or not self.scanner:
+            return
+        self.registered_nodes.clear()
+        for key, meta in list(self.scanner.service_metadata.items()):
+            if meta.get("unavailable"):
+                self.scanner.service_metadata.pop(key, None)
+        logger.info("Cleared registration state — register loop will re-attempt all nodes")
+
     async def _teardown(self) -> None:
         """Internal cleanup — caller must hold self._lock."""
         logger.info("Tearing down CAN session...")

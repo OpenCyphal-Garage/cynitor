@@ -4,10 +4,12 @@ Walks DSDL source directories, parses type definitions,
 and reports compilation status. Independent of CAN connection.
 """
 
+import importlib
 import logging
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -438,7 +440,27 @@ class DsdlManager:
         self.invalidate_cache()
         if errors:
             return {"ok": False, "errors": errors}
+        # Drop Python's cached module objects for any namespace under
+        # compiled_dir so the scanner's next import_module() picks up the
+        # freshly generated .py files instead of the pre-compile snapshot
+        # already in sys.modules.
+        self._refresh_python_module_cache()
         return {"ok": True}
+
+    def _refresh_python_module_cache(self) -> None:
+        if not self.compiled_dir.is_dir():
+            return
+        importlib.invalidate_caches()
+        compiled_top_namespaces = {
+            p.name for p in self.compiled_dir.iterdir()
+            if p.is_dir() and not p.name.startswith("_") and not p.name.startswith(".")
+        }
+        if not compiled_top_namespaces:
+            return
+        for module_name in list(sys.modules):
+            top = module_name.split(".", 1)[0]
+            if top in compiled_top_namespaces:
+                sys.modules.pop(module_name, None)
 
     def _nnvg_compile(self, target: Path, lookups: list[Path], label: str) -> list[str]:
         args = ["nnvg", "--target-language", "py", str(target)]

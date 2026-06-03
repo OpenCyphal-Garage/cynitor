@@ -582,8 +582,8 @@ class ScannerNode:
                             "request_fields": fields,
                         })
                         continue
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logging.warning(f"Cannot import {type_str} for service {sid_int} on node {node_id}: {e}")
                 services.append({
                     "service_id": sid_int,
                     "name": None,
