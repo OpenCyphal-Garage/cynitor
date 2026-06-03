@@ -11,6 +11,7 @@ const DsdlView = (() => {
   let _treeWidth = null;
   let _busActivityMap = new Map();
   let _busRefreshTimer = null;
+  let _statusPollTimer = null;
   let _lastDetailData = null;
   let _editorOpen = false;
   let _editorMode = 'new';
@@ -34,7 +35,7 @@ const DsdlView = (() => {
     _loadData();
   };
 
-  const hide = () => { _stopBusRefresh(); };
+  const hide = () => { _stopBusRefresh(); _stopStatusPoll(); };
 
   const _buildLayout = () => `
     <div class="dsdl-view">
@@ -89,12 +90,45 @@ const DsdlView = (() => {
       _renderTree();
       _renderCustomTree();
       _startBusRefresh();
+      _startStatusPoll();
       if (_selectedType) {
         _loadTypeDetail(_selectedType);
         _expandToType(_selectedType);
       }
     } catch (err) {
       _renderError(err.message);
+    }
+  };
+
+  const _statusChanged = (a, b) => {
+    if (!a || !b) return true;
+    return a.compiled !== b.compiled
+      || a.last_compiled !== b.last_compiled
+      || a.last_public_compiled !== b.last_public_compiled
+      || a.last_custom_compiled !== b.last_custom_compiled
+      || a.source_types !== b.source_types
+      || a.custom_types !== b.custom_types;
+  };
+
+  const _pollStatus = async () => {
+    if (!state.dashboardConnected) return;
+    try {
+      const fresh = await requestJson('/api/dsdl/status');
+      if (_statusChanged(_statusData, fresh)) {
+        await _reloadTree();
+      }
+    } catch (_) { /* silent; retry next tick */ }
+  };
+
+  const _startStatusPoll = () => {
+    _stopStatusPoll();
+    _statusPollTimer = setInterval(_pollStatus, 4000);
+  };
+
+  const _stopStatusPoll = () => {
+    if (_statusPollTimer) {
+      clearInterval(_statusPollTimer);
+      _statusPollTimer = null;
     }
   };
 
