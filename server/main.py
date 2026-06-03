@@ -181,6 +181,11 @@ class CANSession:
         self._lock = asyncio.Lock()
         self._disconnect_task: Optional[asyncio.Task] = None
         self.last_error: Optional[str] = None
+        # Recording-replay engine. None unless a replay session is in progress.
+        # Mutually exclusive with scanner — the WS handler chooses telemetry
+        # vs replay based on which is non-None, and connect()/start_replay()
+        # refuse to run while the other side is active.
+        self.replay = None
 
     @property
     def is_running(self) -> bool:
@@ -193,6 +198,8 @@ class CANSession:
         # this check before prepare_runtime returned.
         if self.is_running:
             raise RuntimeError("Already connected")
+        if self.replay is not None:
+            raise RuntimeError("Replay session is active — stop it before connecting CAN")
 
         # prepare_runtime can take seconds (DSDL compile via nnvg, env setup).
         # Running it outside the lock keeps a concurrent disconnect() responsive
@@ -280,6 +287,47 @@ class CANSession:
             if meta.get("unavailable"):
                 self.scanner.service_metadata.pop(key, None)
         logger.info("Cleared registration state — register loop will re-attempt all nodes")
+
+    async def start_replay(self, recording_id: int, speed: float = 1.0,
+                             start_offset_s: float = 0.0) -> dict:
+        """Open a recording for playback. Refuses if CAN is connected or
+        another replay is already running.
+        """
+        if self.is_running:
+            raise RuntimeError("CAN is connected — disconnect before starting replay")
+        if self.replay is not None:
+            raise RuntimeError("Replay already in progress")
+        if self.event_logger is None:
+            # event_logger lives on the session and gets torn down on disconnect.
+            # When CAN has never been connected this session it doesn't exist yet,
+            # so we create a transient one bound to the same DB.
+            from event_logger import EventLogger
+            self.event_logger = EventLogger(db_path="telemetry_events.db",
+                                            retention_seconds=86400.0,
+                                            max_events=5_000_000)
+            await self.event_logger.start()
+        from replay import ReplayManager
+        self.replay = ReplayManager(self.event_logger.db_path,
+                                    recording_id=recording_id, speed=speed)
+
+        def _on_finish() -> None:
+            # Clear the session attribute when playback ends so the WS handler
+            # exits the replay branch and a new replay can be started.
+            self.replay = None
+
+        self.replay._on_finish = _on_finish
+        try:
+            return await self.replay.start(start_offset_s=start_offset_s)
+        except Exception:
+            self.replay = None
+            raise
+
+    async def stop_replay(self) -> None:
+        if self.replay is None:
+            return
+        target = self.replay
+        self.replay = None
+        await target.stop()
 
     async def _teardown(self) -> None:
         """Internal cleanup — caller must hold self._lock."""

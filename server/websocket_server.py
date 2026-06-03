@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import sqlite3
 import time
 from typing import Optional, Set, Any
 from aiohttp import web, WSCloseCode
@@ -32,6 +33,49 @@ def _parse_int(value: str, name: str, lo: int = 0, hi: int = MAX_NODE_ID):
     if v < lo or v > hi:
         return None, web.json_response({"error": f"{name} must be {lo}–{hi}"}, status=400)
     return v, None
+
+
+def _synthesize_nodes_from_recording(db_path, recording_id: int) -> dict:
+    """Reconstruct a /api/nodes-shaped payload from a recording's events.
+
+    Grouped by publisher_node_id: each node's publishers list is the unique
+    set of subject_ids that node appeared as the publisher of within the
+    recording window. Approximate by design — no GetInfo, no health/mode,
+    no client/server ports. Frontend should surface this as a replay view.
+    """
+    nodes: dict[int, dict] = {}
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT publisher_node_id, unique_id, subject_or_service_id, message_type"
+            "  FROM recording_events"
+            " WHERE recording_id = ? AND kind = 'subject'"
+            "   AND publisher_node_id IS NOT NULL",
+            (int(recording_id),),
+        ).fetchall()
+    for r in rows:
+        nid = int(r["publisher_node_id"])
+        sid = r["subject_or_service_id"]
+        if nid not in nodes:
+            nodes[nid] = {
+                "node_id": nid,
+                "unique_id": None,
+                "unique_id_hex": r["unique_id"],
+                "uptime": None,
+                "has_disappeared": False,
+                "has_responded_to_getinfo": False,
+                "name": f"Node {nid}",
+                "software_version": None,
+                "publishers": [],
+                "subscribers": [],
+                "clients": [],
+                "servers": [],
+                "last_seen": None,
+                "_replay": True,
+            }
+        if sid is not None and sid not in nodes[nid]["publishers"]:
+            nodes[nid]["publishers"].append(int(sid))
+    return {"node_count": len(nodes), "nodes": {k: v for k, v in nodes.items()}}
 
 
 class WebSocketServer:
@@ -152,6 +196,12 @@ class WebSocketServer:
         self.app.router.add_delete('/api/recordings/{rec_id}', self._delete_recording)
         self.app.router.add_post('/api/recordings/{rec_id}/stop', self._post_recording_stop)
         self.app.router.add_get('/api/recordings/{rec_id}/export', self._export_recording)
+
+        self.app.router.add_post('/api/replay/start', self._replay_start)
+        self.app.router.add_post('/api/replay/control', self._replay_control)
+        self.app.router.add_post('/api/replay/seek', self._replay_seek)
+        self.app.router.add_post('/api/replay/speed', self._replay_speed)
+        self.app.router.add_get('/api/replay/status', self._replay_status)
 
         self.app.router.add_get('/api/dsdl/status', self._dsdl_status)
         self.app.router.add_get('/api/dsdl/namespaces', self._dsdl_namespaces)
@@ -775,8 +825,10 @@ class WebSocketServer:
 
             while not ws.closed:
                 telemetry = self.session.telemetry
-                if telemetry is not None:
-                    queue = telemetry.subscribe(max_queue=100)
+                replay = self.session.replay
+                source = telemetry if telemetry is not None else replay
+                if source is not None:
+                    queue = source.subscribe(max_queue=100)
                     consume_task = asyncio.create_task(self._consume_and_send(ws, queue))
                     done, pending = await asyncio.wait(
                         [consume_task, recv_task, metrics_task],
@@ -821,8 +873,14 @@ class WebSocketServer:
         finally:
             self.clients.discard(ws)
             self.client_filters.pop(ws, None)
-            if queue is not None and self.session.telemetry is not None:
-                self.session.telemetry.unsubscribe(queue)
+            if queue is not None:
+                # The queue belongs to whichever source was active when we
+                # subscribed. Both sources are unsubscribe-safe with an
+                # unknown queue (set.discard is a no-op for missing keys).
+                if self.session.telemetry is not None:
+                    self.session.telemetry.unsubscribe(queue)
+                if self.session.replay is not None:
+                    self.session.replay.unsubscribe(queue)
             logger.info(f"Client disconnected. Total clients: {len(self.clients)}")
 
         return ws
@@ -842,6 +900,18 @@ class WebSocketServer:
             except asyncio.TimeoutError:
                 continue  # no events in the last 5s; loop back and re-check ws.closed
             except asyncio.CancelledError:
+                break
+
+            # End-of-session sentinel from ReplayManager: forward to the
+            # client (so the UI can switch back to idle / re-fetch state)
+            # then exit the consume loop. The WS handler will tear the
+            # connection down and the client reconnects to pick up the
+            # new state on a fresh subscriber.
+            if isinstance(event, dict) and event.get("type") == "replay_ended":
+                try:
+                    await asyncio.wait_for(ws.send_json(event), timeout=self._WS_SEND_TIMEOUT)
+                except Exception:
+                    pass
                 break
 
             if not self._event_matches_filter(event, ws):
@@ -1079,15 +1149,110 @@ class WebSocketServer:
 
     async def _get_all_nodes(self, request: web.Request) -> web.Response:
         telemetry = self.session.telemetry
-        if telemetry is None:
-            return web.json_response({"node_count": 0, "nodes": {}})
+        if telemetry is not None:
+            try:
+                nodes_info = telemetry.get_all_nodes_info()
+                return web.json_response(nodes_info)
+            except Exception as e:
+                logger.error(f"Error in GET /api/nodes: {e}", exc_info=True)
+                return web.json_response({"error": str(e)}, status=500)
 
+        # When replay is active and CAN isn't connected, synthesise a node
+        # payload from the recording itself so the node table has something
+        # to render. The shape is approximate — no GetInfo, no health/mode/
+        # uptime, no client port lists — but it's enough to let the user
+        # navigate to a node and see what its publishers were doing.
+        replay = self.session.replay
+        if replay is not None and self.session.event_logger is not None:
+            try:
+                nodes_info = await asyncio.to_thread(
+                    _synthesize_nodes_from_recording,
+                    self.session.event_logger.db_path, replay.recording_id,
+                )
+                return web.json_response(nodes_info)
+            except Exception as e:
+                logger.error(f"Error synthesising replay nodes: {e}", exc_info=True)
+                return web.json_response({"error": str(e)}, status=500)
+
+        return web.json_response({"node_count": 0, "nodes": {}})
+
+    # ------------------------------------------------------------------
+    # Recording replay
+    # ------------------------------------------------------------------
+
+    async def _replay_start(self, request: web.Request) -> web.Response:
         try:
-            nodes_info = telemetry.get_all_nodes_info()
-            return web.json_response(nodes_info)
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON body"}, status=400)
+        rec_id, err = _parse_int(body.get("recording_id"), "recording_id", 1, 2**31 - 1)
+        if err:
+            return err
+        speed = float(body.get("speed", 1.0)) if body.get("speed") is not None else 1.0
+        start_offset_s = float(body.get("start_offset_s", 0.0))
+        try:
+            status = await self.session.start_replay(rec_id, speed=speed,
+                                                    start_offset_s=start_offset_s)
+            return web.json_response(status, status=200)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        except RuntimeError as e:
+            return web.json_response({"error": str(e)}, status=409)
         except Exception as e:
-            logger.error(f"Error in GET /api/nodes: {e}", exc_info=True)
+            logger.error(f"Replay start failed: {e}", exc_info=True)
             return web.json_response({"error": str(e)}, status=500)
+
+    async def _replay_control(self, request: web.Request) -> web.Response:
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON body"}, status=400)
+        action = body.get("action")
+        if self.session.replay is None and action != "stop":
+            return web.json_response({"error": "No replay running"}, status=404)
+        if action == "pause":
+            self.session.replay.pause()
+        elif action == "resume":
+            self.session.replay.resume()
+        elif action == "stop":
+            await self.session.stop_replay()
+            return web.json_response({"active": False}, status=200)
+        else:
+            return web.json_response({"error": f"Unknown action: {action}"}, status=400)
+        return web.json_response(self.session.replay.status(), status=200)
+
+    async def _replay_seek(self, request: web.Request) -> web.Response:
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON body"}, status=400)
+        if self.session.replay is None:
+            return web.json_response({"error": "No replay running"}, status=404)
+        try:
+            position_s = float(body.get("position_s"))
+        except (TypeError, ValueError):
+            return web.json_response({"error": "position_s must be a number"}, status=400)
+        self.session.replay.seek(position_s)
+        return web.json_response(self.session.replay.status(), status=200)
+
+    async def _replay_speed(self, request: web.Request) -> web.Response:
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON body"}, status=400)
+        if self.session.replay is None:
+            return web.json_response({"error": "No replay running"}, status=404)
+        try:
+            speed = float(body.get("speed"))
+        except (TypeError, ValueError):
+            return web.json_response({"error": "speed must be a number"}, status=400)
+        self.session.replay.set_speed(speed)
+        return web.json_response(self.session.replay.status(), status=200)
+
+    async def _replay_status(self, request: web.Request) -> web.Response:
+        if self.session.replay is None:
+            return web.json_response({"active": False}, status=200)
+        return web.json_response(self.session.replay.status(), status=200)
 
     # ------------------------------------------------------------------
     # DSDL introspection

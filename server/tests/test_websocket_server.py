@@ -18,6 +18,8 @@ def _make_session(is_running=False, can_interface=None):
     session.telemetry = None
     session.bus_load = None
     session.last_error = None
+    session.replay = None
+    session.event_logger = None
     session.connect = AsyncMock()
     session.disconnect = AsyncMock()
     return session
