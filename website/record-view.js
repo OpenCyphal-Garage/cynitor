@@ -4,7 +4,10 @@
 // Cross-tab live indicator on the Record tab button.
 
 const RECORD_POLL_LIVE_MS = 2000;
-const RECORD_POLL_IDLE_MS = 30000;
+// Idle (no live recording) poll cadence. Recordings change when the user
+// starts/stops one, auto-stop fires on the backend, or another client edits
+// the list; 5 s keeps the UI feeling responsive without spamming the API.
+const RECORD_POLL_IDLE_MS = 5000;
 const BUFFER_POLL_MS = 15000;
 const BYTES_PER_EVENT_ESTIMATE = 250;
 
@@ -406,6 +409,10 @@ const fetchRecordings = async () => {
     state.activeRecordingId = null;
     refreshRecordTabIndicator();
     renderRecordList();
+    // Keep the poll loop alive even while disconnected so the list resumes
+    // updating automatically once the backend comes back, without requiring
+    // the user to switch tabs or refresh the page.
+    _scheduleNextRecordPoll();
     return;
   }
   try {

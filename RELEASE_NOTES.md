@@ -7,6 +7,7 @@
 ### Frontend
 
 - **Service-call timeouts now read "Timed out".** `requestJson` attaches `err.status` and `err.data` to thrown errors so the services panel's catch path can distinguish a 504 timeout (body carries `{status: "timeout", latency_ms}`) from a generic 500. Previously every backend error rendered as a flat "Request failed" — including timeouts that the panel could have surfaced with their real latency.
+- **Recording list refreshes within 5 s.** The idle-mode poll cadence on the Record tab dropped from 30 s to 5 s, and the poll loop now keeps itself scheduled even while the dashboard is disconnected — recordings created or auto-stopped on the backend show up without a page reload, and a transient connection blip no longer strands the poll until the user switches tabs.
 
 ### Backend
 
