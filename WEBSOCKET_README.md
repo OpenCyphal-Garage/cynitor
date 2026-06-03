@@ -104,10 +104,17 @@ Bound to:    127.0.0.1:8080
 REST API:    http://localhost:8080/api/
 Health:      http://localhost:8080/api/health
 Status:      http://localhost:8080/api/status
+Mode:        selection  (waiting for the UI or POST /api/can/connect)
+------------------------------------------------------------
+Startup options:
+  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0)
+  --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)
+  --recompile      force DSDL recompilation via nnvg
+  --help           full reference
 ============================================================
 ```
 
-When `--bind 0.0.0.0` is passed, an additional `WARNING` line is emitted to make the network-exposed posture obvious.
+In direct mode (`--can <iface>`) the `Mode:` line reads `direct (attached to <iface> at startup)` and the block ends with a hint pointing back at selection mode. When `--bind 0.0.0.0` is passed, an additional `WARNING` line is emitted before the tips block to make the network-exposed posture obvious.
 
 ## Usage
 

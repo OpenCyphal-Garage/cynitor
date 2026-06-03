@@ -470,6 +470,18 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("REST API:    http://localhost:8080/api/")
     logger.info("Health:      http://localhost:8080/api/health")
     logger.info("Status:      http://localhost:8080/api/status")
+    if can_iface:
+        logger.info("Mode:        direct  (attached to %s at startup)", can_iface)
+    else:
+        logger.info("Mode:        selection  (waiting for the UI or POST /api/can/connect)")
+    logger.info("-" * 60)
+    logger.info("Startup options:")
+    logger.info("  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0)")
+    logger.info("  --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)")
+    logger.info("  --recompile      force DSDL recompilation via nnvg")
+    logger.info("  --help           full reference")
+    if can_iface:
+        logger.info("Selection-mode startup (no --can): connect from the UI or POST /api/can/connect")
     logger.info("=" * 60)
 
     try:
