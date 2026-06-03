@@ -566,8 +566,8 @@ const GraphView = (() => {
   const _render = (graph) => {
     const { deviceNodes, subjectNodes, links, collapsedLinks, adjacency } = graph;
 
-    const placeholderHtml = typeof connectionPlaceholder === 'function'
-      ? connectionPlaceholder('view the topology graph') : null;
+    const placeholderHtml = typeof eventSourcePlaceholder === 'function'
+      ? eventSourcePlaceholder('view the topology graph') : null;
     const svgWrap = svg?.node()?.parentNode;
     if (svgWrap) {
       let overlay = svgWrap.querySelector('.graph-conn-overlay');

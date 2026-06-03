@@ -95,6 +95,10 @@ const state = {
   replayEventsEmitted: 0,
   replayTotalEvents: 0,
   replayStatusTimer: null,
+  // True when the playback engine reached the end naturally (vs the user
+  // clicking Stop). Keeps the strip visible in a "Finished" mode with a
+  // Replay-again / Close affordance until the user dismisses it.
+  replayFinished: false,
   recordFilterDraft: {
     subject_ids: [], service_ids: [], node_ids: [], message_types: [],
     name: '', notes: '',
@@ -260,6 +264,17 @@ const connectionPlaceholder = (context) => {
     return svcStateMsg('⛓', 'CAN bus not connected', `Connect a CAN interface to ${context}.`);
   }
   return null;
+};
+
+// Same as connectionPlaceholder but treats an active replay session as a
+// valid event source. Use this in panels that only consume cached events
+// (node table, graph view, detail panel root, plots) — they should render
+// during replay even though CAN is disconnected by definition. Live-RPC
+// panels (registers, history, services) keep using connectionPlaceholder
+// because they need a real bus.
+const eventSourcePlaceholder = (context) => {
+  if (state.replayActive) return null;
+  return connectionPlaceholder(context);
 };
 
 const diffUpdateTable = (tabulator, data, keyField) => {
@@ -691,7 +706,7 @@ const loadSettings = () => {
   if (settings.nodeAliases && typeof settings.nodeAliases === 'object') {
     state.nodeAliases = settings.nodeAliases;
   }
-  if (['subjects', 'graph', 'compare', 'dsdl', 'record'].includes(settings.activeView)) {
+  if (['subjects', 'graph', 'compare', 'dsdl', 'record', 'debug'].includes(settings.activeView)) {
     state.activeView = settings.activeView;
   }
   if (settings.recordFilterDraft && typeof settings.recordFilterDraft === 'object') {

@@ -276,17 +276,29 @@ const connectWs = () => {
         return;
       }
       if (event.type === 'replay_ended') {
-        // Drop replay-derived telemetry from caches so it doesn't visually
-        // mix with whatever the user does next. The WS will close shortly
-        // (backend sends this sentinel before tearing down) and the
-        // existing reconnect logic re-establishes the connection.
-        state.latestBySubject.clear();
-        state.latestByNode.clear();
-        state.subjectHistory.clear();
-        if (typeof hideReplayStrip === 'function') hideReplayStrip();
-        if (typeof getAllNodes === 'function') getAllNodes();
-        renderNodesTable?.();
-        renderSelectedNodeContent?.();
+        // Two distinct paths:
+        //   finished=true  → playback reached the end naturally; transition
+        //                    the strip to a "Finished" mode and keep the
+        //                    caches populated so the user can inspect the
+        //                    final state. Cache cleanup happens when the
+        //                    user dismisses via Close.
+        //   finished=false → user clicked Stop; tear down immediately.
+        const finishedNaturally = !!event.finished;
+        if (finishedNaturally) {
+          state.replayActive = false;
+          state.replayPaused = false;
+          state.replayFinished = true;
+          state.replayPositionS = state.replayDurationS;
+          if (typeof syncReplayStrip === 'function') syncReplayStrip();
+        } else {
+          state.latestBySubject.clear();
+          state.latestByNode.clear();
+          state.subjectHistory.clear();
+          if (typeof hideReplayStrip === 'function') hideReplayStrip();
+          if (typeof getAllNodes === 'function') getAllNodes();
+          renderNodesTable?.();
+          renderSelectedNodeContent?.();
+        }
         return;
       }
       if (event.type === 'metrics') {

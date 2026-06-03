@@ -308,6 +308,13 @@ const computePlotScales = (visible, w, totalPanelsH, compareSeries = [], cfg = n
     return resumeFrom + (now - resumeFrom) * t * t;
   };
 
+  // During replay, the events carry their original (recorded) timestamps —
+  // potentially hours, days, or years before "now". Anchoring the plot's
+  // right edge to wall-clock time would push every replay point off the
+  // left edge of the visible window. Use the latest event timestamp seen
+  // so far instead, so the plot tracks the replay head as events arrive.
+  const replayAnchor = state.replayActive ? tDataMax : null;
+
   let windowSecs, anchor;
   if (cfg) {
     windowSecs = cfg.timeWindow;
@@ -317,7 +324,7 @@ const computePlotScales = (visible, w, totalPanelsH, compareSeries = [], cfg = n
       anchor = _resumeAnchor(cfg._resumeFrom, cfg._resumeStart);
       if (now - cfg._resumeStart >= RESUME_DURATION) { cfg._resumeFrom = null; cfg._resumeStart = null; }
     } else {
-      anchor = now;
+      anchor = replayAnchor ?? now;
     }
   } else if (state.activeView === 'subjects') {
     windowSecs = state.plotTimeWindow;
@@ -327,11 +334,11 @@ const computePlotScales = (visible, w, totalPanelsH, compareSeries = [], cfg = n
       anchor = _resumeAnchor(state._plotResumeFrom, state._plotResumeStart);
       if (now - state._plotResumeStart >= RESUME_DURATION) { state._plotResumeFrom = null; state._plotResumeStart = null; }
     } else {
-      anchor = now;
+      anchor = replayAnchor ?? now;
     }
   } else {
     windowSecs = 60;
-    anchor = now;
+    anchor = replayAnchor ?? now;
   }
 
   let domainLeft, domainRight;

@@ -93,9 +93,13 @@ const showReplayStrip = () => {
 const hideReplayStrip = () => {
   _stopReplayPoll();
   const strip = el('replayStrip');
-  if (strip) strip.classList.add('hidden');
+  if (strip) {
+    strip.classList.add('hidden');
+    strip.classList.remove('replay-strip-finished');
+  }
   // Reset replay state so the rest of the UI can read a clean baseline.
   state.replayActive = false;
+  state.replayFinished = false;
   state.replayRecordingId = null;
   state.replayPositionS = 0;
   state.replayDurationS = 0;
@@ -113,6 +117,8 @@ const _ensureStripBuilt = (strip) => {
     <span class="replay-strip-label" id="replayStripLabel">Replay</span>
     <button class="replay-strip-btn" id="replayPlayPauseBtn" aria-label="Pause replay">Pause</button>
     <button class="replay-strip-btn replay-strip-btn-stop" id="replayStopBtn" aria-label="Stop replay">Stop</button>
+    <button class="replay-strip-btn replay-strip-btn-again hidden" id="replayAgainBtn" aria-label="Replay again">Replay again</button>
+    <button class="replay-strip-btn replay-strip-btn-close hidden" id="replayCloseBtn" aria-label="Close replay strip">Close</button>
     <input type="range" class="replay-strip-seek" id="replaySeek" min="0" max="100" step="0.1" value="0" aria-label="Replay position" />
     <span class="replay-strip-time" id="replayTime" aria-live="polite">00:00 / 00:00</span>
     <span class="replay-strip-speed-group" role="group" aria-label="Replay speed">
@@ -127,6 +133,25 @@ const _ensureStripBuilt = (strip) => {
   });
   el('replayStopBtn').addEventListener('click', () => {
     _replayControl('stop');
+  });
+  el('replayAgainBtn').addEventListener('click', () => {
+    const rec = state.replayRecordingId;
+    const speed = state.replaySpeed || 1.0;
+    if (rec != null) {
+      // Reset the finished flag so the strip renders in active mode again.
+      state.replayFinished = false;
+      startReplay(rec, speed);
+    }
+  });
+  el('replayCloseBtn').addEventListener('click', () => {
+    // Drop replay-derived telemetry so the next session starts clean.
+    state.latestBySubject.clear();
+    state.latestByNode.clear();
+    state.subjectHistory.clear();
+    hideReplayStrip();
+    if (typeof getAllNodes === 'function') getAllNodes();
+    renderNodesTable?.();
+    renderSelectedNodeContent?.();
   });
   el('replaySeek').addEventListener('change', (e) => {
     const target = Number(e.target.value);
@@ -145,21 +170,33 @@ const syncReplayStrip = () => {
   if (!strip || strip.classList.contains('hidden')) return;
   const labelEl = el('replayStripLabel');
   const pauseBtn = el('replayPlayPauseBtn');
+  const stopBtn = el('replayStopBtn');
+  const againBtn = el('replayAgainBtn');
+  const closeBtn = el('replayCloseBtn');
   const seek = el('replaySeek');
   const timeEl = el('replayTime');
   const events = el('replayEvents');
+  const finished = !!state.replayFinished;
+  strip.classList.toggle('replay-strip-finished', finished);
 
   if (labelEl) {
     const rec = state.recordings.find(r => r.id === state.replayRecordingId);
     const name = rec?.name || `Recording #${state.replayRecordingId ?? ''}`;
-    labelEl.textContent = `Replay · ${name}`;
+    labelEl.textContent = finished
+      ? `Replay finished · ${name}`
+      : `Replay · ${name}`;
   }
   if (pauseBtn) {
+    pauseBtn.classList.toggle('hidden', finished);
     pauseBtn.textContent = state.replayPaused ? 'Play' : 'Pause';
     pauseBtn.setAttribute('aria-label', state.replayPaused ? 'Resume replay' : 'Pause replay');
   }
+  if (stopBtn) stopBtn.classList.toggle('hidden', finished);
+  if (againBtn) againBtn.classList.toggle('hidden', !finished);
+  if (closeBtn) closeBtn.classList.toggle('hidden', !finished);
   if (seek) {
     seek.max = String(Math.max(0.1, state.replayDurationS || 0.1));
+    seek.disabled = finished;
     if (document.activeElement !== seek) seek.value = String(state.replayPositionS || 0);
   }
   if (timeEl) {
@@ -171,15 +208,28 @@ const syncReplayStrip = () => {
   strip.querySelectorAll('.replay-strip-speed-btn').forEach(btn => {
     const v = Number(btn.dataset.speed);
     btn.classList.toggle('active', Math.abs(v - state.replaySpeed) < 0.01);
+    btn.disabled = finished;
   });
 };
 
 const _pollReplayStatus = async () => {
   if (!state.dashboardConnected) return;
+  // Skip polling once we're in finished mode — there's nothing to poll for,
+  // and we don't want a stale status payload to override the finished flag.
+  if (state.replayFinished) return;
   try {
     const s = await requestJson('/api/replay/status');
     if (!s || s.active === false) {
-      hideReplayStrip();
+      // Polling fallback if the WS sentinel was missed: transition to
+      // Finished mode if the engine ran to completion, otherwise tear down.
+      if (s && s.finished) {
+        state.replayActive = false;
+        state.replayFinished = true;
+        state.replayPositionS = state.replayDurationS || state.replayPositionS;
+        syncReplayStrip();
+      } else {
+        hideReplayStrip();
+      }
       return;
     }
     _applyReplayStatus(s);

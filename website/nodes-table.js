@@ -271,7 +271,7 @@ const toggleHiddenPopover = () => {
 };
 
 const tablePlaceholder = () => {
-  return connectionPlaceholder('discover CAN nodes')
+  return eventSourcePlaceholder('discover CAN nodes')
     || svcStateMsg('<span class="svc-spinner"></span>', 'Waiting for nodes…', 'Listening on the CAN bus. Nodes will appear as they send heartbeats.');
 };
 
