@@ -73,6 +73,7 @@ EventLogger.start()        SQLite persistence
 ```
 --can <iface>     CAN interface name (vcan0, slcan0, can0, ...). Required for direct mode.
 --recompile       Force `nnvg` to regenerate Python from DSDL even if outputs exist.
+--bind <host>     Host/IP to bind the HTTP server to (default 127.0.0.1; use 0.0.0.0 to expose on the network).
 ```
 
 Without `--can`, the backend starts in selection mode. Use `POST /api/can/connect` with `{"interface": "..."}` to attach.
@@ -104,7 +105,7 @@ All frontend code lives in `website/`. Plain HTML/CSS/JS. No build step. D3 (CDN
 | `registers-panel.js` | Register read/write UI: renders register list, type validation, edit controls, offline caching |
 | `history-panel.js` | Node lifecycle history: timeline rendering, event labels/badges, subject activity summary, time-range filtering |
 | `subjects-panel.js` | Subject browser: Tabulator-based table of all subjects and services, inline service expansion with node selector, integrated persistent history. Uses a stash/unstash pattern to protect the inline service detail DOM node from Tabulator's virtual re-renders |
-| `graph-view.js` | Network topology: D3 force-directed bipartite graph of device and subject nodes, drag-to-pin with persistent positions, adjacency highlighting, info panel overlay, subject toggle |
+| `graph-view.js` | Network topology: D3 force-directed graph with three view modes (nodes only / node-centric / subject-centric), live link traffic, drag-to-pin with persistent positions, adjacency highlighting, info panel that follows the selected node, hide-system / hide-offline / per-node-or-subject hide with restore badge, inline device rename, gravity bias by metric |
 | `dsdl-view.js` | DSDL Inspector tab: namespace tree with bus-activity badges, field-level search, dependency navigation, custom-type editor with compile-state lock |
 | `record-view.js` | Record tab: subject/service/node pickers, per-recording cards with progress bars (with "no limit" rendering for unbounded recordings), live polling, edit-limits modal, duplicate, CSV/JSON export |
 | `log-panel.js` | Right log panel: collapsible/resizable shell, ring buffer (cap 2000, not persisted), Cyphal feed (diagnostic.Record + user-added text subjects), Server poller (`/api/logs` every 2s), severity floor across sources, per-source toggle pills with count badges, disconnect indicator on the Server pill |

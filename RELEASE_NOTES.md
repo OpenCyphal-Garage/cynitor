@@ -1,3 +1,27 @@
+## Cynitor v0.3.2
+
+### Graph view — continued refinements
+
+- **View modes (3-way)** — the old "Show subjects" toggle is replaced by a `View` dropdown: *Nodes only*, *Node-centric* (devices on top, subjects on bottom), *Subject-centric* (subjects on top, devices on bottom). Old `showSubjects` setting migrates cleanly on load — no localStorage reset.
+- **Hide system** — checkbox that filters Cyphal-reserved subject IDs (≥ 6144) and service IDs (≥ 256) out of the graph and the gravity-bias inputs.
+- **Hide individual nodes and subjects** — eye-icon button on the info panel for any selected device or subject. Hidden items disappear from the canvas; a `N hidden — show` badge appears in the toolbar and clears all hides in one click.
+- **Inline device rename** — pencil-icon button on a selected device's info panel opens an inline text input; Enter / blur saves the alias, Escape cancels. Aliases persist via the existing `nodeAliases` store and apply across all views.
+- **Legend bar moved to its own row** below the toolbar, with a new *publishing* pulse indicator showing which devices are currently broadcasting traffic.
+
+### Backend
+
+- **Localhost-bind by default** — the HTTP server now binds to `127.0.0.1` instead of `0.0.0.0`. Pass `--bind 0.0.0.0` to expose the dashboard on the LAN — the server logs a `WARNING` line in that case so the network-exposed posture is obvious in the log panel. No authentication is enforced; the previous default was effectively zero-auth network exposure.
+- **Service-call HTTP 500 on backend exceptions** — `POST /api/services/{node_id}/{service_id}/call` previously returned `HTTP 200` with `{status: "error", ...}` for unexpected backend errors. It now returns `HTTP 500` with the same body shape, aligning with REST conventions. The frontend already handles non-2xx as a failure path, so no visible regression.
+- **Background-task tracebacks** — `_fire_and_log` in `scanner_node.py` now logs failures from background coroutines (identity save, `on_node_event`) with the full traceback via `exc_info` instead of a one-line summary, so root causes surface in the log panel.
+
+### Frontend
+
+- **Stale-connection banner** — when the dashboard is connected but no inbound WebSocket frame has arrived for more than 10 seconds, a warn-coloured banner appears at the top of the main pane: *"Connection paused — last update Ns ago. Data may be stale."* Clears within 1 second once a frame arrives. Reuses the existing 1-second throughput timer, so no new interval is introduced.
+
+### Docs
+
+- **WEBSOCKET_README.md** now documents the previously undeclared server→client messages (`filter_updated`, `pong`, the bare-`error` protocol shape), the service-call `404` and `500` response bodies, the full status-code table for service calls, and the `--bind` flag.
+
 ## Cynitor v0.3.1
 
 ### Graph view — major upgrade

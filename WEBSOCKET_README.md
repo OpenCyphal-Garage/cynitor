@@ -474,7 +474,7 @@ Response:
     "can_interface": "vcan0",
     "connected_clients": 3,
     "server": {
-        "host": "0.0.0.0",
+        "host": "127.0.0.1",
         "port": 8080
     }
 }
@@ -946,7 +946,7 @@ Use `max_events` in EventLogger to prevent database bloat.
 **WebSocket connection refused:**
 - Ensure `main.py` is running
 - Check firewall (port 8080)
-- Verify `0.0.0.0` binding or change to `127.0.0.1` for local-only
+- The server binds to `127.0.0.1` by default; if you need to reach it from another host, restart with `--bind 0.0.0.0` (no auth is enforced — only do this on a trusted network)
 
 **High memory usage:**
 - Reduce TelemetryManager queue size
