@@ -596,6 +596,14 @@ const connectDashboard = async () => {
   updateDashboardConnectButton();
   startStatusPolling();
 
+  // Open WS + throughput meter + node polling as soon as the dashboard is
+  // connected, regardless of CAN state — this is the only path that lets
+  // replay events reach the frontend without an active CAN session.
+  startThroughputTimer();
+  connectWs();
+  await getAllNodes();
+  startNodesPolling();
+
   // If backend already has CAN running, sync state
   if (statusData.status === 'running' && statusData.can_interface) {
     const select = el('interfacesSelect');
