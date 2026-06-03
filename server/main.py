@@ -187,14 +187,23 @@ class CANSession:
 
     async def connect(self, can_iface: str, force_compile: bool = False) -> None:
         """Start all CAN components."""
+        # Fast-fail before the slow prepare_runtime step. The double-check inside
+        # the lock guards against concurrent connect() calls that both passed
+        # this check before prepare_runtime returned.
+        if self.is_running:
+            raise RuntimeError("Already connected")
+
+        # prepare_runtime can take seconds (DSDL compile via nnvg, env setup).
+        # Running it outside the lock keeps a concurrent disconnect() responsive
+        # instead of blocking it behind a cold-start connect.
+        await asyncio.to_thread(prepare_runtime, can_iface, force_compile)
+
         async with self._lock:
             if self.is_running:
                 raise RuntimeError("Already connected")
             self.last_error = None
 
             try:
-                await asyncio.to_thread(prepare_runtime, can_iface, force_compile)
-
                 from scanner_node import ScannerNode
                 from telemetry_manager import TelemetryManager
                 from allocator import AllocatorManager

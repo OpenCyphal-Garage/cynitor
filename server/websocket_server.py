@@ -749,6 +749,13 @@ class WebSocketServer:
                         [consume_task, recv_task, metrics_task],
                         return_when=asyncio.FIRST_COMPLETED
                     )
+                    for task in done:
+                        exc = task.exception()
+                        if exc is not None:
+                            logger.error(
+                                "WebSocket subtask finished with exception",
+                                exc_info=(type(exc), exc, exc.__traceback__),
+                            )
                     for task in pending:
                         task.cancel()
                         try:

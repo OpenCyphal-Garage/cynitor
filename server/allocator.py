@@ -129,13 +129,16 @@ class AllocatorManager:
             logger.info("External allocator detected on %s (node-ID %d)", self._iface_name, AllocatorApp.NODE_ID)
         else:
             logger.warning("No allocator detected on %s; starting local allocator", self._iface_name)
-            self._start_local_allocator()
+            await self._start_local_allocator()
 
         self._task = asyncio.create_task(self._monitor_loop())
 
-    def _start_local_allocator(self) -> None:
+    async def _start_local_allocator(self) -> None:
         if self._allocator is None:
-            self._allocator = AllocatorApp(iface_name=self._iface_name)
+            # AllocatorApp.__init__ opens SQLite, configures CAN media/transport,
+            # and calls node.start() — all synchronous and potentially slow.
+            # Run on a worker thread so we don't stall the event loop.
+            self._allocator = await asyncio.to_thread(AllocatorApp, self._iface_name)
 
     async def _monitor_loop(self) -> None:
         try:
@@ -150,7 +153,7 @@ class AllocatorManager:
                 )
                 if not external_exists:
                     logger.warning("External allocator disappeared; starting local allocator")
-                    self._start_local_allocator()
+                    await self._start_local_allocator()
         except asyncio.CancelledError:
             raise
 
