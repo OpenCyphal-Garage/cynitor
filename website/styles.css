@@ -3352,6 +3352,22 @@ details.svc-history-entry[open] > summary::before {
   opacity: 0.6;
 }
 
+/* ── Top-of-main stale-connection banner (WS gap > 10s) ── */
+
+.stale-banner {
+  padding: 0.375rem 0.75rem;
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  color: var(--warn);
+  background: var(--warn-muted);
+  border-bottom: 1px solid var(--warn);
+  flex-shrink: 0;
+}
+
+.stale-banner.hidden {
+  display: none;
+}
+
 /* ── Response idle / sending states ── */
 
 .svc-response-idle {

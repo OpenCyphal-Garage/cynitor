@@ -44,6 +44,7 @@ const state = {
   savedCompareConfigs: [],
   wsBytesAccum: 0,
   wsThroughput: 0,
+  lastWsMessageMs: 0,
   busUtilization: null,
   busLoadHistory: [],
   _busFullArmed: true,

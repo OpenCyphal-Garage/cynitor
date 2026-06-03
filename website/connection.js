@@ -168,12 +168,30 @@ const updateCanConnectButton = () => {
   updateSemaphores();
 };
 
+const STALE_WS_THRESHOLD_MS = 10000;
+
+const _updateStaleBanner = () => {
+  const banner = el('staleBanner');
+  if (!banner) return;
+  const last = state.lastWsMessageMs;
+  const open = state.dashboardConnected && last > 0;
+  const gapMs = open ? (Date.now() - last) : 0;
+  if (open && gapMs > STALE_WS_THRESHOLD_MS) {
+    const seconds = Math.floor(gapMs / 1000);
+    banner.textContent = `Connection paused — last update ${seconds}s ago. Data may be stale.`;
+    banner.classList.remove('hidden');
+  } else {
+    banner.classList.add('hidden');
+  }
+};
+
 const startThroughputTimer = () => {
   if (state.throughputTimer) clearInterval(state.throughputTimer);
   state.throughputTimer = window.setInterval(() => {
     state.wsThroughput = state.wsBytesAccum;
     state.wsBytesAccum = 0;
     updateSemaphores();
+    _updateStaleBanner();
   }, 1000);
 };
 
@@ -184,6 +202,8 @@ const stopThroughputTimer = () => {
   }
   state.wsBytesAccum = 0;
   state.wsThroughput = 0;
+  state.lastWsMessageMs = 0;
+  _updateStaleBanner();
 };
 
 // ── WebSocket ──
@@ -211,6 +231,8 @@ const connectWs = () => {
 
   state.ws.onopen = () => {
     state.wsReconnectAttempts = 0;
+    state.lastWsMessageMs = Date.now();
+    _updateStaleBanner();
     updateSemaphores();
   };
 
@@ -229,6 +251,7 @@ const connectWs = () => {
   state.ws.onmessage = (message) => {
     try {
       state.wsBytesAccum += (message.data?.length || 0);
+      state.lastWsMessageMs = Date.now();
       const event = JSON.parse(message.data);
       if (event.type === 'filter_updated' || event.type === 'pong') {
         return;
