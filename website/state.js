@@ -83,6 +83,18 @@ const state = {
   recordings: [],
   activeRecordingId: null,
   recordBuffer: null,
+  // Replay session state — populated by /api/replay/* responses and the
+  // /api/replay/status poll while replay is active. Mirrors CANSession.replay
+  // on the backend.
+  replayActive: false,
+  replayRecordingId: null,
+  replayPositionS: 0,
+  replayDurationS: 0,
+  replaySpeed: 1.0,
+  replayPaused: false,
+  replayEventsEmitted: 0,
+  replayTotalEvents: 0,
+  replayStatusTimer: null,
   recordFilterDraft: {
     subject_ids: [], service_ids: [], node_ids: [], message_types: [],
     name: '', notes: '',

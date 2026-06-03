@@ -347,6 +347,7 @@ const _buildCard = (rec) => {
     <div class="record-card-actions">
       ${live ? '<button class="btn-mini" data-action="stop">Stop</button>' : ''}
       ${live ? '<button class="btn-mini" data-action="edit-limits" aria-label="Edit limits">Edit limits</button>' : ''}
+      ${!live ? _playButtonHtml(rec) : ''}
       <button class="btn-mini" data-action="duplicate" aria-label="Start new recording with same configuration" title="Start a new recording with the same filter and limits">New like this</button>
       <button class="btn-mini" data-action="export-csv" aria-label="Export CSV">CSV</button>
       <button class="btn-mini" data-action="export-json" aria-label="Export JSON">JSON</button>
@@ -359,9 +360,11 @@ const _buildCard = (rec) => {
   card.addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-action]');
     if (!btn) return;
+    if (btn.disabled) return;
     const action = btn.dataset.action;
     if (action === 'stop') stopRecording(rec.id);
     else if (action === 'edit-limits') openEditLimitsModal(rec);
+    else if (action === 'play') startReplay(rec.id);
     else if (action === 'duplicate') duplicateRecording(rec);
     else if (action === 'export-csv') exportRecording(rec.id, 'csv');
     else if (action === 'export-json') exportRecording(rec.id, 'json');
@@ -370,6 +373,18 @@ const _buildCard = (rec) => {
     else if (action === 'purge') deleteRecording(rec.id, true);
   });
   return card;
+};
+
+const _playButtonHtml = (rec) => {
+  // Replay requires CAN disconnected and no other replay running.
+  const blockedByCan = !!state.canConnected;
+  const blockedByReplay = !!state.replayActive;
+  const disabled = blockedByCan || blockedByReplay;
+  const title = blockedByCan
+    ? 'Disconnect from CAN to replay'
+    : (blockedByReplay ? 'Another replay is already running' : 'Replay this recording');
+  return `<button class="btn-mini" data-action="play" aria-label="Replay recording"`
+    + ` title="${escapeHtml(title)}"${disabled ? ' disabled' : ''}>▶ Play</button>`;
 };
 
 const renderRecordList = () => {

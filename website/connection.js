@@ -174,6 +174,17 @@ const updateCanConnectButton = () => {
 
 const STALE_WS_THRESHOLD_MS = 10000;
 
+const _attachReplayIfActive = async () => {
+  if (!state.dashboardConnected) return;
+  try {
+    const s = await requestJson('/api/replay/status');
+    if (s && s.active && typeof showReplayStrip === 'function') {
+      _applyReplayStatus?.(s);
+      showReplayStrip();
+    }
+  } catch (_) { /* nothing to attach */ }
+};
+
 const _updateStaleBanner = () => {
   const banner = el('staleBanner');
   if (!banner) return;
@@ -238,6 +249,10 @@ const connectWs = () => {
     state.lastWsMessageMs = Date.now();
     _updateStaleBanner();
     updateSemaphores();
+    // If a replay session is already running (other tab, page reload during
+    // playback, backend restarted with state restored), attach the playback
+    // strip on connect.
+    _attachReplayIfActive();
   };
 
   state.ws.onclose = () => {
@@ -258,6 +273,20 @@ const connectWs = () => {
       state.lastWsMessageMs = Date.now();
       const event = JSON.parse(message.data);
       if (event.type === 'filter_updated' || event.type === 'pong') {
+        return;
+      }
+      if (event.type === 'replay_ended') {
+        // Drop replay-derived telemetry from caches so it doesn't visually
+        // mix with whatever the user does next. The WS will close shortly
+        // (backend sends this sentinel before tearing down) and the
+        // existing reconnect logic re-establishes the connection.
+        state.latestBySubject.clear();
+        state.latestByNode.clear();
+        state.subjectHistory.clear();
+        if (typeof hideReplayStrip === 'function') hideReplayStrip();
+        if (typeof getAllNodes === 'function') getAllNodes();
+        renderNodesTable?.();
+        renderSelectedNodeContent?.();
         return;
       }
       if (event.type === 'metrics') {

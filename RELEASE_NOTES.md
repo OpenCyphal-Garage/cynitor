@@ -9,6 +9,14 @@
 - **Service-call timeouts now read "Timed out".** `requestJson` attaches `err.status` and `err.data` to thrown errors so the services panel's catch path can distinguish a 504 timeout (body carries `{status: "timeout", latency_ms}`) from a generic 500. Previously every backend error rendered as a flat "Request failed" — including timeouts that the panel could have surfaced with their real latency.
 - **Recording list refreshes within 5 s.** The idle-mode poll cadence on the Record tab dropped from 30 s to 5 s, and the poll loop now keeps itself scheduled even while the dashboard is disconnected — recordings created or auto-stopped on the backend show up without a page reload, and a transient connection blip no longer strands the poll until the user switches tabs.
 
+### Replay (new)
+
+- **Replay stored recordings through the dashboard.** A recording's events are streamed back through the same WebSocket the live data flows on; the frontend renders them with the existing plot, node table, and detail-panel code paths. Use the new **Play** button on completed recordings in the Record tab. While replay is active the dashboard shows a playback strip with progress scrub, speed selector (0.5× / 1× / 2× / 5× / 10×), pause/resume, stop, and `MM:SS / MM:SS` time display.
+- **Constraint:** replay only runs while CAN is disconnected, so live and replay events never overlap on the broadcast channel. Starting replay while CAN is connected (or while another replay is running) returns `HTTP 409` and surfaces a toast. The Play button is disabled in both cases with a tooltip explaining why.
+- **State during replay:** the synthesised `/api/nodes` response is reconstructed from the recording's publishers list, so the node table populates from the recording itself. GetInfo / health / mode / uptime / client port lists are not faithful to the recording moment — surface this in the UI when consuming.
+- **New REST routes** (all bearer-auth-protected when `CYNITOR_AUTH_TOKEN` is set): `POST /api/replay/start`, `POST /api/replay/control` (pause/resume/stop), `POST /api/replay/seek`, `POST /api/replay/speed`, `GET /api/replay/status`.
+- **MVP deferrals:** only `kind='subject'` rows are replayed (service-call rows are kept in storage for export but not played). One replay session at a time; multiple browser tabs all watch the same one.
+
 ### Backend
 
 - **WebSocket send-side timeout.** `_consume_and_send` now caps `ws.send_json` at 10 s via `asyncio.wait_for`. A client whose TCP buffer is full (slow peer, congested network, dead-but-not-closed socket) no longer wedges its consumer task indefinitely; the handler logs a warning and tears the connection down. Broadcast already drops oldest on queue-full, so this prevents the orphan-consumer leak.
