@@ -41,7 +41,7 @@ These extend functionality but are not required to run the dashboard — the cod
 - `pip install yakut` — needed for `yakut accommodate` (automatic node-ID assignment). Without it the backend logs a warning and starts with no auto-assigned ID.
 - **Linux:** `sudo apt install can-utils` — provides `canbusload` for the bus-utilization sparkline. Without it utilization stays at 0%; everything else works.
 - **Windows / macOS:** install the `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) — see [Platforms](#platforms) for the transport-spec syntax.
-- `pip install pytest pytest-asyncio` — only if you want to run the backend test suite.
+- `pip install -r server/requirements-dev.txt` — only if you want to run the backend test suite (adds `pytest` and `pytest-asyncio` on top of the runtime requirements).
 
 ### 2. Frontend
 
