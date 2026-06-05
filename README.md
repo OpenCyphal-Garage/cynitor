@@ -10,17 +10,38 @@ Cynitor watches the bus in real time, lists every node it discovers, and lets yo
 
 Cynitor has two parts that run independently: a Python backend that talks to the CAN interface, and a static-file frontend that runs in any modern browser.
 
-### 1. Backend
+### 0. Clone with submodules
+
+The regulated UAVCAN DSDL types live in a git submodule. Without them the backend starts but cannot decode any traffic.
 
 ```bash
-cd server
-pip install -r requirements.txt
-python3 main.py --can vcan0     # connect to a known interface
+git clone --recurse-submodules https://github.com/OpenCyphal-Garage/cynitor.git
+# or, if you already cloned:
+git submodule update --init --recursive
+```
+
+### 1. Backend
+
+Requires **Python 3.10 or newer**.
+
+```bash
+cd cynitor/server
+pip install -r requirements.txt   # pycyphal + nunavut (nnvg) + aiohttp + numpy
+python3 main.py --can vcan0       # connect to a known interface
 # or
-python3 main.py                  # pick the interface from the UI later
+python3 main.py                   # pick the interface from the UI later
 ```
 
 The HTTP server starts on `http://localhost:8080`.
+
+#### Optional tools
+
+These extend functionality but are not required to run the dashboard — the code degrades gracefully when each is absent.
+
+- `pip install yakut` — needed for `yakut accommodate` (automatic node-ID assignment). Without it the backend logs a warning and starts with no auto-assigned ID.
+- **Linux:** `sudo apt install can-utils` — provides `canbusload` for the bus-utilization sparkline. Without it utilization stays at 0%; everything else works.
+- **Windows / macOS:** install the `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) — see [Platforms](#platforms) for the transport-spec syntax.
+- `pip install pytest pytest-asyncio` — only if you want to run the backend test suite.
 
 ### 2. Frontend
 
