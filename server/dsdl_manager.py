@@ -202,7 +202,36 @@ class DsdlManager:
 
         for f in matches:
             f.unlink()
+
+        # Also remove any compiled output for this type so it disappears from
+        # the runtime in step with the source. The compiled .py and its pycache
+        # entry are produced by nunavut at <compiled_dir>/<ns_path>/<Type>_<MAJOR>_<MINOR>.{py,pyc}.
+        # We deliberately leave the namespace's __init__.py alone — recompiling
+        # the namespace regenerates it cleanly; trying to patch it here is too
+        # risky if other types share the namespace.
+        major, minor = version.split(".")
+        compiled_ns_dir = self.compiled_dir / Path(*namespace.split("."))
+        compiled_basename = f"{type_name}_{major}_{minor}"
+        for stem_path in (
+            compiled_ns_dir / f"{compiled_basename}.py",
+            compiled_ns_dir / "__pycache__" / f"{compiled_basename}.cpython-310.pyc",
+        ):
+            try:
+                if stem_path.is_file():
+                    stem_path.unlink()
+            except OSError as exc:
+                logger.warning("Failed to remove compiled artifact %s: %s", stem_path, exc)
+        # Catch any other pycache variants (different Python versions) with a glob
+        pyc_glob = compiled_ns_dir / "__pycache__"
+        if pyc_glob.is_dir():
+            for pyc in pyc_glob.glob(f"{compiled_basename}.cpython-*.pyc"):
+                try:
+                    pyc.unlink()
+                except OSError as exc:
+                    logger.warning("Failed to remove %s: %s", pyc, exc)
+
         self.invalidate_cache()
+        self._refresh_python_module_cache()
 
         full_name = f"{namespace}.{type_name}.{version}"
         return {"full_name": full_name, "deleted": True}

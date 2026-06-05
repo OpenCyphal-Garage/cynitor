@@ -1335,12 +1335,12 @@ class WebSocketServer:
         namespace = ".".join(parts[:-3])
         type_name = parts[-3]
         version = f"{parts[-2]}.{parts[-1]}"
-        if self.dsdl_manager.is_compiled(full_name):
-            return web.json_response(
-                {"error": f"Cannot delete '{full_name}': type is already compiled. Recompile or clear python_compiled_messages first."},
-                status=409,
-            )
         try:
+            # Deletion removes the .dsdl source AND any matching compiled .py
+            # output, so the type disappears from both the tree and the
+            # runtime. The namespace's __init__.py is intentionally left to
+            # the next recompile (no clean way to patch it in-place when
+            # other types in the namespace might still depend on it).
             data = await asyncio.to_thread(
                 self.dsdl_manager.delete_type, namespace, type_name, version
             )

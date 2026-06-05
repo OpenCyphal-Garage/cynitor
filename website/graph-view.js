@@ -986,6 +986,12 @@ const GraphView = (() => {
     const panel = document.getElementById('graphInfo');
     if (!panel) return;
 
+    // Don't wipe an in-progress inline rename when the periodic refresh tick
+    // (REFRESH_MS / nodes-payload update) re-enters here. The rename input
+    // commits on Enter/blur; until then keep the panel DOM intact.
+    const renameInput = panel.querySelector('.graph-info-rename');
+    if (renameInput && document.activeElement === renameInput) return;
+
     if (!id) {
       panel.classList.add('hidden');
       panel.innerHTML = '';
