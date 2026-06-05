@@ -67,6 +67,7 @@ EventLogger.start()        SQLite persistence
 | `node_identity_map.py` | Bidirectional `unique_id ↔ node_id` mapping with displacement detection, snapshot storage, and SQLite-backed persistence |
 | `log_store.py` | In-memory deque (max 5000) fed by a `logging.Handler`; exposed via `/api/logs` |
 | `dsdl_manager.py` | DSDL discovery, namespace tree, source/compiled state, custom-type CRUD under `dsdl_messages/custom/`, recompile orchestration |
+| `replay.py` | Recording-replay engine: streams `recording_events` rows back through subscriber queues at controlled speed; mirrors `TelemetryManager`'s broadcast shape so the WS handler picks one source per session (telemetry XOR replay) |
 
 ### CLI flags
 
@@ -107,7 +108,8 @@ All frontend code lives in `website/`. Plain HTML/CSS/JS. No build step. D3 (CDN
 | `subjects-panel.js` | Subject browser: Tabulator-based table of all subjects and services, inline service expansion with node selector, integrated persistent history. Uses a stash/unstash pattern to protect the inline service detail DOM node from Tabulator's virtual re-renders |
 | `graph-view.js` | Network topology: D3 force-directed graph with three view modes (nodes only / node-centric / subject-centric), live link traffic, drag-to-pin with persistent positions, adjacency highlighting, info panel that follows the selected node, hide-system / hide-offline / per-node-or-subject hide with restore badge, inline device rename, gravity bias by metric |
 | `dsdl-view.js` | DSDL Inspector tab: namespace tree with bus-activity badges, field-level search, dependency navigation, custom-type editor with compile-state lock |
-| `record-view.js` | Record tab: subject/service/node pickers, per-recording cards with progress bars (with "no limit" rendering for unbounded recordings), live polling, edit-limits modal, duplicate, CSV/JSON export |
+| `record-view.js` | Record tab: subject/service/node pickers, per-recording cards with progress bars (with "no limit" rendering for unbounded recordings), live polling, edit-limits modal, duplicate, CSV/JSON export, Play-replay button on completed recordings |
+| `replay-strip.js` | Replay playback strip above the main view: position scrub, speed selector, pause/resume/stop, MM:SS/MM:SS time display; polls `/api/replay/status` every 1 s; transitions to a "Finished" mode (Replay-again / Close) when the backend's `replay_ended` sentinel arrives with `finished: true` |
 | `log-panel.js` | Right log panel: collapsible/resizable shell, ring buffer (cap 2000, not persisted), Cyphal feed (diagnostic.Record + user-added text subjects), Server poller (`/api/logs` every 2s), severity floor across sources, per-source toggle pills with count badges, disconnect indicator on the Server pill |
 | `connection.js` | WebSocket lifecycle, REST polling (status, nodes, interfaces), throughput meter, semaphores, `disconnectAll` shared teardown; forwards every event to `ingestLogEvent` for the log panel |
 | `app.js` | Boot file: DOM event wiring (`bind`), settings restore, frontend-server heartbeat, sidebar view tab switching |
@@ -139,7 +141,7 @@ The frontend never blocks on a single source. WebSocket is for live events; REST
 Six views share the same WebSocket and REST data:
 - **Nodes view** — Tabulator table of nodes (with ghost rows for displaced identities pinned to bottom), detail panel below with tabs (Publishers, Subscribers, Servers, Clients, Registers, History).
 - **Subjects view** — Tabulator table of all subjects and services across the network. Services can be expanded inline with a node selector and request form. Both views use `services-panel.js` for service interaction but maintain isolated state via the `forSubjects` parameter pattern.
-- **Graph view** — D3 force-directed bipartite topology showing device nodes (circles) and subject nodes (diamonds) with directional pub/sub links. Supports drag-to-pin with persistent positions, zoom/pan, adjacency highlighting, and a toggle to collapse subjects into device-to-device edges.
+- **Graph view** — D3 force-directed graph showing device nodes (circles) and subject nodes (diamonds) with directional pub/sub links and animated live-traffic indicators. Three view modes (nodes only / node-centric / subject-centric), drag-to-pin with persistent positions, zoom/pan, adjacency highlighting, hide-system / hide-offline / per-node-or-subject hide with a restore badge, inline device rename, gravity bias by total links / channels / rate / payload.
 - **Compare view** — independent graphs for side-by-side multi-series comparison.
 - **DSDL view** — namespace tree of loaded types with bus-activity badges, custom-type editor.
 - **Record view** — capture filtered events into per-recording SQLite stores with limits.
@@ -152,7 +154,7 @@ The global `state` object holds everything mutable: connection flags, timer IDs,
 
 Service interaction state is duplicated per view to prevent cross-contamination: `serviceCallState` / `_subjectServiceCallState`, `expandedServiceId` / `_subjectExpandedServiceId`, and `_subjectServiceNodeId`. Shared rendering functions in `services-panel.js` accept a `forSubjects` boolean to read/write the correct slot. Plot subject selection is similarly isolated: `_nodesPlotSubject` and `_subjectsPlotSubject` are saved/restored on view switch so closing a plot in one view doesn't affect the other. Detail panel height and collapsed state are stored per-view (`_nodesDetailHeight`/`_nodesDetailCollapsed`, `_subjectsDetailHeight`/`_subjectsDetailCollapsed`) and swapped on view switch.
 
-`localStorage` persistence (key `pycyphal.dashboard.settings.v2`) is debounced 250ms and flushed on `beforeunload`. Heavy or transient data (telemetry payloads, full table rows) is *not* persisted — only layout/preferences.
+`localStorage` persistence (key `cynitor.dashboard.settings.v1`, with `pycyphal.dashboard.settings.v2` read once as a legacy fallback for users upgrading from the pre-rename build) is debounced 250ms and flushed on `beforeunload`. Heavy or transient data (telemetry payloads, full table rows) is *not* persisted — only layout/preferences.
 
 ### Cache pruning
 
@@ -221,7 +223,9 @@ cynitor/
     startup_setup.py        DSDL compilation, env setup
     log_store.py            In-memory log buffer for /api/logs
     dsdl_manager.py         DSDL discovery, namespace tree, custom-type CRUD
-    requirements.txt        Python deps
+    replay.py               Recording replay engine (subscriber queues + timing)
+    requirements.txt        Python runtime deps
+    requirements-dev.txt    Adds pytest + pytest-asyncio for the test suite
     tests/                  pytest unit tests
   website/
     index.html              Layout
@@ -237,7 +241,8 @@ cynitor/
     subjects-panel.js       Subject browser (subjects view) with inline service expansion
     graph-view.js           D3 force-directed network topology
     dsdl-view.js            DSDL Inspector view + custom-type editor
-    record-view.js          Record tab: pickers, per-recording cards, export
+    record-view.js          Record tab: pickers, per-recording cards, export, replay launcher
+    replay-strip.js         Replay playback strip: scrub, speed, pause/stop/finish-mode
     log-panel.js            Right log panel: Cyphal + Server feeds, picker, filters
     connection.js           WS + polling + lifecycle
     app.js                  Boot, bindings, heartbeat, view switching

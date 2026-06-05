@@ -844,6 +844,85 @@ Stats about the shared `events` ring used by legacy bookmarks and quick-save:
 
 Use this to surface "what's available for quick-save" and to estimate observed message rate (count / (newest - oldest)).
 
+### Replay (`/api/replay/*`)
+
+A recording stored under `recording_events` can be streamed back through the same WebSocket the live telemetry flows on. Replay events carry the `replay: true` field but otherwise look identical to live events — frontends consume them through their normal cache path.
+
+**Invariant:** replay is mutually exclusive with an active CAN session. Starting replay while CAN is connected returns `409`; calling `/api/can/connect` while a replay is running returns `409` with the same body shape. Only one replay session at a time; multiple browser tabs all watch the same one.
+
+**Start playback:**
+```bash
+curl -X POST http://localhost:8080/api/replay/start \
+  -H 'Content-Type: application/json' \
+  -d '{"recording_id": 42, "speed": 2.0, "start_offset_s": 0}'
+```
+- `recording_id` (required, integer)
+- `speed` (optional, 0.1–50.0, default `1.0`)
+- `start_offset_s` (optional, seconds from the recording's first event)
+
+Response on success — current replay status:
+```json
+{
+  "active": true,
+  "recording_id": 42,
+  "position_s": 0.0,
+  "duration_s": 32.4,
+  "speed": 2.0,
+  "paused": false,
+  "events_emitted": 0,
+  "total_events": 65,
+  "finished": false
+}
+```
+
+Returns `404` if the recording has no `kind='subject'` rows to replay, `409` if CAN is connected or another replay is in progress.
+
+**Control playback (pause / resume / stop):**
+```bash
+curl -X POST http://localhost:8080/api/replay/control \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "pause"}'
+```
+`action` is one of `"pause"`, `"resume"`, `"stop"`. Returns the latest status (or `{"active": false}` after stop). `404` if no replay is running and the action is not `stop`; `400` for an unknown action.
+
+**Seek to a position:**
+```bash
+curl -X POST http://localhost:8080/api/replay/seek \
+  -H 'Content-Type: application/json' \
+  -d '{"position_s": 12.5}'
+```
+`position_s` is clamped to `[0, duration_s]`. Returns 404 if no replay is running.
+
+**Change speed without re-seeking:**
+```bash
+curl -X POST http://localhost:8080/api/replay/speed \
+  -H 'Content-Type: application/json' \
+  -d '{"speed": 5.0}'
+```
+`speed` is clamped to `[0.1, 50.0]`. Returns 404 if no replay is running.
+
+**Query current status (poll-friendly):**
+```bash
+curl http://localhost:8080/api/replay/status
+```
+Returns the same shape as the start response; `{"active": false}` when no replay is running.
+
+**Replay-ended WebSocket sentinel:**
+
+When replay terminates — naturally at the end of the recording, or because a client called `stop` — the backend pushes one frame to every subscribed client before tearing the WS down:
+```json
+{
+  "type": "replay_ended",
+  "recording_id": 42,
+  "finished": true
+}
+```
+`finished` distinguishes the two paths: `true` means playback reached the end, `false` means a client stopped it. Frontends can use this to switch back to an idle state without polling.
+
+**MVP scope notes:**
+- Only `kind='subject'` rows are replayed. `service_call` rows stay in storage for export but aren't played.
+- `/api/nodes` during replay is synthesised from the recording's publisher list — no GetInfo / health / mode / uptime / client port lists. The placeholder payload carries `_replay: true` on each node so consumers can flag the view as approximate.
+
 ### Event Logger (SQLite)
 
 Events are automatically logged to `telemetry_events.db`. The `events` table has fields:
