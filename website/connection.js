@@ -321,6 +321,16 @@ const connectWs = () => {
         }
         return;
       }
+      // Raw frame-capture stream (Debugging view, opt-in). Only this client
+      // receives it, and only after it sent a {type:'capture'} subscribe.
+      if (event.type === 'can_frame') {
+        DebugView.onFrames(event);
+        return;
+      }
+      if (event.type === 'capture_status') {
+        DebugView.onCaptureStatus(event);
+        return;
+      }
       cacheEvent(event);
       ingestLogEvent(event);
       scheduleDetailRefresh();
@@ -638,6 +648,7 @@ const connectDashboard = async () => {
   renderNodesTable();
   renderSelectedNodeContent();
   if (state.activeView === 'dsdl') DsdlView.init();
+  if (state.activeView === 'debug') DebugView.init();
   fetchRecordings();
   saveSettings();
 };

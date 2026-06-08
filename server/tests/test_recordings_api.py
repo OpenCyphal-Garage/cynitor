@@ -190,24 +190,28 @@ class TestExport:
         assert len(lines) == 3
 
     @pytest.mark.asyncio
-    async def test_export_json(self, client, event_logger_real):
+    async def test_export_jsonl(self, client, event_logger_real):
         import time as _t
         now = _t.time()
         event_logger_real._write_events_sync([_sample_event(ts=now)])
         rid = await event_logger_real.create_recording(name="x", start_unix=now - 1, end_unix=now + 1, events_source="global")
-        resp = await client.get(f"/api/recordings/{rid}/export?format=json")
+        resp = await client.get(f"/api/recordings/{rid}/export?format=jsonl")
         assert resp.status == 200
+        assert resp.headers["Content-Type"].startswith("application/x-ndjson")
         assert "attachment" in resp.headers.get("Content-Disposition", "")
-        data = await resp.json()
-        assert data["recording"]["id"] == rid
-        assert len(data["events"]) == 1
-        assert data["truncated"] is False
+        assert ".jsonl" in resp.headers["Content-Disposition"]
+        body = await resp.text()
+        lines = [json.loads(l) for l in body.strip().split("\n")]
+        assert "recording" in lines[0]
+        assert lines[0]["recording"]["id"] == rid
+        assert lines[1]["subject_id"] == 100
 
     @pytest.mark.asyncio
     async def test_export_invalid_format(self, client, event_logger_real):
         rid = await event_logger_real.create_recording(name="x")
-        resp = await client.get(f"/api/recordings/{rid}/export?format=xml")
-        assert resp.status == 400
+        for fmt in ("xml", "json"):
+            resp = await client.get(f"/api/recordings/{rid}/export?format={fmt}")
+            assert resp.status == 400
 
     @pytest.mark.asyncio
     async def test_export_missing_recording(self, client):

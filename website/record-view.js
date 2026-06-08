@@ -350,7 +350,7 @@ const _buildCard = (rec) => {
       ${!live ? _playButtonHtml(rec) : ''}
       <button class="btn-mini" data-action="duplicate" aria-label="Start new recording with same configuration" title="Start a new recording with the same filter and limits">New like this</button>
       <button class="btn-mini" data-action="export-csv" aria-label="Export CSV">CSV</button>
-      <button class="btn-mini" data-action="export-json" aria-label="Export JSON">JSON</button>
+      <button class="btn-mini" data-action="export-jsonl" aria-label="Export JSONL">JSONL</button>
       <button class="btn-mini" data-action="rename" aria-label="Rename">Rename</button>
       <button class="btn-mini" data-action="delete" aria-label="Delete">Delete</button>
       ${legacy ? '<button class="btn-mini btn-danger" data-action="purge" aria-label="Delete + purge events from global buffer" title="Delete recording AND its events from the global buffer">Purge</button>' : ''}
@@ -367,7 +367,7 @@ const _buildCard = (rec) => {
     else if (action === 'play') startReplay(rec.id);
     else if (action === 'duplicate') duplicateRecording(rec);
     else if (action === 'export-csv') exportRecording(rec.id, 'csv');
-    else if (action === 'export-json') exportRecording(rec.id, 'json');
+    else if (action === 'export-jsonl') exportRecording(rec.id, 'jsonl');
     else if (action === 'rename') renameRecording(rec.id);
     else if (action === 'delete') deleteRecording(rec.id, false);
     else if (action === 'purge') deleteRecording(rec.id, true);

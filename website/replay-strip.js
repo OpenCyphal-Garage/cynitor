@@ -24,6 +24,20 @@ const startReplay = async (recordingId, speed = 1.0) => {
     });
     _applyReplayStatus(status);
     showReplayStrip();
+
+    // Clear stale data from any previous live/replay session so the UI
+    // starts clean and only shows events from this recording.
+    state.latestBySubject.clear();
+    state.latestByNode.clear();
+    state.subjectHistory.clear();
+
+    // After a CAN disconnect the WS and polling timers are torn down.
+    // Re-establish them so replay events reach the frontend.
+    connectWs();
+    startThroughputTimer();
+    await getAllNodes();
+    startNodesPolling();
+
     return status;
   } catch (e) {
     const detail = e?.data?.error || e.message;

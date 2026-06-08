@@ -175,6 +175,7 @@ class CANSession:
         self.telemetry = None
         self.allocator_manager = None
         self.event_logger = None
+        self.frame_capture = None
         self.bus_load: Optional[BusLoadMonitor] = None
         self.registered_nodes: set[int] = set()
         self._tasks: list[asyncio.Task] = []
@@ -227,6 +228,12 @@ class CANSession:
                 logger.info("Initializing TelemetryManager...")
                 self.telemetry = TelemetryManager(self.scanner)
                 await self.telemetry.start()
+
+                # Frame-capture tap is created up front but stays dormant until a
+                # Debugging-view client explicitly starts it (it changes bus
+                # behaviour, so it is never auto-enabled).
+                from frame_capture import FrameCaptureManager
+                self.frame_capture = FrameCaptureManager(self.scanner)
 
                 logger.info("Initializing EventLogger...")
                 self.event_logger = EventLogger(
@@ -357,6 +364,8 @@ class CANSession:
         if self.allocator_manager:
             await self.allocator_manager.stop()
             self.allocator_manager = None
+        # Capture ends implicitly when the transport closes in scanner.close().
+        self.frame_capture = None
         if self.scanner:
             self.scanner.close()
             self.scanner = None
@@ -420,6 +429,70 @@ async def register_nodes(scanner, registered_nodes_set: set[int]) -> None:
 # ---------------------------------------------------------------------------
 # Background tasks
 # ---------------------------------------------------------------------------
+
+def get_can_link_diagnostics(iface: str) -> dict:
+    """Best-effort controller/bus diagnostics for a CAN interface.
+
+    Parses ``ip -details -statistics link show <iface>`` plus sysfs operstate.
+    SocketCAN-specific (Linux). All fields are optional — virtual interfaces
+    (vcan) expose no CAN controller state, so most values come back ``None``.
+    Never raises; returns whatever could be read.
+    """
+    result: dict = {
+        "operstate": None, "state": None, "bitrate": None, "dbitrate": None,
+        "berr_tx": None, "berr_rx": None, "restart_ms": None,
+        "restarts": None, "bus_errors": None, "arbitration_lost": None,
+        "error_warning": None, "error_passive": None, "bus_off": None,
+    }
+    if not IS_LINUX:
+        return result
+
+    try:
+        result["operstate"] = (
+            (Path("/sys/class/net") / iface / "operstate").read_text(encoding="utf-8").strip()
+        )
+    except Exception:
+        pass
+
+    try:
+        proc = subprocess.run(
+            ["ip", "-details", "-statistics", "link", "show", iface],
+            check=False, capture_output=True, text=True, timeout=3,
+        )
+    except Exception:
+        return result
+    if proc.returncode != 0:
+        return result
+    out = proc.stdout
+
+    def _int(pattern: str, group: int = 1):
+        m = re.search(pattern, out)
+        return int(m.group(group)) if m else None
+
+    m = re.search(r"can state\s+(\S+)", out)
+    if m:
+        result["state"] = m.group(1)
+    result["bitrate"] = _int(r"\bbitrate\s+(\d+)")
+    result["dbitrate"] = _int(r"\bdbitrate\s+(\d+)")
+    result["restart_ms"] = _int(r"restart-ms\s+(\d+)")
+    berr = re.search(r"berr-counter\s+tx\s+(\d+)\s+rx\s+(\d+)", out)
+    if berr:
+        result["berr_tx"], result["berr_rx"] = int(berr.group(1)), int(berr.group(2))
+
+    # CAN error-state-change counters appear as a labelled header row followed
+    # by the values, only with -statistics and only on real controllers.
+    counters = re.search(
+        r"re-started\s+bus-errors\s+arbit-lost\s+error-warn\s+error-pass\s+bus-off"
+        r"\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)",
+        out,
+    )
+    if counters:
+        (result["restarts"], result["bus_errors"], result["arbitration_lost"],
+         result["error_warning"], result["error_passive"], result["bus_off"]) = (
+            int(counters.group(i)) for i in range(1, 7)
+        )
+    return result
+
 
 def _check_can_health(iface: str) -> Optional[str]:
     """Check CAN interface health via system. Returns error message or None.

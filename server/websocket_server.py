@@ -117,6 +117,10 @@ class WebSocketServer:
         # Client management
         self.clients: Set[web.WebSocketResponse] = set()
         self.client_filters: dict[web.WebSocketResponse, dict[str, Any]] = {}
+        # Clients that opted into the raw frame-capture stream → their per-client
+        # subscriber queue on the FrameCaptureManager. Empty unless a Debugging
+        # view explicitly started capture.
+        self.capture_clients: dict[web.WebSocketResponse, asyncio.Queue] = {}
 
         # App and runner. Auth middleware runs first so unauthorized requests
         # never reach the CORS layer or the handlers.
@@ -186,6 +190,8 @@ class WebSocketServer:
         self.app.router.add_delete('/api/identity/{unique_id}', self._delete_identity)
         self.app.router.add_post('/api/can/connect', self._can_connect)
         self.app.router.add_post('/api/can/disconnect', self._can_disconnect)
+        self.app.router.add_get('/api/can/transport', self._get_transport_diagnostics)
+        self.app.router.add_get('/api/can/capture', self._get_capture)
 
         self.app.router.add_get('/api/recordings', self._get_recordings)
         self.app.router.add_post('/api/recordings', self._post_recording)
@@ -291,6 +297,53 @@ class WebSocketServer:
         return web.json_response({
             "status": "idle",
             "available_interfaces": available,
+        })
+
+    async def _get_transport_diagnostics(self, request: web.Request) -> web.Response:
+        """Transport-layer ("below the DSDL") diagnostics snapshot.
+
+        Returns ``{"connected": false}`` when no CAN session is active so the
+        Debugging view can render an idle state instead of erroring. When
+        connected, combines pycyphal transport counters/protocol params (cheap,
+        in-process) with controller/bus-state details parsed from iproute2
+        (run off the event loop via to_thread).
+        """
+        from main import get_can_link_diagnostics
+        if not self.session.is_running or self.session.scanner is None:
+            return web.json_response({"connected": False})
+
+        info = self.session.scanner.get_transport_info()
+        iface = self.session.can_interface
+        link = await asyncio.to_thread(get_can_link_diagnostics, iface) if iface else {}
+        bus_load = self.session.bus_load
+        return web.json_response({
+            "connected": True,
+            "interface": iface,
+            "protocol": info.get("protocol"),
+            "statistics": info.get("statistics"),
+            "capture_active": info.get("capture_active", False),
+            "link": link,
+            "bus_utilization": bus_load.utilization if bus_load else None,
+        })
+
+    async def _get_capture(self, request: web.Request) -> web.Response:
+        """Snapshot of the raw frame-capture ring buffer + counters.
+
+        Used by the Debugging view to backfill the frame monitor on open or
+        after a reconnect. Returns an inactive empty result when no CAN session
+        exists. Live frames arrive via the WebSocket ``can_frame`` stream.
+        """
+        mgr = self.session.frame_capture
+        if mgr is None:
+            return web.json_response({"active": False, "stats": None, "frames": []})
+        try:
+            limit = min(int(request.query.get("limit", "500")), 2000)
+        except (ValueError, TypeError):
+            limit = 500
+        return web.json_response({
+            "active": mgr.active,
+            "stats": mgr.stats(),
+            "frames": mgr.snapshot(limit),
         })
 
     # ------------------------------------------------------------------
@@ -546,7 +599,6 @@ class WebSocketServer:
 
     _MAX_REC_ID = 2**31 - 1
     _EXPORT_PAGE_SIZE = 2000
-    _EXPORT_JSON_LIMIT = 200_000
 
     async def _read_json_body(self, request: web.Request) -> tuple[Optional[dict], Optional[web.Response]]:
         try:
@@ -733,8 +785,8 @@ class WebSocketServer:
         if (e := self._require_event_logger()):
             return e
         fmt = request.query.get("format", "csv").lower()
-        if fmt not in ("csv", "json"):
-            return web.json_response({"error": "format must be csv or json"}, status=400)
+        if fmt not in ("csv", "jsonl"):
+            return web.json_response({"error": "format must be csv or jsonl"}, status=400)
         rec = await self.session.event_logger.get_recording(rec_id)
         if not rec:
             return web.json_response({"error": "Recording not found"}, status=404)
@@ -742,7 +794,7 @@ class WebSocketServer:
         safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", rec["name"])[:60] or f"recording-{rec_id}"
         if fmt == "csv":
             return await self._export_recording_csv(request, rec, safe_name)
-        return await self._export_recording_json(rec, safe_name)
+        return await self._export_recording_jsonl(request, rec, safe_name)
 
     async def _export_recording_csv(self, request: web.Request, rec: dict, safe_name: str) -> web.StreamResponse:
         resp = web.StreamResponse(
@@ -791,19 +843,31 @@ class WebSocketServer:
         await resp.write_eof()
         return resp
 
-    async def _export_recording_json(self, rec: dict, safe_name: str) -> web.Response:
-        events = await self.session.event_logger.get_recording_events(
-            rec["id"], limit=self._EXPORT_JSON_LIMIT, offset=0
+    async def _export_recording_jsonl(self, request: web.Request, rec: dict, safe_name: str) -> web.StreamResponse:
+        resp = web.StreamResponse(
+            headers={
+                "Content-Type": "application/x-ndjson; charset=utf-8",
+                "Content-Disposition": f'attachment; filename="{safe_name}.jsonl"',
+            }
         )
-        payload = {
-            "recording": rec,
-            "events": events,
-            "truncated": len(events) >= self._EXPORT_JSON_LIMIT,
-            "exported_at_unix": time.time(),
-        }
-        return web.json_response(payload, headers={
-            "Content-Disposition": f'attachment; filename="{safe_name}.json"',
-        })
+        await resp.prepare(request)
+        header = json.dumps({"recording": rec, "exported_at_unix": time.time()})
+        await resp.write((header + "\n").encode("utf-8"))
+
+        offset = 0
+        while True:
+            events = await self.session.event_logger.get_recording_events(
+                rec["id"], limit=self._EXPORT_PAGE_SIZE, offset=offset
+            )
+            if not events:
+                break
+            chunk = "".join(json.dumps(ev) + "\n" for ev in events)
+            await resp.write(chunk.encode("utf-8"))
+            offset += len(events)
+            if len(events) < self._EXPORT_PAGE_SIZE:
+                break
+        await resp.write_eof()
+        return resp
 
     # ------------------------------------------------------------------
     # WebSocket handler
@@ -822,6 +886,7 @@ class WebSocketServer:
         try:
             recv_task = asyncio.create_task(self._receive_client_messages(ws))
             metrics_task = asyncio.create_task(self._send_metrics_loop(ws))
+            capture_task = asyncio.create_task(self._capture_loop(ws))
 
             while not ws.closed:
                 telemetry = self.session.telemetry
@@ -831,7 +896,7 @@ class WebSocketServer:
                     queue = source.subscribe(max_queue=100)
                     consume_task = asyncio.create_task(self._consume_and_send(ws, queue))
                     done, pending = await asyncio.wait(
-                        [consume_task, recv_task, metrics_task],
+                        [consume_task, recv_task, metrics_task, capture_task],
                         return_when=asyncio.FIRST_COMPLETED
                     )
                     for task in done:
@@ -867,12 +932,21 @@ class WebSocketServer:
                     await metrics_task
                 except asyncio.CancelledError:
                     pass
+            if not capture_task.done():
+                capture_task.cancel()
+                try:
+                    await capture_task
+                except asyncio.CancelledError:
+                    pass
 
         except Exception as e:
             logger.error(f"Error in WebSocket handler: {e}", exc_info=True)
         finally:
             self.clients.discard(ws)
             self.client_filters.pop(ws, None)
+            cap_queue = self.capture_clients.pop(ws, None)
+            if cap_queue is not None and self.session.frame_capture is not None:
+                self.session.frame_capture.unsubscribe(cap_queue)
             if queue is not None:
                 # The queue belongs to whichever source was active when we
                 # subscribed. Both sources are unsubscribe-safe with an
@@ -946,6 +1020,67 @@ class WebSocketServer:
         except Exception as e:
             logger.debug(f"Metrics loop ended: {e}")
 
+    # Batch window for the raw frame stream. Captured frames are coalesced into
+    # one message per window to bound message rate under heavy bus load.
+    _CAPTURE_BATCH_WINDOW = 0.12
+    _CAPTURE_BATCH_MAX = 250
+
+    async def _capture_loop(self, ws: web.WebSocketResponse) -> None:
+        """Forward raw captured frames to a client that opted in via a
+        ``{"type":"capture","enabled":true}`` message. No-op (idle poll) until
+        the client subscribes; batches frames to bound the WS message rate.
+        """
+        try:
+            while self._running and not ws.closed:
+                q = self.capture_clients.get(ws)
+                if q is None:
+                    await asyncio.sleep(0.2)
+                    continue
+                try:
+                    first = await asyncio.wait_for(q.get(), timeout=0.5)
+                except asyncio.TimeoutError:
+                    continue
+                frames = [first]
+                await asyncio.sleep(self._CAPTURE_BATCH_WINDOW)
+                while len(frames) < self._CAPTURE_BATCH_MAX:
+                    try:
+                        frames.append(q.get_nowait())
+                    except asyncio.QueueEmpty:
+                        break
+                mgr = self.session.frame_capture
+                await asyncio.wait_for(ws.send_json({
+                    "type": "can_frame",
+                    "frames": frames,
+                    "stats": mgr.stats() if mgr else None,
+                }), timeout=self._WS_SEND_TIMEOUT)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.debug(f"Capture loop ended: {e}")
+
+    async def _handle_capture_message(self, ws: web.WebSocketResponse, enabled: bool) -> None:
+        """Enable/disable raw frame forwarding for this client. Enabling also
+        starts transport-level capture if it is not already active (sticky)."""
+        mgr = self.session.frame_capture
+        if enabled:
+            if mgr is None:
+                await ws.send_json({"type": "capture_status", "active": False,
+                                    "error": "CAN not connected"})
+                return
+            mgr.start()
+            if ws not in self.capture_clients:
+                self.capture_clients[ws] = mgr.subscribe()
+            await ws.send_json({"type": "capture_status", "active": mgr.active,
+                                "stats": mgr.stats()})
+        else:
+            q = self.capture_clients.pop(ws, None)
+            if q is not None and mgr is not None:
+                mgr.unsubscribe(q)
+            # Note: transport capture itself cannot be stopped without a CAN
+            # disconnect; we only stop forwarding to this client.
+            await ws.send_json({"type": "capture_status", "active": False,
+                                "forwarding": False})
+
     async def _receive_client_messages(self, ws: web.WebSocketResponse) -> None:
         async for msg in ws:
             try:
@@ -967,6 +1102,9 @@ class WebSocketServer:
 
                     elif data.get("type") == "ping":
                         await ws.send_json({"type": "pong"})
+
+                    elif data.get("type") == "capture":
+                        await self._handle_capture_message(ws, bool(data.get("enabled")))
 
                     else:
                         logger.warning(f"Unknown message type: {data.get('type')}")
@@ -1021,6 +1159,8 @@ class WebSocketServer:
                     "/api/health": "Server health check",
                     "/api/can/connect": "POST - Connect to a CAN interface",
                     "/api/can/disconnect": "POST - Disconnect from CAN interface",
+                    "/api/can/transport": "Transport-layer diagnostics (MTU, frame stats, bus state)",
+                    "/api/can/capture": "Raw frame-capture ring-buffer snapshot (WS 'capture' message streams live)",
                     "/api/nodes": "Get info about all discovered nodes",
                     "/api/latest/subject/{subject_id}": "Get latest event for a subject",
                     "/api/latest/node/{node_id}": "Get latest events from a node",

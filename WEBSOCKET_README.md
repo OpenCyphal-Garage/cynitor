@@ -159,7 +159,20 @@ ws.send(JSON.stringify({
 
 // Ping to keep connection alive
 ws.send(JSON.stringify({ type: 'ping' }));
+
+// Subscribe to the raw frame-capture stream (Debugging view). Off by default.
+// Enabling starts transport-level capture if not already active — see the note
+// below. Send enabled:false to stop receiving frames on this connection.
+ws.send(JSON.stringify({ type: 'capture', enabled: true }));
 ```
+
+> **Frame capture is sticky and changes bus behaviour.** pycyphal implements
+> capture by reconfiguring the acceptance filter to accept all frames and
+> forcing loopback on every outgoing frame. It cannot be stopped without closing
+> the transport (a CAN disconnect), and it adds bus/CPU overhead. It is therefore
+> opt-in: only clients that send `{type:'capture',enabled:true}` receive frames,
+> and `enabled:false` only stops *forwarding* to that client — the transport tap
+> stays active until disconnect.
 
 **Server Messages:**
 
@@ -208,6 +221,35 @@ Pong (sent in response to a client `ping` message):
 ```json
 { "type": "pong" }
 ```
+
+Capture status (sent in response to a client `capture` message):
+```json
+{ "type": "capture_status", "active": true, "stats": { "captured": 0, "rx": 0, "tx": 0, "cyphal": 0, "foreign": 0, "dropped": 0 } }
+```
+`active` reflects whether transport-level capture is running. When enabling
+fails because no CAN session exists, the message carries `"active": false` and an
+`"error"` field. A disable reply carries `"active": false, "forwarding": false`.
+
+Raw frame batch (sent only to clients that opted into capture; batched ~every
+120 ms to bound message rate):
+```json
+{
+    "type": "can_frame",
+    "stats": { "captured": 1024, "rx": 1000, "tx": 24, "cyphal": 1010, "foreign": 14, "dropped": 0 },
+    "frames": [
+        {
+            "t": 12345.678, "ts": 1741949445.123, "dir": "rx",
+            "id": "0x107D552A", "ext": true, "dlc": 8, "data": "01 02 03 04 05 06 07 E5",
+            "cyphal": true, "priority": "NOMINAL", "src": 42, "dst": null,
+            "kind": "msg", "port": 7509, "transfer_id": 5, "start": true, "end": true
+        },
+        { "t": 12345.679, "ts": 1741949445.124, "dir": "rx", "id": "0x00000123", "ext": false, "dlc": 2, "data": "AA BB", "cyphal": false }
+    ]
+}
+```
+`dir` is `tx`/`rx` (TX = forced-loopback of our own frames). For Cyphal frames,
+`kind` is `msg`/`req`/`resp` and `port` is the subject- or service-ID; non-Cyphal
+("foreign") frames carry only the raw fields with `cyphal: false`.
 
 Protocol errors (sent when the client sends a frame the server cannot parse):
 ```json
@@ -261,6 +303,64 @@ Response:
 ```
 
 Returns `409` if not connected.
+
+**Transport-layer diagnostics (Debugging view):**
+```bash
+curl http://localhost:8080/api/can/transport
+```
+
+Read-only snapshot of the CAN transport *below* the DSDL/application layer —
+used by the Debugging tab. When no CAN session is active it returns
+`{"connected": false}` (HTTP 200) so the UI can render an idle state.
+
+Response (connected):
+```json
+{
+  "connected": true,
+  "interface": "vcan0",
+  "protocol": {"mtu": 7, "transfer_id_modulo": 32, "max_nodes": 128, "is_fd": false},
+  "statistics": {
+    "in_frames": 1024, "in_frames_cyphal": 1000, "in_frames_cyphal_accepted": 980,
+    "in_frames_errored": 0, "in_frames_loopback": 12,
+    "out_frames": 40, "out_frames_timeout": 0, "out_frames_loopback": 12,
+    "media_acceptance_filtering_efficiency": 0.96, "lost_loopback_frames": 0
+  },
+  "capture_active": false,
+  "link": {
+    "operstate": "up", "state": "ERROR-ACTIVE", "bitrate": 500000, "dbitrate": null,
+    "berr_tx": 0, "berr_rx": 0, "restart_ms": 0,
+    "restarts": 0, "bus_errors": 0, "arbitration_lost": 0,
+    "error_warning": 0, "error_passive": 0, "bus_off": 0
+  },
+  "bus_utilization": 12.0
+}
+```
+
+`protocol` / `statistics` come from pycyphal's transport (`mtu` is the
+single-frame payload limit: 7 = Classic CAN, up to 63 = CAN FD). `link` is
+best-effort controller state parsed from `ip -details -statistics link show`;
+fields are `null` on virtual interfaces (vcan) or where the controller does not
+report them. The Debugging view polls this endpoint at ~1 Hz while active.
+
+**Raw frame-capture snapshot (Debugging view frame monitor):**
+```bash
+curl 'http://localhost:8080/api/can/capture?limit=500'
+```
+
+Returns the recent-frame ring buffer plus capture counters — used to backfill
+the frame monitor on open / after reconnect. Live frames stream over the
+WebSocket `can_frame` message (see above); this endpoint does not start capture.
+
+```json
+{
+  "active": true,
+  "stats": {"captured": 1024, "rx": 1000, "tx": 24, "cyphal": 1010, "foreign": 14, "dropped": 0},
+  "frames": [ /* same per-frame shape as the can_frame stream, oldest→newest */ ]
+}
+```
+
+When no CAN session exists: `{"active": false, "stats": null, "frames": []}`.
+`limit` is clamped to 2000 (default 500).
 
 **DSDL status (does not require CAN connection):**
 ```bash
@@ -815,13 +915,13 @@ An event matches if it satisfies **any** dimension (subject in `subject_ids` OR 
 #### Export
 
 ```http
-GET    /api/recordings/{rec_id}/export?format=csv     → text/csv stream
-GET    /api/recordings/{rec_id}/export?format=json    → application/json
+GET    /api/recordings/{rec_id}/export?format=csv      → text/csv stream
+GET    /api/recordings/{rec_id}/export?format=jsonl    → application/x-ndjson stream
 ```
 
 CSV columns: `recording_id, timestamp_unix, timestamp, subject_id, publisher_node_id, unique_id, message_type, rate, attribute, value, unit`. One row per attribute (events with N attributes → N rows). Service-call rows currently appear with their `service_id` in the `subject_id` column and service metadata in `attributes_json` — a future CSV revision may add a dedicated `kind`/`service_id` column.
 
-JSON returns `{ recording, events: [...], truncated, exported_at_unix }`. Each event carries a `kind` field (`'subject'` or `'service_call'`) and either `subject_id` or `service_id`. Buffered with a hard cap of 200,000 events; set `truncated=true` if reached. Use CSV for larger windows.
+JSONL (JSON Lines) streams one JSON object per line. The first line is a header: `{ "recording": {...}, "exported_at_unix": float }`. Every subsequent line is a single event object with `kind`, `subject_id`/`service_id`, `timestamp_unix`, `attributes`, etc. Streamed with the same pagination as CSV — no hard event cap.
 
 Both formats set `Content-Disposition: attachment; filename="<sanitized-name>.<ext>"`.
 

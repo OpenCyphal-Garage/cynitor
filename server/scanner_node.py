@@ -104,6 +104,64 @@ class ScannerNode:
             logging.error(f"Failed to start PyCyphal node: {e}")
             raise
 
+    def get_transport_info(self) -> dict:
+        """Read-only snapshot of transport-layer protocol params and statistics.
+
+        Reaches the shared CAN transport (``node.presentation.transport``) and
+        reads pycyphal's own counters. Synchronous and cheap (attribute reads +
+        a dataclass copy), so it is safe to call directly from the event loop.
+        Returns ``{}`` if the transport is unavailable for any reason.
+        """
+        try:
+            transport = self._node.presentation.transport
+        except Exception:
+            return {}
+
+        info: dict = {}
+        try:
+            pp = transport.protocol_parameters
+            info["protocol"] = {
+                "mtu": pp.mtu,
+                "transfer_id_modulo": pp.transfer_id_modulo,
+                "max_nodes": pp.max_nodes,
+                # Single-frame payload limit: 7 for Classic CAN, up to 63 for CAN FD.
+                "is_fd": pp.mtu > 7,
+            }
+        except Exception:
+            pass
+        try:
+            st = transport.sample_statistics()
+            info["statistics"] = {
+                "in_frames": st.in_frames,
+                "in_frames_cyphal": st.in_frames_cyphal,
+                "in_frames_cyphal_accepted": st.in_frames_cyphal_accepted,
+                "in_frames_errored": st.in_frames_errored,
+                "in_frames_loopback": st.in_frames_loopback,
+                "out_frames": st.out_frames,
+                "out_frames_timeout": st.out_frames_timeout,
+                "out_frames_loopback": st.out_frames_loopback,
+                "media_acceptance_filtering_efficiency": st.media_acceptance_filtering_efficiency,
+                "lost_loopback_frames": st.lost_loopback_frames,
+            }
+            info["capture_active"] = transport.capture_active
+        except Exception:
+            pass
+        return info
+
+    def begin_frame_capture(self, handler) -> None:
+        """Enable transport-level frame capture, routing every frame to handler.
+
+        Sticky: pycyphal cannot stop capture without closing the transport, and
+        it forces loopback + accept-all filtering. Used by FrameCaptureManager.
+        """
+        self._node.presentation.transport.begin_capture(handler)
+
+    @property
+    def capture_active(self) -> bool:
+        try:
+            return self._node.presentation.transport.capture_active
+        except Exception:
+            return False
 
     async def update_reg_list(self, node_id: int) -> tuple[dict[int, str], dict[int, str]]:
         """

@@ -575,3 +575,110 @@ class TestServiceCall:
         session.is_running = True
         resp = await client.post("/api/services/42/100/call", data=b"not json", headers={"Content-Type": "application/json"})
         assert resp.status == 400
+
+
+class TestTransportDiagnostics:
+    """GET /api/can/transport — Phase 1 Debugging-view diagnostics."""
+
+    @pytest.mark.asyncio
+    async def test_transport_idle(self, client, session):
+        # No CAN session: the endpoint reports connected=False (200) so the
+        # Debugging view can render an idle state instead of an error.
+        session.is_running = False
+        session.scanner = None
+        resp = await client.get("/api/can/transport")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data == {"connected": False}
+
+    @pytest.mark.asyncio
+    async def test_transport_connected(self, client, session):
+        session.is_running = True
+        session.can_interface = "vcan0"
+        scanner = MagicMock()
+        scanner.get_transport_info = MagicMock(return_value={
+            "protocol": {"mtu": 7, "transfer_id_modulo": 32, "max_nodes": 128, "is_fd": False},
+            "statistics": {"in_frames": 10, "in_frames_errored": 0, "out_frames": 4},
+            "capture_active": False,
+        })
+        session.scanner = scanner
+        bus_load = MagicMock()
+        bus_load.utilization = 12.5
+        session.bus_load = bus_load
+
+        link = {"state": "ERROR-ACTIVE", "bitrate": 500000, "berr_tx": 0, "berr_rx": 0}
+        with patch("main.get_can_link_diagnostics", return_value=link):
+            resp = await client.get("/api/can/transport")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["connected"] is True
+        assert data["interface"] == "vcan0"
+        assert data["protocol"]["mtu"] == 7
+        assert data["protocol"]["is_fd"] is False
+        assert data["statistics"]["in_frames"] == 10
+        assert data["capture_active"] is False
+        assert data["link"]["state"] == "ERROR-ACTIVE"
+        assert data["bus_utilization"] == 12.5
+        scanner.get_transport_info.assert_called_once()
+
+
+class TestFrameCaptureAPI:
+    """GET /api/can/capture snapshot + 'capture' WS message handling."""
+
+    @pytest.mark.asyncio
+    async def test_capture_snapshot_no_session(self, client, session):
+        session.frame_capture = None
+        resp = await client.get("/api/can/capture")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data == {"active": False, "stats": None, "frames": []}
+
+    @pytest.mark.asyncio
+    async def test_capture_snapshot_active(self, client, session):
+        mgr = MagicMock()
+        mgr.active = True
+        mgr.stats = MagicMock(return_value={"captured": 3})
+        mgr.snapshot = MagicMock(return_value=[{"id": "0x1"}])
+        session.frame_capture = mgr
+        resp = await client.get("/api/can/capture?limit=10")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["active"] is True
+        assert data["stats"]["captured"] == 3
+        assert data["frames"] == [{"id": "0x1"}]
+        mgr.snapshot.assert_called_once_with(10)
+
+    @pytest.mark.asyncio
+    async def test_capture_message_no_session(self, server, session):
+        # enabling capture with no CAN session replies with an inactive status
+        session.frame_capture = None
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        await server._handle_capture_message(ws, enabled=True)
+        ws.send_json.assert_awaited_once()
+        payload = ws.send_json.await_args.args[0]
+        assert payload["type"] == "capture_status"
+        assert payload["active"] is False
+        assert "error" in payload
+
+    @pytest.mark.asyncio
+    async def test_capture_message_enable_then_disable(self, server, session):
+        q = asyncio.Queue()
+        mgr = MagicMock()
+        mgr.active = True
+        mgr.start = MagicMock()
+        mgr.subscribe = MagicMock(return_value=q)
+        mgr.unsubscribe = MagicMock()
+        mgr.stats = MagicMock(return_value={"captured": 0})
+        session.frame_capture = mgr
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+
+        await server._handle_capture_message(ws, enabled=True)
+        mgr.start.assert_called_once()
+        mgr.subscribe.assert_called_once()
+        assert server.capture_clients.get(ws) is q
+
+        await server._handle_capture_message(ws, enabled=False)
+        mgr.unsubscribe.assert_called_once_with(q)
+        assert ws not in server.capture_clients
