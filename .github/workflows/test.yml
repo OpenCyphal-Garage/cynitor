@@ -1,0 +1,90 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+
+    steps:
+      - uses: actions/checkout@v4
+        # The test suite mocks the Cyphal stack, so it needs neither the DSDL
+        # submodule nor compiled types. Skipping the submodule keeps this fast.
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            server/requirements.txt
+            server/requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r server/requirements-dev.txt
+
+      - name: Run test suite
+        working-directory: server
+        env:
+          # Matches the documented local command: stops third-party plugins
+          # (notably ROS2's) from being auto-loaded into the run.
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+        run: python -m pytest tests/ -v -p pytest_asyncio.plugin
+
+  e2e:
+    name: Frontend end-to-end
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}
+
+      - name: Install Playwright
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Serve frontend
+        # Static files only; these tests assert the disconnected state, so no
+        # backend is started. The run step waits for the port rather than
+        # sleeping a fixed interval.
+        run: |
+          python3 -m http.server 5500 --directory website &
+          curl --retry 30 --retry-delay 1 --retry-connrefused -sf -o /dev/null \
+            http://localhost:5500
+
+      - name: Run end-to-end tests
+        working-directory: tests/e2e
+        run: python3 test_landing_page.py
+
+      - name: Upload result summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-result
+          path: tests/e2e/result.md
+          if-no-files-found: ignore
