@@ -6,10 +6,7 @@
 #
 # Output: dist/cynitor-server  (single-file executable)
 
-import sys
 from pathlib import Path
-
-block_cipher = None
 
 PROJECT_ROOT = Path(SPECPATH).resolve().parent
 SERVER_DIR = PROJECT_ROOT / "server"
@@ -111,11 +108,18 @@ hidden_imports = (
 )
 
 # Bundle pre-compiled DSDL types and DSDL source definitions as data.
-datas = []
-if COMPILED_DSDL.is_dir():
-    datas.append((str(COMPILED_DSDL), "python_compiled_messages"))
-if DSDL_SOURCES.is_dir():
-    datas.append((str(DSDL_SOURCES), "dsdl_messages"))
+#
+# The compiled types are mandatory. nnvg is not bundled, so the frozen binary
+# cannot regenerate them: an installer built without this directory starts
+# and then fails to import any type. Fail here, loudly, on every build path.
+if not COMPILED_DSDL.is_dir():
+    raise SystemExit(
+        f"{COMPILED_DSDL} is missing. Run `python3 server/startup_setup.py --recompile` first."
+    )
+datas = [
+    (str(COMPILED_DSDL), "python_compiled_messages"),
+    (str(DSDL_SOURCES), "dsdl_messages"),
+]
 
 a = Analysis(
     [str(SERVER_DIR / "main.py")],
@@ -125,7 +129,6 @@ a = Analysis(
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[str(Path(SPECPATH) / "frozen_hook.py")],
     excludes=[
         "tkinter",
         "matplotlib",
@@ -136,13 +139,10 @@ a = Analysis(
         "notebook",
         "pytest",
     ],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure)
 
 # Single-file executable so Tauri can manage it as one sidecar binary.
 exe = EXE(

@@ -5,21 +5,11 @@ so the numeric port-ID comes from the register's natural16 value and the DSDL
 type name from the sibling ".type" register.
 """
 
-import sys
 from unittest.mock import MagicMock
 
 import pytest
 
-# Mock pycyphal/uavcan so scanner_node imports without compiled DSDL on the path.
-for mod_name in [
-    "pycyphal", "pycyphal.application", "pycyphal.dsdl", "pycyphal.transport",
-    "uavcan", "uavcan.node", "uavcan.node.port", "uavcan.register",
-    "uavcan.primitive", "uavcan.diagnostic", "uavcan.pnp",
-]:
-    if mod_name not in sys.modules:
-        sys.modules[mod_name] = MagicMock()
-
-from scanner_node import ScannerNode
+from scanner_node import ScannerNode  # uavcan.* is stubbed in conftest.py
 
 
 class FakeRegisters:

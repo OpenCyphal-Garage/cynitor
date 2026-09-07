@@ -56,28 +56,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
+          cache-dependency-path: tests/e2e/requirements.txt
+
+      - name: Install Playwright
+        run: pip install -r tests/e2e/requirements.txt
 
       - name: Cache Playwright browsers
+        id: browser-cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}
+          # Keyed on the pinned Playwright version: each release expects a
+          # specific Chromium build, so a version bump must miss the cache.
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/requirements.txt') }}
 
-      - name: Install Playwright
-        run: |
-          pip install playwright
-          playwright install --with-deps chromium
+      - name: Install Chromium
+        if: steps.browser-cache.outputs.cache-hit != 'true'
+        run: playwright install chromium
 
-      - name: Serve frontend
-        # Static files only; these tests assert the disconnected state, so no
-        # backend is started. The run step waits for the port rather than
-        # sleeping a fixed interval.
-        run: |
-          python3 -m http.server 5500 --directory website &
-          curl --retry 30 --retry-delay 1 --retry-connrefused -sf -o /dev/null \
-            http://localhost:5500
+      - name: Install Chromium system dependencies
+        # apt packages are not cacheable; this is the smaller half.
+        run: playwright install-deps chromium
 
       - name: Run end-to-end tests
+        # The script serves website/ itself and shuts the server down after,
+        # so this is one step with no background process crossing a boundary.
         working-directory: tests/e2e
         run: python3 test_landing_page.py
 

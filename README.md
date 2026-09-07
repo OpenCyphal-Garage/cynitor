@@ -151,7 +151,6 @@ The token matters because the backend listens on localhost: while the app is ope
 packaging/
 ├── build.sh               # One-command build pipeline
 ├── cynitor-server.spec     # PyInstaller spec (single-file mode)
-├── frozen_hook.py          # Runtime path setup for DSDL in frozen binary
 └── tauri/
     ├── Cargo.toml          # Tauri v1 + shell-sidecar feature
     ├── tauri.conf.json     # Window size, CSP, sidecar path, bundle targets

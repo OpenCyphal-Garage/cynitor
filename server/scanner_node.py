@@ -163,6 +163,17 @@ class ScannerNode:
         except Exception:
             return False
 
+    @staticmethod
+    def _dsdl_type_to_module_name(dsdl_type: str) -> str:
+        """
+        Map a wire type name to its compiled Python module name.
+
+        "uavcan.node.Heartbeat.1.0" becomes "uavcan.node.Heartbeat_1_0": only
+        the dots before a version digit are rewritten, so namespace dots
+        survive and the result still splits into (namespace, class name).
+        """
+        return re.sub(r'(?<=\d)\.(?=\d)|(?<=\w)\.(?=\d)', '_', dsdl_type)
+
     async def _read_register(self, register_access_client, reg_name: str,
                              node_id: int) -> tuple[str | None, Any | None] | None:
         """
@@ -219,8 +230,7 @@ class ScannerNode:
             logging.warning(f"Type register '{type_reg_name}' has unexpected type '{type_field_name}' (expected string)")
             return None
 
-        dsdl_type = re.sub(r'(?<=\d)\.(?=\d)|(?<=\w)\.(?=\d)', '_', str(type_value))
-        return port_id, dsdl_type
+        return port_id, self._dsdl_type_to_module_name(str(type_value))
 
     async def update_reg_list(self, node_id: int) -> tuple[dict[int, str], dict[int, str]]:
         """
@@ -263,30 +273,29 @@ class ScannerNode:
 
             # Step 2: Process registers
             # Publishers and services are both advertised as
-            # "uavcan.<pub|srv>.<port_name>.id", so both resolve the same way.
+            # "uavcan.<pub|srv>.<port_name>.id" and resolve identically; only
+            # the valid ID range and the destination differ.
+            port_kinds = {
+                "pub": (dsdl_pub_messages, self.MAX_SUBJECT_ID, "subject"),
+                "srv": (dsdl_srv_messages, self.MAX_SERVICE_ID, "service"),
+            }
             for reg_name in register_names:
-                if re.search(r'\.pub\..*\.id$', reg_name):
-                    resolved = await self._resolve_port_register(
-                        register_access_client, reg_name, node_id, self.MAX_SUBJECT_ID, "subject"
-                    )
-                    if resolved:
-                        subject_id, dsdl_type = resolved
-                        dsdl_pub_messages[subject_id] = dsdl_type
-                        logging.debug(f"Node {node_id} subject {subject_id}: {dsdl_type}")
-
-                elif re.search(r'\.srv\..*\.id$', reg_name):
-                    resolved = await self._resolve_port_register(
-                        register_access_client, reg_name, node_id, self.MAX_SERVICE_ID, "service"
-                    )
-                    if resolved:
-                        service_id, dsdl_type = resolved
-                        dsdl_srv_messages[service_id] = dsdl_type
-                        logging.debug(f"Node {node_id} service {service_id}: {dsdl_type}")
+                kind = re.search(r'\.(pub|srv)\..*\.id$', reg_name)
+                if not kind:
+                    continue
+                target, max_port_id, label = port_kinds[kind.group(1)]
+                resolved = await self._resolve_port_register(
+                    register_access_client, reg_name, node_id, max_port_id, label
+                )
+                if resolved:
+                    port_id, dsdl_type = resolved
+                    target[port_id] = dsdl_type
+                    logging.debug(f"Node {node_id} {label} {port_id}: {dsdl_type}")
 
             # Step 3: Check for standard services
             for standard_service_id, service_type in self.STANDARD_SERVICES.items():
                 if standard_service_id not in dsdl_srv_messages:
-                    dsdl_srv_messages[standard_service_id] = re.sub(r'(?<=\d)\.(?=\d)|(?<=\w)\.(?=\d)', '_', service_type)
+                    dsdl_srv_messages[standard_service_id] = self._dsdl_type_to_module_name(service_type)
                     logging.debug(f"Node {node_id} standard service {standard_service_id}: {dsdl_srv_messages[standard_service_id]}")
 
             logging.debug(f"Node {node_id} has registered messages: {dsdl_pub_messages}, services: {dsdl_srv_messages}")

@@ -255,7 +255,6 @@ cynitor/
   packaging/
     build.sh                One-command desktop build pipeline
     cynitor-server.spec     PyInstaller spec (single-file sidecar)
-    frozen_hook.py          Runtime DSDL path setup for frozen binary
     tauri/
       Cargo.toml            Tauri v1 Rust project
       tauri.conf.json       Window, CSP, sidecar, bundle config
@@ -302,8 +301,8 @@ The `packaging/` directory builds a standalone desktop installer. The pipeline h
 
 - **Hidden imports** — pycyphal and python-can use dynamic imports extensively. The spec enumerates every submodule our code touches (transport.can, media.pythoncan, media.socketcan, application.*, etc.).
 - **Bundled data** — `python_compiled_messages/` (pre-compiled DSDL) and `dsdl_messages/` (source definitions) are packed into the binary.
-- **Runtime hook** (`frozen_hook.py`) — on startup, puts the extracted DSDL directory onto `sys.path` and `PYCYPHAL_PATH` so pycyphal can import the compiled types.
-- **Project root detection** — `startup_setup.resolve_project_root()` checks `sys.frozen` and returns `sys._MEIPASS` (PyInstaller's extraction dir) instead of `Path(__file__).parent.parent`. `main.py` imports the same helper, so both entry paths agree on where DSDL lives.
+- **Project root detection** — `startup_setup.resolve_project_root()` checks `sys.frozen` and returns `sys._MEIPASS` (PyInstaller's extraction dir) instead of `Path(__file__).parent.parent`. This is the only frozen-aware code: `prepare_runtime()` derives `sys.path`, `PYCYPHAL_PATH` and `CYPHAL_PATH` from it, and it runs inside `CANSession.connect()` before anything imports the generated `uavcan.*` packages, so no PyInstaller runtime hook is needed.
+- **Compiled DSDL is mandatory** — the spec aborts if `python_compiled_messages/` is absent, because `nnvg` is not bundled and the frozen binary cannot regenerate it. Run `python3 server/startup_setup.py --recompile` before building.
 
 ### Stage 2: Tauri (binary → native installer)
 
@@ -313,12 +312,12 @@ The `packaging/` directory builds a standalone desktop installer. The pipeline h
 2. Spawns `cynitor-server` as a child process via Tauri's sidecar API, passing the token in `CYNITOR_AUTH_TOKEN`.
 3. Blocks until a TCP connect to `127.0.0.1:8080` succeeds (up to 15 seconds).
 4. Forwards sidecar stdout/stderr to the Tauri log (visible in the terminal).
-5. Creates the window with an initialization script that sets `window.__CYNITOR_API_BASE` and `window.__CYNITOR_AUTH_TOKEN`.
-6. On window close, kills the sidecar process.
+5. Creates the window with an initialization script that sets `window.__CYNITOR = { apiBase, authToken }`.
+6. On exit, Tauri kills the sidecar: it registers every spawned sidecar and terminates them in its own shutdown path, so `main.rs` keeps no handle.
 
 **Why the token.** The backend listens on localhost, so while the app is open any page in the user's ordinary browser can reach it — and the CORS layer answers with `Access-Control-Allow-Origin: *`. Without a token, a random tab could enumerate nodes, write registers, and call services on the live CAN bus. The token is generated fresh per launch and never written to disk. Reading entropy is mandatory: if `/dev/urandom` cannot be read the app aborts rather than starting an open API.
 
-**Why an initialization script, not `eval`.** The script runs before any page script on every navigation, so the frontend's very first request already carries the token. A post-load `window.eval` would race the first poll and surface a spurious token prompt. `getAuthToken()` in `state.js` reads `localStorage` first and falls back to the injected value, so browser and desktop modes share one code path. The window is therefore built in `main.rs` rather than declared in `tauri.conf.json`, whose `windows` array is empty.
+**Why an initialization script, not `eval`.** The script runs before any page script on every navigation, so the frontend's very first request already carries the token. A post-load `window.eval` would race the first poll and surface a spurious token prompt. `state.js` reads the object through one `shellConfig()` accessor; `getAuthToken()` and the API-base loader both prefer an injected value over `localStorage`, because the shell owns the backend it spawned. Browser mode sees an empty object and behaves as before. The window is therefore built in `main.rs` rather than declared in `tauri.conf.json`, whose `windows` array is empty.
 
 `tauri.conf.json` configures:
 - `distDir` → points to `website/` (loaded into the webview as-is, no build step).
@@ -348,10 +347,11 @@ cd server && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -v -p pyte
 
 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` prevents ROS2 plugin conflicts in some environments. Required: `pip install pytest pytest-asyncio aiohttp`.
 
-Frontend e2e tests live in `.claude/tests/` and require the frontend running on port 5500:
+Frontend e2e tests live in `tests/e2e/` and serve `website/` themselves (or reuse a server already on port 5500):
 
 ```bash
-cd .claude/tests/01_landing_page && python test.py
+pip install -r tests/e2e/requirements.txt && playwright install chromium
+cd tests/e2e && python3 test_landing_page.py
 ```
 
 ## Conventions

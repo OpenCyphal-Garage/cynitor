@@ -1,6 +1,5 @@
 """Tests for NodeInfo class — lifecycle, state transitions, and timing."""
 
-import sys
 import datetime
 import time
 import collections
@@ -9,15 +8,7 @@ from unittest.mock import MagicMock, patch
 import numpy
 import pytest
 
-# Mock pycyphal/uavcan modules so node_info can be imported without them installed
-for mod_name in [
-    "pycyphal", "pycyphal.transport",
-    "uavcan", "uavcan.node", "uavcan.node.port",
-]:
-    if mod_name not in sys.modules:
-        sys.modules[mod_name] = MagicMock()
-
-from node_info import NodeInfo, NodeTime
+from node_info import NodeInfo, NodeTime  # uavcan.* is stubbed in conftest.py
 
 
 class TestNodeInfoInit:

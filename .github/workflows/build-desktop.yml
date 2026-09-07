@@ -68,34 +68,22 @@ jobs:
           fi
 
       - name: Compile DSDL
-        # python_compiled_messages/ is gitignored, and the frozen binary cannot
-        # regenerate it because nnvg is not bundled. If this directory is absent
-        # when PyInstaller runs, the spec silently omits it and the installer
-        # ships a backend that starts and then fails to import any type.
+        # python_compiled_messages/ is gitignored and the frozen binary cannot
+        # regenerate it (nnvg is not bundled), so it must exist before
+        # PyInstaller runs. The spec refuses to build without it.
         working-directory: server
         run: python startup_setup.py --recompile
-
-      - name: Verify compiled DSDL is present
-        # Turns the silent packaging trap above into a hard failure.
-        run: |
-          test -d python_compiled_messages/uavcan
-          test -d python_compiled_messages/reg
 
       - name: Build installers
         working-directory: packaging
         run: ./build.sh release
 
-      - name: Collect installers
-        run: |
-          mkdir -p dist-out
-          find packaging/tauri/target/release/bundle -type f \
-            \( -name '*.deb' -o -name '*.AppImage' \) -exec cp {} dist-out/ \;
-          ls -lh dist-out
-
       - uses: actions/upload-artifact@v4
         with:
           name: cynitor-linux-installers
-          path: dist-out/*
+          path: |
+            packaging/tauri/target/release/bundle/deb/*.deb
+            packaging/tauri/target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
 
       - name: Attach installers to release
@@ -105,4 +93,7 @@ jobs:
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" dist-out/* --clobber
+          gh release upload "$GITHUB_REF_NAME" \
+            packaging/tauri/target/release/bundle/deb/*.deb \
+            packaging/tauri/target/release/bundle/appimage/*.AppImage \
+            --clobber
