@@ -1,5 +1,7 @@
 # Cynitor
 
+[![Tests](https://github.com/OpenCyphal-Garage/cynitor/actions/workflows/test.yml/badge.svg?branch=dev)](https://github.com/OpenCyphal-Garage/cynitor/actions/workflows/test.yml)
+
 A standalone dashboard for monitoring [Cyphal](https://opencyphal.org/) (UAVCAN) networks over CAN bus.
 
 Cynitor watches the bus in real time, lists every node it discovers, and lets you drill into individual subjects to inspect message attributes and plot numeric values over time. GUI alternative to [yakut monitor](https://github.com/OpenCyphal/yakut).
