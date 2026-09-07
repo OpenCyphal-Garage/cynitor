@@ -32,11 +32,26 @@ class TestGetCanBitrate:
             assert _get_can_bitrate("can0") == 500000
 
 
+def make_monitor(iface: str = "vcan0", canbusload: str | None = "/usr/bin/canbusload"):
+    """Build a BusLoadMonitor with the canbusload probe pinned.
+
+    The monitor decides once, at construction, whether it is permanently
+    disabled by looking for 'canbusload' (from Linux can-utils) on PATH. Left
+    unpatched, these tests pass only on machines that happen to have can-utils
+    installed and invert on every machine that does not, CI runners included.
+    Pinning the probe keeps them about the monitor's logic, not about the host.
+
+    Pass canbusload=None to construct the disabled no-op variant.
+    """
+    with patch("main._get_can_bitrate", return_value=500000), \
+         patch("main.shutil.which", return_value=canbusload):
+        return BusLoadMonitor(iface)
+
+
 class TestBusLoadMonitor:
     @pytest.mark.asyncio
     async def test_start_and_stop(self):
-        with patch("main._get_can_bitrate", return_value=500000):
-            monitor = BusLoadMonitor("vcan0")
+        monitor = make_monitor()
 
         mock_proc = AsyncMock()
         mock_proc.returncode = None
@@ -57,8 +72,7 @@ class TestBusLoadMonitor:
 
     @pytest.mark.asyncio
     async def test_read_loop_parses_utilization(self):
-        with patch("main._get_can_bitrate", return_value=500000):
-            monitor = BusLoadMonitor("vcan0")
+        monitor = make_monitor()
 
         lines = [b"vcan0@500000  42%\n", b"vcan0@500000  73%\n", b""]
         line_iter = iter(lines)
@@ -78,13 +92,11 @@ class TestBusLoadMonitor:
         await monitor.stop()
 
     def test_is_alive_false_when_not_started(self):
-        with patch("main._get_can_bitrate", return_value=500000):
-            monitor = BusLoadMonitor("vcan0")
+        monitor = make_monitor()
         assert not monitor.is_alive
 
     def test_is_alive_false_when_process_exited(self):
-        with patch("main._get_can_bitrate", return_value=500000):
-            monitor = BusLoadMonitor("vcan0")
+        monitor = make_monitor()
         mock_proc = MagicMock()
         mock_proc.returncode = 1
         monitor._proc = mock_proc
@@ -92,7 +104,31 @@ class TestBusLoadMonitor:
 
     @pytest.mark.asyncio
     async def test_stop_when_not_started(self):
-        with patch("main._get_can_bitrate", return_value=500000):
-            monitor = BusLoadMonitor("vcan0")
+        monitor = make_monitor()
         await monitor.stop()
+        assert monitor.utilization == 0.0
+
+
+class TestBusLoadMonitorWithoutCanUtils:
+    """Behaviour on hosts with no 'canbusload' binary, such as CI runners."""
+
+    def test_disabled_when_canbusload_missing(self):
+        monitor = make_monitor(canbusload=None)
+        assert monitor._disabled
+
+    def test_reports_alive_when_disabled(self):
+        # Deliberate: the health watchdog in _register_loop treats a dead
+        # monitor as a reason to drop the CAN session, so the permanently
+        # disabled no-op must not look dead or it would force false
+        # disconnects on every machine without can-utils.
+        monitor = make_monitor(canbusload=None)
+        assert monitor.is_alive
+
+    @pytest.mark.asyncio
+    async def test_start_does_not_spawn_a_process(self):
+        monitor = make_monitor(canbusload=None)
+        with patch("main.asyncio.create_subprocess_exec") as spawn:
+            await monitor.start()
+        spawn.assert_not_called()
+        assert monitor._proc is None
         assert monitor.utilization == 0.0
