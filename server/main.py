@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from log_store import InMemoryLogStore, APILogHandler
-from startup_setup import prepare_runtime
+from startup_setup import prepare_runtime, resolve_project_root
 
 IS_LINUX = sys.platform.startswith("linux")
 
@@ -580,8 +580,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     from dsdl_manager import DsdlManager
 
     session = CANSession()
-    project_root = Path(__file__).resolve().parent.parent
-    dsdl_mgr = DsdlManager(project_root)
+    dsdl_mgr = DsdlManager(resolve_project_root())
 
     # Optional bearer-token auth. When CYNITOR_AUTH_TOKEN is set in the
     # environment, every REST/WS request outside /api/health must present

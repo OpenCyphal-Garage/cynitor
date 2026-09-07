@@ -64,7 +64,7 @@ Open `http://localhost:5500` and click **Connect** in the sidebar.
 - **Hover crosshair + tooltip** with timestamp and per-series values that update in real time as data scrolls under the cursor. Click to pause, drag to pan, scroll to zoom, double-click to reset.
 - **Compare view** — independent graphs for side-by-side multi-series comparison with derived series (delta, ratio, moving average, min/max, rate of change), thresholds, timeline markers (Shift+click), freehand drawing (Alt+drag), crosshair sync across graphs, and workspace export/import.
 - **DSDL Inspector** — searchable tree of all loaded DSDL types with bus-activity indicators (which types are actually being seen on the wire), field-level search, and dependency navigation. Create, edit, and delete custom DSDL types under `dsdl_messages/custom/` with a compile-state lock.
-- **Recordings** — capture filtered events into per-recording SQLite stores with `max_length` / `max_events` limits and `stop_on_limit`. Quick-save the last N seconds from the global buffer, duplicate a configuration with "New like this", edit limits on live recordings without stopping them, and export per recording as CSV or JSON.
+- **Recordings** — capture filtered events into per-recording SQLite stores with `max_length` / `max_events` limits and `stop_on_limit`. Quick-save the last N seconds from the global buffer, duplicate a configuration with "New like this", edit limits on live recordings without stopping them, and export per recording as CSV or JSONL. Replay any recording through the live UI with play/pause/seek/speed controls.
 - **Right log panel** — hidden by default, resizable; merges live `uavcan.diagnostic.Record` (subject 8184), any user-added text-bearing subject, and the backend's Python logs (polled from `/api/logs`) into one timeline. Per-source toggle pills with live count badges, severity floor across all sources, amber disconnect indicator when the backend is unreachable.
 - **Dark / light theme**, sidebar collapse, resizable detail panel.
 - **Auto-reconnect** on transient backend or frontend-server outages.
@@ -96,6 +96,66 @@ python3 main.py --can pythoncan:pcan:PCAN_USBBUS1
 ```
 
 The bus-load monitor self-disables when `canbusload` is not on PATH (utilization stays at 0%); the rest of the stack — REST/WebSocket server, DSDL Inspector, recordings, log panel, telemetry — works the same on all three OSes. Install whichever `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) and pass its transport string.
+
+## Desktop App
+
+Cynitor can be packaged as a standalone desktop application using [Tauri](https://tauri.app/). The installer bundles the Python backend as a frozen sidecar binary — no Python installation required on the target machine.
+
+### Building
+
+Prerequisites (one-time):
+
+```bash
+# System libraries (Ubuntu/Debian)
+sudo apt-get install -y libwebkit2gtk-4.0-dev libgtk-3-dev librsvg2-dev patchelf
+
+# Rust toolchain
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Python build tool
+pip install pyinstaller
+```
+
+Build:
+
+```bash
+cd packaging
+./build.sh            # debug build
+./build.sh release    # .deb + .AppImage installers
+```
+
+The release build produces:
+
+| Format | Location |
+|--------|----------|
+| `.deb` | `packaging/tauri/target/release/bundle/deb/cynitor_*.deb` |
+| `.AppImage` | `packaging/tauri/target/release/bundle/appimage/cynitor_*.AppImage` |
+
+### How it works
+
+```
+Tauri shell (native window + system webview)
+├── website/           loaded directly into the webview
+└── cynitor-server     PyInstaller single-file sidecar
+```
+
+On launch, the Tauri shell generates a random bearer token, spawns the Python backend sidecar with that token in `CYNITOR_AUTH_TOKEN`, waits for it to start listening on `localhost:8080`, then loads the frontend into the webview with the token already injected. The frontend connects to the backend the same way it does in browser mode, and authenticates without prompting. On exit, the sidecar is killed automatically.
+
+The token matters because the backend listens on localhost: while the app is open, any page in your ordinary browser could otherwise reach the API and command nodes on the bus. A fresh token per launch closes that off, and it is never written to disk.
+
+### Packaging structure
+
+```
+packaging/
+├── build.sh               # One-command build pipeline
+├── cynitor-server.spec     # PyInstaller spec (single-file mode)
+├── frozen_hook.py          # Runtime path setup for DSDL in frozen binary
+└── tauri/
+    ├── Cargo.toml          # Tauri v1 + shell-sidecar feature
+    ├── tauri.conf.json     # Window size, CSP, sidecar path, bundle targets
+    ├── src/main.rs         # Sidecar lifecycle: token → spawn → wait → window → kill
+    └── icons/icon.png      # App icon (replace with final design)
+```
 
 ## Troubleshooting
 

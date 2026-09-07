@@ -163,6 +163,65 @@ class ScannerNode:
         except Exception:
             return False
 
+    async def _read_register(self, register_access_client, reg_name: str,
+                             node_id: int) -> tuple[str | None, Any | None] | None:
+        """
+        Read one register by name.
+
+        Returns the (field_name, value) pair of the register's union value, or
+        None when the node did not answer.
+        """
+        request = uavcan.register.Access_1_0.Request(
+            name=uavcan.register.Name_1_0(name=reg_name.encode("utf-8"))
+        )
+        response_tuple = await asyncio.wait_for(
+            register_access_client.call(request), timeout=self.REGISTER_TIMEOUT
+        )
+        if not response_tuple or not response_tuple[0]:
+            logging.warning(f"Failed to access register '{reg_name}' for node {node_id}")
+            return None
+        return self._find_non_none_field(response_tuple[0].value)
+
+    async def _resolve_port_register(self, register_access_client, reg_name: str, node_id: int,
+                                     max_port_id: int, label: str) -> tuple[int, str] | None:
+        """
+        Resolve a "uavcan.<pub|srv>.<port_name>.id" register into (port_id, dsdl_type).
+
+        Ports are advertised by name, not by number, so the numeric ID lives in
+        the register's value (a natural16) and the DSDL type name in the sibling
+        ".type" register (a string). The legacy "uavcan.srv.<digits>.type" form is
+        a subset of this shape and still resolves. Returns None when either
+        register is missing or malformed.
+        """
+        id_fields = await self._read_register(register_access_client, reg_name, node_id)
+        if id_fields is None:
+            return None
+        field_name, value = id_fields
+        if field_name != 'natural16':
+            logging.warning(f"Register '{reg_name}' has unexpected type '{field_name}' (expected natural16)")
+            return None
+
+        try:
+            port_id = int(value[0])  # Natural16 is an array with one element
+        except (TypeError, ValueError, IndexError) as e:
+            logging.warning(f"Invalid {label}-ID in register '{reg_name}': {value}, error: {e}")
+            return None
+        if not (0 <= port_id <= max_port_id):
+            logging.warning(f"Invalid {label}-ID {port_id} in register '{reg_name}' for node {node_id}")
+            return None
+
+        type_reg_name = re.sub(r'\.id$', '.type', reg_name)
+        type_fields = await self._read_register(register_access_client, type_reg_name, node_id)
+        if type_fields is None:
+            return None
+        type_field_name, type_value = type_fields
+        if type_field_name != 'string':
+            logging.warning(f"Type register '{type_reg_name}' has unexpected type '{type_field_name}' (expected string)")
+            return None
+
+        dsdl_type = re.sub(r'(?<=\d)\.(?=\d)|(?<=\w)\.(?=\d)', '_', str(type_value))
+        return port_id, dsdl_type
+
     async def update_reg_list(self, node_id: int) -> tuple[dict[int, str], dict[int, str]]:
         """
         Read node registers and return dictionaries where subject/service IDs are keys and message/service types are values.
@@ -203,87 +262,26 @@ class ScannerNode:
                 index += 1
 
             # Step 2: Process registers
+            # Publishers and services are both advertised as
+            # "uavcan.<pub|srv>.<port_name>.id", so both resolve the same way.
             for reg_name in register_names:
-                # Process publisher registers (uavcan.pub.<port_name>.id)
                 if re.search(r'\.pub\..*\.id$', reg_name):
-                    access_request = uavcan.register.Access_1_0.Request(
-                        name=uavcan.register.Name_1_0(name=reg_name.encode("utf-8"))
+                    resolved = await self._resolve_port_register(
+                        register_access_client, reg_name, node_id, self.MAX_SUBJECT_ID, "subject"
                     )
-                    access_response_tuple = await asyncio.wait_for(
-                        register_access_client.call(access_request), timeout=self.REGISTER_TIMEOUT
+                    if resolved:
+                        subject_id, dsdl_type = resolved
+                        dsdl_pub_messages[subject_id] = dsdl_type
+                        logging.debug(f"Node {node_id} subject {subject_id}: {dsdl_type}")
+
+                elif re.search(r'\.srv\..*\.id$', reg_name):
+                    resolved = await self._resolve_port_register(
+                        register_access_client, reg_name, node_id, self.MAX_SERVICE_ID, "service"
                     )
-                    if not access_response_tuple or not access_response_tuple[0]:
-                        logging.warning(f"Failed to access register '{reg_name}' for node {node_id}")
-                        continue
-
-                    access_response = access_response_tuple[0]
-                    field_name, value = self._find_non_none_field(access_response.value)
-
-                    if field_name != 'natural16':
-                        logging.warning(f"Register '{reg_name}' has unexpected type '{field_name}' (expected natural16)")
-                        continue
-
-                    try:
-                        subject_id = int(value[0])  # Natural16 is an array with one element
-                        if not (0 <= subject_id <= self.MAX_SUBJECT_ID):
-                            logging.warning(f"Invalid subject-ID {subject_id} in register '{reg_name}' for node {node_id}")
-                            continue
-                    except (TypeError, ValueError, IndexError) as e:
-                        logging.warning(f"Invalid subject-ID in register '{reg_name}': {value}, error: {e}")
-                        continue
-
-                    type_reg_name = re.sub(r'\.id$', '.type', reg_name)
-                    type_access_request = uavcan.register.Access_1_0.Request(
-                        name=uavcan.register.Name_1_0(name=type_reg_name.encode("utf-8"))
-                    )
-                    type_access_response_tuple = await asyncio.wait_for(
-                        register_access_client.call(type_access_request), timeout=self.REGISTER_TIMEOUT
-                    )
-                    if not type_access_response_tuple or not type_access_response_tuple[0]:
-                        logging.warning(f"Failed to access type register '{type_reg_name}' for node {node_id}")
-                        continue
-
-                    type_access_response = type_access_response_tuple[0]
-                    type_field_name, type_value = self._find_non_none_field(type_access_response.value)
-                    if type_field_name != 'string':
-                        logging.warning(f"Type register '{type_reg_name}' has unexpected type '{type_field_name}' (expected string)")
-                        continue
-
-                    value_str = str(type_value)
-                    dots_to_underscores = re.sub(r'(?<=\d)\.(?=\d)|(?<=\w)\.(?=\d)', '_', value_str)
-                    dsdl_pub_messages[subject_id] = dots_to_underscores
-                    logging.debug(f"Node {node_id} subject {subject_id}: {dots_to_underscores}")
-
-                # Process service registers (uavcan.srv.<service_id>.type)
-                elif re.match(r'^uavcan\.srv\.(\d+)\.type$', reg_name):
-                    service_id_match = re.match(r'^uavcan\.srv\.(\d+)\.type$', reg_name)
-                    service_id = int(service_id_match.group(1))
-                    
-                    # Validate service ID
-                    if not (0 <= service_id <= self.MAX_SERVICE_ID):
-                        logging.warning(f"Invalid service ID {service_id} in register '{reg_name}' for node {node_id}")
-                        continue
-
-                    access_request = uavcan.register.Access_1_0.Request(
-                        name=uavcan.register.Name_1_0(name=reg_name.encode("utf-8"))
-                    )
-                    access_response_tuple = await asyncio.wait_for(
-                        register_access_client.call(access_request), timeout=5.0
-                    )
-                    if not access_response_tuple or not access_response_tuple[0]:
-                        logging.warning(f"Failed to access service register '{reg_name}' for node {node_id}")
-                        continue
-
-                    access_response = access_response_tuple[0]
-                    field_name, value = self._find_non_none_field(access_response.value)
-                    if field_name != 'string':
-                        logging.warning(f"Service register '{reg_name}' has unexpected type '{field_name}' (expected string)")
-                        continue
-
-                    value_str = str(value)
-                    dots_to_underscores = re.sub(r'(?<=\d)\.(?=\d)|(?<=\w)\.(?=\d)', '_', value_str)
-                    dsdl_srv_messages[service_id] = dots_to_underscores
-                    logging.debug(f"Node {node_id} service {service_id}: {dots_to_underscores}")
+                    if resolved:
+                        service_id, dsdl_type = resolved
+                        dsdl_srv_messages[service_id] = dsdl_type
+                        logging.debug(f"Node {node_id} service {service_id}: {dsdl_type}")
 
             # Step 3: Check for standard services
             for standard_service_id, service_type in self.STANDARD_SERVICES.items():
@@ -434,26 +432,21 @@ class ScannerNode:
             client_key = (node_id, service_id)
             client = self.service_clients.get(client_key)
 
-            metadata = self.service_metadata.get(client_key)
-
-            namespace = metadata["namespace"]
-            service_name = metadata["service_name"]
-
-            module = importlib.import_module(namespace)
-            service_class = getattr(module, service_name)
-
-            # Get the Request class
-            request_class = getattr(service_class, "Request", None)
-            if not request_class:
-                logging.error(f"No Request class found for service {service_type}")
-                raise ValueError(f"No Request class found for service {service_type}")
-
-            # Get the cached client
-            
+            # Get the cached client first — the request must be built from the
+            # SAME class the client was created with. Re-importing the module here
+            # can yield a different class object (e.g. after a custom-DSDL
+            # recompile drops the module from sys.modules), which makes
+            # client.call() reject the request with a confusing "expected X, got X"
+            # identity mismatch. Sourcing Request from client.dtype avoids that.
             if not client:
                 logging.error(f"No client found for service {service_id} on node {node_id}")
                 raise ValueError(f"No client found for service {service_id} on node {node_id}")
             logging.debug(f"Using cached client for service {service_id} on node {node_id}")
+
+            request_class = getattr(client.dtype, "Request", None)
+            if not request_class:
+                logging.error(f"No Request class found for service {service_type}")
+                raise ValueError(f"No Request class found for service {service_type}")
 
             # Instantiate the request object
             request = request_class()

@@ -376,7 +376,14 @@ const wsBase = () => apiBase().replace(/^http/, 'ws');
 
 const AUTH_TOKEN_KEY = 'cynitor.auth.token';
 const getAuthToken = () => {
-  try { return localStorage.getItem(AUTH_TOKEN_KEY) || ''; } catch (_) { return ''; }
+  try {
+    const stored = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (stored) return stored;
+  } catch (_) {}
+  // The desktop shell generates a token per launch, hands it to the backend,
+  // and injects it here before any page script runs — so the packaged app
+  // authenticates without ever prompting.
+  return window.__CYNITOR_AUTH_TOKEN || '';
 };
 const setAuthToken = (token) => {
   try {
@@ -626,6 +633,11 @@ const loadSettings = () => {
   const settings = readSettings();
   if (typeof settings.apiBase === 'string' && settings.apiBase.trim()) {
     el('apiBase').value = settings.apiBase;
+  }
+  // The desktop shell owns the backend it spawned, so its address wins over a
+  // saved value that could only have come from a different setup.
+  if (typeof window.__CYNITOR_API_BASE === 'string' && window.__CYNITOR_API_BASE) {
+    el('apiBase').value = window.__CYNITOR_API_BASE;
   }
   if (settings.tableSort && settings.tableSort.key) {
     state.tableSort = settings.tableSort;

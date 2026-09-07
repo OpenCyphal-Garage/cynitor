@@ -86,6 +86,8 @@ With the variable set, every REST and WebSocket request outside `/api/health` mu
 
 Unauthenticated requests get `HTTP 401 {"error": "missing or invalid token"}`. With the variable unset the server runs open — same behaviour as before this option existed. The frontend prompts the user to paste the token on the first 401 and stores it in `localStorage` under `cynitor.auth.token`.
 
+The desktop build always sets the variable. The Tauri shell generates a random token per launch, passes it to the sidecar in `CYNITOR_AUTH_TOKEN`, and injects it into the webview as `window.__CYNITOR_AUTH_TOKEN` before any page script runs. `getAuthToken()` reads `localStorage` first and falls back to that global, so the packaged app authenticates without prompting and the token never reaches disk.
+
 ### 3. Runtime Environment
 
 At startup, Python setup runs automatically and configures:
@@ -867,7 +869,7 @@ Named captures with optional length/event-count limits. Two storage modes:
 - **`dedicated`** (default for new recordings) — matching subject events and service calls stream into a per-recording table (`recording_events`) from the moment the recording starts. Survives the global buffer's retention. Quick-save snapshots matching events from the global buffer into the same table at creation time.
 - **`global`** — Phase 1 bookmarks. Metadata only; export reads from the shared `events` table within the recording's time-range × filter. Subject to global retention.
 
-All recording endpoints return `503` if no `event_logger` is initialized (no CAN session yet).
+All recording endpoints return `503` if no `event_logger` is initialized (no CAN session yet), **except** `GET /api/recordings`, which returns `200 { recordings: [] }` so the frontend's startup poll doesn't error before CAN is connected.
 
 #### List, create, inspect
 

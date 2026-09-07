@@ -224,6 +224,7 @@ cynitor/
     log_store.py            In-memory log buffer for /api/logs
     dsdl_manager.py         DSDL discovery, namespace tree, custom-type CRUD
     replay.py               Recording replay engine (subscriber queues + timing)
+    frame_capture.py        Raw CAN frame capture (transport-level tap)
     requirements.txt        Python runtime deps
     requirements-dev.txt    Adds pytest + pytest-asyncio for the test suite
     tests/                  pytest unit tests
@@ -243,6 +244,7 @@ cynitor/
     dsdl-view.js            DSDL Inspector view + custom-type editor
     record-view.js          Record tab: pickers, per-recording cards, export, replay launcher
     replay-strip.js         Replay playback strip: scrub, speed, pause/stop/finish-mode
+    debug-view.js           Raw CAN frame debugging view (opt-in capture)
     log-panel.js            Right log panel: Cyphal + Server feeds, picker, filters
     connection.js           WS + polling + lifecycle
     app.js                  Boot, bindings, heartbeat, view switching
@@ -250,6 +252,14 @@ cynitor/
   dsdl_messages/
     public_regulated_data_types/   git submodule (uavcan/, reg/)
     custom/                        user-created DSDL types (gitignored content)
+  packaging/
+    build.sh                One-command desktop build pipeline
+    cynitor-server.spec     PyInstaller spec (single-file sidecar)
+    frozen_hook.py          Runtime DSDL path setup for frozen binary
+    tauri/
+      Cargo.toml            Tauri v1 Rust project
+      tauri.conf.json       Window, CSP, sidecar, bundle config
+      src/main.rs           Sidecar lifecycle, per-launch auth token, window setup
   python_compiled_messages/ nnvg output (gitignored)
   README.md                 User-facing intro
   TECHNICAL.md              This file
@@ -281,6 +291,52 @@ cynitor/
 ### Adding a new plot derivative
 
 The plot in `detail-panel.js#renderPlot` operates on `state.subjectHistory["{subject_id}:{attr}"]` time series. Per-attribute panels are joined by attribute name; new attributes appear automatically once they arrive in cached events.
+
+## Packaging (Desktop Distribution)
+
+The `packaging/` directory builds a standalone desktop installer. The pipeline has two stages:
+
+### Stage 1: PyInstaller (Python → single-file binary)
+
+`cynitor-server.spec` freezes the entire `server/` directory, plus bundled DSDL types, into one executable. Key concerns:
+
+- **Hidden imports** — pycyphal and python-can use dynamic imports extensively. The spec enumerates every submodule our code touches (transport.can, media.pythoncan, media.socketcan, application.*, etc.).
+- **Bundled data** — `python_compiled_messages/` (pre-compiled DSDL) and `dsdl_messages/` (source definitions) are packed into the binary.
+- **Runtime hook** (`frozen_hook.py`) — on startup, puts the extracted DSDL directory onto `sys.path` and `PYCYPHAL_PATH` so pycyphal can import the compiled types.
+- **Project root detection** — `startup_setup.resolve_project_root()` checks `sys.frozen` and returns `sys._MEIPASS` (PyInstaller's extraction dir) instead of `Path(__file__).parent.parent`. `main.py` imports the same helper, so both entry paths agree on where DSDL lives.
+
+### Stage 2: Tauri (binary → native installer)
+
+`packaging/tauri/` is a Tauri v1 Rust project that wraps the webview and manages the sidecar lifecycle:
+
+1. `main.rs` reads 32 bytes from `/dev/urandom` and hex-encodes them into a per-launch auth token.
+2. Spawns `cynitor-server` as a child process via Tauri's sidecar API, passing the token in `CYNITOR_AUTH_TOKEN`.
+3. Blocks until a TCP connect to `127.0.0.1:8080` succeeds (up to 15 seconds).
+4. Forwards sidecar stdout/stderr to the Tauri log (visible in the terminal).
+5. Creates the window with an initialization script that sets `window.__CYNITOR_API_BASE` and `window.__CYNITOR_AUTH_TOKEN`.
+6. On window close, kills the sidecar process.
+
+**Why the token.** The backend listens on localhost, so while the app is open any page in the user's ordinary browser can reach it — and the CORS layer answers with `Access-Control-Allow-Origin: *`. Without a token, a random tab could enumerate nodes, write registers, and call services on the live CAN bus. The token is generated fresh per launch and never written to disk. Reading entropy is mandatory: if `/dev/urandom` cannot be read the app aborts rather than starting an open API.
+
+**Why an initialization script, not `eval`.** The script runs before any page script on every navigation, so the frontend's very first request already carries the token. A post-load `window.eval` would race the first poll and surface a spurious token prompt. `getAuthToken()` in `state.js` reads `localStorage` first and falls back to the injected value, so browser and desktop modes share one code path. The window is therefore built in `main.rs` rather than declared in `tauri.conf.json`, whose `windows` array is empty.
+
+`tauri.conf.json` configures:
+- `distDir` → points to `website/` (loaded into the webview as-is, no build step).
+- `externalBin` → the sidecar binary, named with the target triple suffix.
+- `security.csp` → allows `cdn.jsdelivr.net` (D3) and `unpkg.com` (Tabulator) for scripts and styles, plus `localhost:8080` and `127.0.0.1:8080` for API/WS. Both CDN hosts must stay listed or the corresponding library silently fails to load in the packaged app.
+- `allowlist.shell.scope` → the sidecar entry sets `args: false`, so page script cannot respawn the backend with attacker-chosen flags such as `--bind 0.0.0.0`.
+- `bundle.targets` → `deb` and `appimage` for Linux.
+
+### Build flow
+
+```
+./build.sh release
+  ├─ PyInstaller  → dist/cynitor-server  (54 MB single-file binary)
+  ├─ Copy         → tauri/sidecar/cynitor-server-<triple>
+  └─ cargo tauri build
+       ├─ cynitor_0.1.0_amd64.deb      (~58 MB)
+       └─ cynitor_0.1.0_amd64.AppImage (~148 MB)
+```
 
 ## Testing
 
