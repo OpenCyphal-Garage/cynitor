@@ -24,7 +24,7 @@ jobs:
       contents: write  # attach installers to the Release on a tag build
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # public_regulated_data_types supplies the uavcan/ and reg/ trees the
           # DSDL compile step reads.
@@ -45,7 +45,7 @@ jobs:
           fi
           echo "Version $declared matches tag $GITHUB_REF_NAME"
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.10'
           cache: pip
@@ -65,7 +65,7 @@ jobs:
         # locally, which is slow to save and restore and crowds out the repo's
         # 10 GB cache budget. Caching ~/.cargo/bin is the big win here, since it
         # turns the Tauri CLI install below into a no-op.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/bin
@@ -93,7 +93,7 @@ jobs:
         working-directory: packaging
         run: ./build.sh release
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: cynitor-linux-installers
           path: |
