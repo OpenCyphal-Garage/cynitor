@@ -333,8 +333,8 @@ The `packaging/` directory builds a standalone desktop installer. The pipeline h
   ├─ PyInstaller  → dist/cynitor-server  (54 MB single-file binary)
   ├─ Copy         → tauri/sidecar/cynitor-server-<triple>
   └─ cargo tauri build
-       ├─ cynitor_0.1.0_amd64.deb      (~58 MB)
-       └─ cynitor_0.1.0_amd64.AppImage (~148 MB)
+       ├─ cynitor_<version>_amd64.deb      (~58 MB)
+       └─ cynitor_<version>_amd64.AppImage (~148 MB)
 ```
 
 ### Versioning and releases
