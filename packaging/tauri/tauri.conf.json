@@ -4,8 +4,7 @@
     "withGlobalTauri": false
   },
   "package": {
-    "productName": "Cynitor",
-    "version": "0.1.0"
+    "productName": "Cynitor"
   },
   "tauri": {
     "bundle": {

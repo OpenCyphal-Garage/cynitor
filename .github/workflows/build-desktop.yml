@@ -30,6 +30,21 @@ jobs:
           # DSDL compile step reads.
           submodules: recursive
 
+      - name: Check the tag matches the declared version
+        # Installers are named from packaging/tauri/Cargo.toml, so a tag that
+        # disagrees would attach e.g. cynitor_0.1.0_amd64.deb to a v0.2.0
+        # release. Fail before spending ten minutes building the wrong thing.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          declared=$(grep -m1 '^version' packaging/tauri/Cargo.toml | cut -d'"' -f2)
+          tagged="${GITHUB_REF_NAME#v}"
+          if [ "$declared" != "$tagged" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match the version in packaging/tauri/Cargo.toml ($declared)."
+            echo "Bump that version, commit, delete the tag, and re-tag."
+            exit 1
+          fi
+          echo "Version $declared matches tag $GITHUB_REF_NAME"
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'

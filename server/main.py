@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -642,6 +643,51 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
         logger.info("Shutdown complete")
 
 
+def _shutdown_on_sigterm(_signum, _frame) -> None:
+    """Turn SIGTERM into the interrupt the entry point already handles.
+
+    Without this, SIGTERM kills the process outright and `main`'s finally
+    block never runs, so the CAN session and HTTP server are not closed down.
+    """
+    raise KeyboardInterrupt
+
+
+def _exit_when_parent_dies() -> None:
+    """Ask the kernel to signal us when our parent process goes away.
+
+    In the packaged app the backend is a PyInstaller single-file binary: a
+    bootloader parent with this interpreter as its child. The desktop shell
+    kills the bootloader with SIGKILL, which cannot be forwarded, so without
+    this the server outlives the closing window and keeps holding port 8080.
+    The next launch would then find that stale server answering, and
+    authenticate its fresh token against it.
+
+    Linux only; a no-op elsewhere.
+    """
+    if not IS_LINUX:
+        return
+    original_ppid = os.getppid()
+    try:
+        import ctypes
+
+        PR_SET_PDEATHSIG = 1
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        if libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0) != 0:
+            logger.debug("prctl(PR_SET_PDEATHSIG) failed; parent-death cleanup disabled")
+            return
+    except Exception as exc:
+        logger.debug("Parent-death cleanup unavailable: %s", exc)
+        return
+
+    # Closes the race where the parent exited before the call above landed, in
+    # which case the signal will never arrive. Compare against the parent we
+    # started with rather than against pid 1: an orphan is reparented to the
+    # nearest subreaper, which is only init when no other one is registered.
+    if os.getppid() != original_ppid:
+        logger.warning("Parent process exited during startup; shutting down")
+        raise SystemExit(0)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the telemetry server")
     parser.add_argument(
@@ -660,6 +706,9 @@ if __name__ == "__main__":
         help="Host/IP to bind the HTTP server to (default: 127.0.0.1; use 0.0.0.0 to expose on the network)",
     )
     args = parser.parse_args()
+
+    signal.signal(signal.SIGTERM, _shutdown_on_sigterm)
+    _exit_when_parent_dies()
 
     try:
         asyncio.run(main(can_iface=args.can, force_compile=args.recompile, bind=args.bind))

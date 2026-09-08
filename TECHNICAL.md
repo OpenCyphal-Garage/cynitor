@@ -337,6 +337,38 @@ The `packaging/` directory builds a standalone desktop installer. The pipeline h
        └─ cynitor_0.1.0_amd64.AppImage (~148 MB)
 ```
 
+### Versioning and releases
+
+The version lives in exactly one place, `packaging/tauri/Cargo.toml`.
+`tauri.conf.json` deliberately omits `package.version` so Tauri falls back to
+the Cargo manifest, and the installer filenames follow from it.
+
+To cut a release, bump that version first, then tag to match:
+
+```bash
+# edit packaging/tauri/Cargo.toml -> version = "0.2.0"
+git commit -am "Release 0.2.0" && git push
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The tag triggers `build-desktop.yml`, which refuses to build when the tag and
+the manifest disagree, so a `v0.2.0` tag can never publish installers named
+`0.1.0`. If it rejects you, bump the manifest, delete the tag, and re-tag.
+
+### Process lifetime
+
+The backend is a PyInstaller single-file binary: a bootloader parent with the
+interpreter as its child. Tauri kills the bootloader with `SIGKILL`, which
+cannot be forwarded, so `main.py` arms `PR_SET_PDEATHSIG` at startup to be
+signalled when its parent dies. Without it the server outlives the closing
+window, keeps port 8080, and the next launch authenticates a fresh token
+against that stale server. `SIGTERM` is routed into the existing interrupt
+path so the CAN session and HTTP server shut down in order.
+
+The orphan guard compares against the parent recorded at startup rather than
+against pid 1, because an orphan is reparented to the nearest subreaper, which
+is only init when no other one is registered.
+
 ## Testing
 
 Backend unit tests live in `server/tests/`:
