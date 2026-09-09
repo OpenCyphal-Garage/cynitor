@@ -576,12 +576,14 @@ async def _event_logger_loop(event_logger, queue: asyncio.Queue) -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 
-async def main(can_iface: Optional[str] = None, force_compile: bool = False, bind: str = "127.0.0.1") -> None:
+async def main(can_iface: Optional[str] = None, force_compile: bool = False, bind: str = "127.0.0.1",
+               serve_frontend: bool = True) -> None:
     from websocket_server import WebSocketServer
     from dsdl_manager import DsdlManager
 
     session = CANSession()
-    dsdl_mgr = DsdlManager(resolve_project_root())
+    project_root = resolve_project_root()
+    dsdl_mgr = DsdlManager(project_root)
 
     # Optional bearer-token auth. When CYNITOR_AUTH_TOKEN is set in the
     # environment, every REST/WS request outside /api/health must present
@@ -596,6 +598,11 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
         log_store=_log_store,
         dsdl_manager=dsdl_mgr,
         auth_token=auth_token,
+        # Serve the dashboard too, so deploying to a server is one binary and
+        # clients need only a browser. --no-frontend turns that off for
+        # API-only deployments, and a checkout without website/ is API-only
+        # regardless.
+        website_dir=(project_root / "website") if serve_frontend else None,
     )
     await ws_server.start()
 
@@ -611,6 +618,10 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("REST API:    http://localhost:8080/api/")
     logger.info("Health:      http://localhost:8080/api/health")
     logger.info("Status:      http://localhost:8080/api/status")
+    if ws_server.website_dir:
+        logger.info("Dashboard:   http://localhost:8080/")
+    else:
+        logger.info("Dashboard:   not served (API only)")
     if can_iface:
         logger.info("Mode:        direct  (attached to %s at startup)", can_iface)
     else:
@@ -620,6 +631,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0)")
     logger.info("  --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)")
     logger.info("  --recompile      force DSDL recompilation via nnvg")
+    logger.info("  --no-frontend    serve only the API and WebSocket, not the dashboard")
     logger.info("  --help           full reference")
     if can_iface:
         logger.info("Selection-mode startup (no --can): connect from the UI or POST /api/can/connect")
@@ -705,13 +717,23 @@ if __name__ == "__main__":
         default="127.0.0.1",
         help="Host/IP to bind the HTTP server to (default: 127.0.0.1; use 0.0.0.0 to expose on the network)",
     )
+    parser.add_argument(
+        "--no-frontend",
+        action="store_true",
+        help="Serve only the REST API and WebSocket; do not serve the dashboard",
+    )
     args = parser.parse_args()
 
     signal.signal(signal.SIGTERM, _shutdown_on_sigterm)
     _exit_when_parent_dies()
 
     try:
-        asyncio.run(main(can_iface=args.can, force_compile=args.recompile, bind=args.bind))
+        asyncio.run(main(
+            can_iface=args.can,
+            force_compile=args.recompile,
+            bind=args.bind,
+            serve_frontend=not args.no_frontend,
+        ))
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
     except Exception as e:

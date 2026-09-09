@@ -34,7 +34,10 @@ python3 main.py --can vcan0       # connect to a known interface
 python3 main.py                   # pick the interface from the UI later
 ```
 
-The HTTP server starts on `http://localhost:8080`.
+The HTTP server starts on `http://localhost:8080`, and serves the dashboard
+there as well as the API. Opening that address in a browser is enough; the
+separate frontend server below is only needed if you are editing the frontend
+and want to reload without restarting the backend.
 
 #### Optional tools
 
@@ -98,6 +101,50 @@ python3 main.py --can pythoncan:pcan:PCAN_USBBUS1
 ```
 
 The bus-load monitor self-disables when `canbusload` is not on PATH (utilization stays at 0%); the rest of the stack — REST/WebSocket server, DSDL Inspector, recordings, log panel, telemetry — works the same on all three OSes. Install whichever `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) and pass its transport string.
+
+## Deploying to a Server
+
+The backend serves the dashboard as well as the API, so a deployment is one
+binary and clients need nothing but a browser.
+
+Build the standalone backend once (see [Desktop App](#desktop-app) for the
+prerequisites, then run only the first step):
+
+```bash
+cd packaging && python3 -m PyInstaller cynitor-server.spec --noconfirm
+```
+
+Copy `packaging/dist/cynitor-server` to the machine with the CAN adapter and
+run it. Nothing else is needed there: no Python, no pip, no web server.
+
+```bash
+CYNITOR_AUTH_TOKEN=$(openssl rand -hex 24) ./cynitor-server --bind 0.0.0.0
+```
+
+Point a browser at `http://<that-machine>:8080`. The dashboard loads, prompts
+once for the token, and remembers it. It works out its own API address from
+the page it was served from, so nothing needs configuring per client.
+
+**Set a token whenever you bind beyond loopback.** Without one the API is open
+to anyone who can reach the port, and that API commands nodes on the bus. The
+server logs a warning if you bind to `0.0.0.0` with no token.
+
+The dashboard's own files are served without a token, since a browser has to
+load the page before it can ask for one. Only the API and the event stream are
+protected.
+
+### API only
+
+If you are consuming the data with your own tooling rather than the dashboard,
+`--no-frontend` serves just the REST API and the WebSocket stream:
+
+```bash
+CYNITOR_AUTH_TOKEN=... ./cynitor-server --bind 0.0.0.0 --no-frontend
+```
+
+Requests for the dashboard then return 404 while the API is unchanged. The
+startup banner states which mode is running. See
+[WEBSOCKET_README.md](WEBSOCKET_README.md) for the full API reference.
 
 ## Desktop App
 

@@ -256,6 +256,9 @@
 
   <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
   <script src="https://unpkg.com/tabulator-tables@6.4.0/dist/js/tabulator.min.js"></script>
+  <!-- Must precede state.js: sets window.__CYNITOR when the backend is
+       serving this page, which is how the dashboard learns its API origin. -->
+  <script src="./config.js"></script>
   <script src="./state.js"></script>
   <script src="./cache.js"></script>
   <script src="./services-panel.js"></script>

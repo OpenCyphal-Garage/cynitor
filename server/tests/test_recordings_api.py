@@ -143,9 +143,12 @@ class TestRecordingsCRUD:
         assert resp2.status == 404
 
     @pytest.mark.asyncio
-    async def test_no_logger_returns_503(self, client_no_logger):
+    async def test_no_logger_returns_empty_list(self, client_no_logger):
+        # Before CAN connects there is no event logger; listing returns an empty
+        # list (not 503) so the frontend's startup poll doesn't error-toast.
         resp = await client_no_logger.get("/api/recordings")
-        assert resp.status == 503
+        assert resp.status == 200
+        assert (await resp.json())["recordings"] == []
 
 
 class TestQuickSave:

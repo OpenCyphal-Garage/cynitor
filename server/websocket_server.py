@@ -6,6 +6,7 @@ import logging
 import re
 import sqlite3
 import time
+from pathlib import Path
 from typing import Optional, Set, Any
 from aiohttp import web, WSCloseCode
 
@@ -102,12 +103,17 @@ class WebSocketServer:
         log_store: Optional[Any] = None,
         dsdl_manager: Optional[Any] = None,
         auth_token: Optional[str] = None,
+        website_dir: Optional[Path] = None,
     ) -> None:
         self.session = session
         self.host = host
         self.port = port
         self.log_store = log_store
         self.dsdl_manager = dsdl_manager
+        # When present, the dashboard is served from this server so a single
+        # binary is all a deployment needs. None means API-only, which is how
+        # the desktop app runs it (the shell carries its own copy of the UI).
+        self.website_dir = website_dir if website_dir and website_dir.is_dir() else None
         # When set, every request outside _AUTH_OPEN_PATHS must present this
         # token via Authorization: Bearer <token> (REST) or ?token=<token>
         # (WebSocket). When None, the server runs open — same behaviour as
@@ -130,11 +136,25 @@ class WebSocketServer:
 
         self._setup_routes()
 
+    @staticmethod
+    def _is_protected_path(path: str) -> bool:
+        """Whether a path needs a token when auth is enabled.
+
+        Only the API and the event stream are protected. The dashboard's own
+        HTML, CSS and JavaScript are served open, because a browser has to be
+        able to load the page before it can prompt for a token — and those
+        assets are not secret. What they cannot do without one is read bus
+        data or command a node.
+        """
+        return path == "/ws" or path == "/api" or path.startswith("/api/")
+
     @web.middleware
     async def _auth_middleware(self, request: web.Request, handler: Any) -> web.StreamResponse:
         if self.auth_token is None or request.method == "OPTIONS":
             return await handler(request)
         if request.path in self._AUTH_OPEN_PATHS:
+            return await handler(request)
+        if not self._is_protected_path(request.path):
             return await handler(request)
         token = self._extract_token(request)
         if token != self.auth_token:
@@ -217,6 +237,31 @@ class WebSocketServer:
         self.app.router.add_delete('/api/dsdl/custom/type/{full_name:.+}', self._dsdl_delete_type)
         self.app.router.add_get('/api/dsdl/custom/namespaces', self._dsdl_list_custom_namespaces)
         self.app.router.add_post('/api/dsdl/compile', self._dsdl_compile)
+
+        # The dashboard, when this server is also hosting it. Registered last:
+        # aiohttp matches resources in registration order, so every /api and
+        # /ws route above wins over the catch-all static mount below.
+        if self.website_dir:
+            self.app.router.add_get('/', self._serve_index)
+            self.app.router.add_get('/config.js', self._serve_config_js)
+            self.app.router.add_static('/', self.website_dir)
+            logger.info("Serving the dashboard from %s", self.website_dir)
+
+    async def _serve_index(self, _request: web.Request) -> web.StreamResponse:
+        return web.FileResponse(self.website_dir / "index.html")
+
+    async def _serve_config_js(self, request: web.Request) -> web.Response:
+        """Tell the page which backend to talk to: this one.
+
+        The frontend's default address is only correct when it is served by a
+        separate static file server on the developer's own machine. Served
+        from here, the API lives at this request's own origin, whatever host
+        and port the user reached us on. website/config.js is an empty
+        placeholder so the development flow keeps the built-in default.
+        """
+        origin = f"{request.scheme}://{request.host}"
+        body = f"window.__CYNITOR = {json.dumps({'apiBase': origin})};\n"
+        return web.Response(text=body, content_type="application/javascript")
 
     async def start(self) -> None:
         """Start the WebSocket server."""
@@ -615,9 +660,12 @@ class WebSocketServer:
         return None
 
     async def _get_recordings(self, request: web.Request) -> web.Response:
-        err = self._require_event_logger()
-        if err:
-            return err
+        # Before CAN is connected the event logger doesn't exist yet. Listing is a
+        # read-only poll the frontend runs continuously, so return an empty list
+        # (rather than 503) to avoid a spurious "Failed to load recordings" toast
+        # at startup. The list populates once CAN connects and the logger starts.
+        if not self.session.event_logger:
+            return web.json_response({"recordings": []})
         recs = await self.session.event_logger.list_recordings()
         return web.json_response({"recordings": recs})
 

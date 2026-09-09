@@ -60,7 +60,7 @@ EventLogger.start()        SQLite persistence
 | `scanner_node.py` | CAN network discovery: heartbeat + port list subscriptions, dynamic per-subject subscribers, per-service clients, service schema introspection with STANDARD_SERVICES fallback |
 | `node_info.py` | Per-node lifecycle state: appearance, last-heartbeat timestamp, disappearance threshold (>1.1s), port lists, GetInfo response |
 | `telemetry_manager.py` | Event router: maintains `latest_by_subject` and `latest_by_node` caches, broadcasts to subscriber queues |
-| `websocket_server.py` | aiohttp HTTP+WS server, REST endpoints, per-client WebSocket filtering, periodic metrics broadcast, node history and service call history endpoints |
+| `websocket_server.py` | aiohttp HTTP+WS server, REST endpoints, per-client WebSocket filtering, periodic metrics broadcast, node history and service call history endpoints; also serves `website/` so one binary hosts both the API and the dashboard |
 | `event_logger.py` | SQLite persistence with batch writes, `asyncio.to_thread` for non-blocking I/O, configurable retention, node lifecycle history (30-day), service call history with response bodies |
 | `allocator.py` | Node-ID allocator detection / fallback (CentralizedAllocator), 10s re-check |
 | `startup_setup.py` | DSDL compilation via `nnvg`, sets `UAVCAN__CAN__IFACE` / `UAVCAN__CAN__MTU`, calls `yakut accommodate` for node ID |
@@ -75,9 +75,12 @@ EventLogger.start()        SQLite persistence
 --can <iface>     CAN interface name (vcan0, slcan0, can0, ...). Required for direct mode.
 --recompile       Force `nnvg` to regenerate Python from DSDL even if outputs exist.
 --bind <host>     Host/IP to bind the HTTP server to (default 127.0.0.1; use 0.0.0.0 to expose on the network).
+--no-frontend     Serve only the REST API and WebSocket, not the dashboard.
 ```
 
 Without `--can`, the backend starts in selection mode. Use `POST /api/can/connect` with `{"interface": "..."}` to attach.
+
+By default the dashboard is served from the same port as the API, so a deployment is one binary. `--no-frontend` turns that off for API-only deployments, where something other than the browser dashboard is consuming the data. A checkout with no `website/` directory is API-only regardless. The startup banner says which mode is active.
 
 ### DSDL
 
@@ -217,7 +220,7 @@ cynitor/
     node_info.py            Per-node state tracking
     node_identity_map.py    Stable unique_id ↔ node_id mapping
     telemetry_manager.py    Event routing and caching
-    websocket_server.py     REST + WebSocket server
+    websocket_server.py     REST + WebSocket server, serves the dashboard
     event_logger.py         SQLite event persistence
     allocator.py            Node-ID allocation management
     startup_setup.py        DSDL compilation, env setup
@@ -248,6 +251,7 @@ cynitor/
     log-panel.js            Right log panel: Cyphal + Server feeds, picker, filters
     connection.js           WS + polling + lifecycle
     app.js                  Boot, bindings, heartbeat, view switching
+    config.js               Empty placeholder; the backend serves its own
     styles.css              Theme and layout
   dsdl_messages/
     public_regulated_data_types/   git submodule (uavcan/, reg/)

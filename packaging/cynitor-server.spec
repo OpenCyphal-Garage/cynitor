@@ -119,6 +119,8 @@ if not COMPILED_DSDL.is_dir():
 datas = [
     (str(COMPILED_DSDL), "python_compiled_messages"),
     (str(DSDL_SOURCES), "dsdl_messages"),
+    # The dashboard itself, so one binary serves both the API and the UI.
+    (str(PROJECT_ROOT / "website"), "website"),
 ]
 
 a = Analysis(

@@ -80,13 +80,31 @@ When exposed on a non-loopback address, require a bearer token by setting the `C
 CYNITOR_AUTH_TOKEN=$(openssl rand -hex 24) python3 main.py --can vcan0 --bind 0.0.0.0
 ```
 
-With the variable set, every REST and WebSocket request outside `/api/health` must present the token:
+With the variable set, every REST and WebSocket request outside `/api/health` must present the token. Static dashboard assets are exempt: a browser has to load the page before it can prompt for a token, and the markup is not secret. Concretely, `/ws`, `/api` and everything under `/api/` are protected; every other path is served open.
+
+Protected requests must present the token as:
 - REST: `Authorization: Bearer <token>` header
 - WebSocket: `?token=<token>` query parameter (browsers can't attach custom headers on WS handshakes)
 
 Unauthenticated requests get `HTTP 401 {"error": "missing or invalid token"}`. With the variable unset the server runs open — same behaviour as before this option existed. The frontend prompts the user to paste the token on the first 401 and stores it in `localStorage` under `cynitor.auth.token`.
 
 The desktop build always sets the variable. The Tauri shell generates a random token per launch, passes it to the sidecar in `CYNITOR_AUTH_TOKEN`, and injects it into the webview as `window.__CYNITOR.authToken` before any page script runs. `getAuthToken()` prefers that injected value over `localStorage`, so the packaged app authenticates without prompting and the token never reaches disk.
+
+### Serving the dashboard
+
+When a `website/` directory is present next to the server (a source checkout, or bundled inside the frozen binary), the dashboard is served from the same port as the API:
+
+| Route | Serves |
+|-------|--------|
+| `GET /` | `website/index.html` |
+| `GET /config.js` | Generated: `window.__CYNITOR = {"apiBase": "<this request's origin>"}` |
+| `GET /<path>` | Any other file under `website/` |
+
+These are registered after the API routes, so `/api/*` and `/ws` always win over the catch-all static mount.
+
+Start the server with `--no-frontend` to omit them entirely, for deployments where something other than the dashboard consumes the API. Those three routes then return `404` and everything else is unchanged.
+
+`config.js` is how a browser-served dashboard learns its API address. The checked-in `website/config.js` is an empty placeholder, which is what a separate static file server on port 5500 delivers, leaving the address field at its built-in default. Served from the backend, the generated version wins and points the page at the origin it was fetched from, so no per-client configuration is needed.
 
 ### 3. Runtime Environment
 
