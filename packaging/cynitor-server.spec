@@ -123,6 +123,27 @@ datas = [
     (str(PROJECT_ROOT / "website"), "website"),
 ]
 
+# pydsdl vendors parsimonious under pydsdl/third_party and reaches it by
+# prepending that directory to sys.path at import time (pydsdl/__init__.py).
+# The directory is not a package, so PyInstaller's static analysis cannot
+# follow the import and neither can collect_submodules. Ship the tree as data
+# at the same relative location, which is where pydsdl's own sys.path entry
+# will look inside the bundle.
+#
+# Without this the binary starts fine and only fails when something first
+# imports pycyphal, i.e. the moment a user connects to a CAN interface:
+#   ModuleNotFoundError: No module named 'parsimonious'
+import pydsdl as _pydsdl
+
+PYDSDL_THIRD_PARTY = Path(_pydsdl.__file__).resolve().parent / "third_party"
+if not PYDSDL_THIRD_PARTY.is_dir():
+    raise SystemExit(
+        f"{PYDSDL_THIRD_PARTY} is missing. pydsdl has changed how it vendors its "
+        "parser dependency; update this spec rather than shipping a binary that "
+        "cannot connect to a bus."
+    )
+datas.append((str(PYDSDL_THIRD_PARTY), "pydsdl/third_party"))
+
 a = Analysis(
     [str(SERVER_DIR / "main.py")],
     pathex=[str(SERVER_DIR)],
