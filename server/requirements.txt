@@ -1,3 +1,7 @@
-pycyphal>=1.27,<2.0
+# The pythoncan extra pulls python-can, which allocator.py needs at import
+# time via pycyphal.transport.can.media.pythoncan. pycyphal declares it only
+# as an optional extra, so a plain `pycyphal` install fails on connect with
+# "No module named 'can'" — on a fresh checkout as well as in a frozen build.
+pycyphal[transport-can-pythoncan]>=1.27,<2.0
 aiohttp>=3.8,<4.0
 numpy>=1.20,<3.0
