@@ -46,26 +46,57 @@ fn wait_for_backend() {
     eprintln!("Warning: backend did not respond within {:?}", MAX_STARTUP_WAIT);
 }
 
-/// Render through shared memory rather than the graphics device.
+const USAGE: &str = "\
+Cynitor — Cyphal network monitor
+
+Usage: cynitor [OPTIONS]
+
+Options:
+      --gpu     Render through the graphics device instead of shared memory.
+                Faster in principle, but produces a blank window wherever
+                /dev/dri is unavailable: virtual machines, containers and
+                remote desktops. Only worth trying on a local desktop.
+  -h, --help    Show this message.
+
+The backend is started automatically and stopped when the window closes.
+Environment:
+  WEBKIT_DISABLE_DMABUF_RENDERER   Set explicitly to override --gpu either way.
+";
+
+/// Choose how WebKit gets rendered frames onto the screen.
 ///
-/// WebKit defaults to passing frames between its processes as graphics-memory
-/// handles, which is worth it for video and heavy animation. This dashboard is
-/// SVG shapes and text, so that path buys nothing measurable here — and when
-/// the device is unavailable, which is the norm on virtual machines, remote
-/// desktops and containers, it fails by allocating no surface at all. The
-/// window still opens; it is simply never painted. A blank window with no
-/// error is a bad trade for efficiency this app cannot use.
+/// The default is shared memory. WebKit would otherwise pass frames between
+/// its processes as graphics-memory handles, which needs /dev/dri. Where that
+/// device is unavailable the allocation is refused and the renderer produces
+/// no surface at all: the window opens and is never painted, with no error.
+/// This dashboard is SVG shapes and text, so the graphics path accelerates
+/// only compositing and buys nothing measurable — a poor trade for a blank
+/// window.
 ///
-/// Set the variable yourself to override, including to "0" to force the
-/// graphics path back on.
-fn use_software_rendering() {
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+/// An explicit environment variable always wins, so scripts and packagers can
+/// override whatever the flag says.
+fn configure_rendering(force_gpu: bool) {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_some() {
+        return;
     }
+    std::env::set_var(
+        "WEBKIT_DISABLE_DMABUF_RENDERER",
+        if force_gpu { "0" } else { "1" },
+    );
 }
 
 fn main() {
-    use_software_rendering();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        print!("{}", USAGE);
+        return;
+    }
+    if let Some(unknown) = args.iter().find(|a| a.as_str() != "--gpu") {
+        eprintln!("cynitor: unrecognised option '{}'\n", unknown);
+        eprint!("{}", USAGE);
+        std::process::exit(2);
+    }
+    configure_rendering(args.iter().any(|a| a == "--gpu"));
 
     tauri::Builder::default()
         .setup(|app| {

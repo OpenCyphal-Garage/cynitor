@@ -3,6 +3,9 @@ name: Desktop Build
 on:
   push:
     tags: ['v*']
+    # TEMPORARY, this branch only: proves the vcan smoke test on a
+    # runner before a release depends on it. Delete the branch after.
+    branches: [ci-smoke-dryrun]
   workflow_dispatch:
 
 permissions:
@@ -92,6 +95,48 @@ jobs:
       - name: Build installers
         working-directory: packaging
         run: ./build.sh release
+
+      - name: Smoke-test the packaged backend against a virtual CAN bus
+        # The 0.5.0 installers started, served the dashboard and answered every
+        # read-only endpoint, yet could not connect to a bus: a dependency
+        # pydsdl vendors was missing from the bundle. Nothing caught it because
+        # the failing import only happens on connect. Anything short of a real
+        # connect would have shipped it again.
+        run: |
+          set -euo pipefail
+          sudo modprobe vcan
+          sudo ip link add dev vcan0 type vcan
+          sudo ip link set up vcan0
+
+          TOKEN=smoke-test-token
+          CYNITOR_AUTH_TOKEN="$TOKEN" packaging/dist/cynitor-server &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+
+          curl --retry 60 --retry-delay 1 --retry-connrefused -sf -o /dev/null \
+            http://127.0.0.1:8080/api/health
+          echo "backend is up"
+
+          auth=(-H "Authorization: Bearer $TOKEN")
+
+          # The dashboard has to be served from inside the bundle.
+          page=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/)
+          test "$page" = "200" || { echo "::error::dashboard not served (HTTP $page)"; exit 1; }
+
+          # The one that matters: this is where the missing module surfaced.
+          body=$(mktemp)
+          code=$(curl -s -o "$body" -w '%{http_code}' -X POST \
+            http://127.0.0.1:8080/api/can/connect "${auth[@]}" \
+            -H 'Content-Type: application/json' -d '{"interface":"vcan0"}')
+          cat "$body"; echo
+          test "$code" = "200" || { echo "::error::packaged backend could not connect to vcan0"; exit 1; }
+
+          # And it must still be attached a moment later, not crashed behind us.
+          sleep 3
+          curl -sf "${auth[@]}" http://127.0.0.1:8080/api/status \
+            | grep -q '"can_interface": *"vcan0"' \
+            || { echo "::error::backend did not stay attached to vcan0"; exit 1; }
+          echo "packaged backend connected to vcan0 and stayed attached"
 
       - uses: actions/upload-artifact@v7
         with:
