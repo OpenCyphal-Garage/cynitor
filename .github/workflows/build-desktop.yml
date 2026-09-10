@@ -3,9 +3,6 @@ name: Desktop Build
 on:
   push:
     tags: ['v*']
-    # TEMPORARY, this branch only: proves the vcan smoke test on a
-    # runner before a release depends on it. Delete the branch after.
-    branches: [ci-smoke-dryrun]
   workflow_dispatch:
 
 permissions:
