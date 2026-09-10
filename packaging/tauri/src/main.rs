@@ -104,8 +104,18 @@ fn main() {
 
             // Tauri registers every spawned sidecar and kills it when the app
             // exits, so the child handle does not need to be kept around.
+            //
+            // --no-frontend: this window serves the dashboard from its own
+            // embedded copy over tauri://, so the backend's copy is never
+            // reached. Serving it anyway would leave a second dashboard on
+            // localhost:8080 that nobody can use — the page would load, but
+            // the per-launch token is random and never shown, so no browser
+            // could authenticate against it. The assets stay in the binary
+            // regardless, because the same binary is what gets deployed
+            // standalone to a server.
             let (mut rx, _child) = Command::new_sidecar("cynitor-server")
                 .expect("failed to locate cynitor-server sidecar")
+                .args(["--no-frontend"])
                 .envs(HashMap::from([(
                     "CYNITOR_AUTH_TOKEN".to_string(),
                     auth_token.clone(),
