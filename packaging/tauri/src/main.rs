@@ -46,7 +46,27 @@ fn wait_for_backend() {
     eprintln!("Warning: backend did not respond within {:?}", MAX_STARTUP_WAIT);
 }
 
+/// Render through shared memory rather than the graphics device.
+///
+/// WebKit defaults to passing frames between its processes as graphics-memory
+/// handles, which is worth it for video and heavy animation. This dashboard is
+/// SVG shapes and text, so that path buys nothing measurable here — and when
+/// the device is unavailable, which is the norm on virtual machines, remote
+/// desktops and containers, it fails by allocating no surface at all. The
+/// window still opens; it is simply never painted. A blank window with no
+/// error is a bad trade for efficiency this app cannot use.
+///
+/// Set the variable yourself to override, including to "0" to force the
+/// graphics path back on.
+fn use_software_rendering() {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+}
+
 fn main() {
+    use_software_rendering();
+
     tauri::Builder::default()
         .setup(|app| {
             let auth_token = generate_auth_token();

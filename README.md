@@ -213,6 +213,8 @@ packaging/
 
 **No nodes appearing.** Confirm there are publishers on the bus (`yakut sub uavcan.node.Heartbeat.1.0`). On a virtual interface (`vcan0`) you also need a publisher on the same `vcan` interface — the backend doesn't generate traffic on its own.
 
+**Desktop app opens a blank white window.** The app renders through shared memory rather than the graphics device precisely to avoid this, so you shouldn't hit it. If you do, something has forced the graphics path back on — check whether `WEBKIT_DISABLE_DMABUF_RENDERER` is set to `0` in your environment. Don't run the app with `sudo`: it needs no root, and `sudo` discards the environment that controls this.
+
 **Port 5500 in use.** Run `python3 -m http.server 8088` (or any free port) and open the matching URL.
 
 ## Documentation
