@@ -5,15 +5,28 @@
 
 use std::collections::HashMap;
 use std::io::Read;
+use std::sync::Mutex;
 use std::net::TcpStream;
 use std::time::Duration;
-use tauri::api::process::Command;
+use tauri::Manager;
+use tauri_plugin_shell::process::{CommandChild, CommandEvent};
+use tauri_plugin_shell::ShellExt;
 
 const BACKEND_ADDR: &str = "127.0.0.1:8080";
 // Must match the CSP connect-src in tauri.conf.json.
 const BACKEND_ORIGIN: &str = "http://localhost:8080";
 const MAX_STARTUP_WAIT: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+/// The spawned backend, so we can stop it ourselves on exit.
+///
+/// tauri-plugin-shell registers an exit handler that kills its children, but
+/// it did not fire on window close here: the backend outlived the app and kept
+/// holding port 8080, which is the exact failure the parent-death signal in
+/// main.py was added to prevent. That signal cannot help either, because it
+/// only fires when the PyInstaller bootloader dies — and nothing was killing
+/// the bootloader. So the shell owns the lifetime explicitly.
+struct Sidecar(Mutex<Option<CommandChild>>);
 
 /// 256 bits of OS entropy, hex-encoded.
 ///
@@ -99,6 +112,7 @@ fn main() {
     configure_rendering(args.iter().any(|a| a == "--gpu"));
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let auth_token = generate_auth_token();
 
@@ -113,7 +127,9 @@ fn main() {
             // could authenticate against it. The assets stay in the binary
             // regardless, because the same binary is what gets deployed
             // standalone to a server.
-            let (mut rx, _child) = Command::new_sidecar("cynitor-server")
+            let (mut rx, child) = app
+                .shell()
+                .sidecar("cynitor-server")
                 .expect("failed to locate cynitor-server sidecar")
                 .args(["--no-frontend"])
                 .envs(HashMap::from([(
@@ -123,13 +139,15 @@ fn main() {
                 .spawn()
                 .expect("failed to spawn cynitor-server");
 
+            app.manage(Sidecar(Mutex::new(Some(child))));
+
             // Log sidecar stdout/stderr in the background.
             tauri::async_runtime::spawn(async move {
-                use tauri::api::process::CommandEvent;
                 while let Some(event) = rx.recv().await {
                     match event {
-                        CommandEvent::Stdout(line) => eprintln!("[server] {}", line),
-                        CommandEvent::Stderr(line) => eprintln!("[server] {}", line),
+                        CommandEvent::Stdout(line) | CommandEvent::Stderr(line) => {
+                            eprint!("[server] {}", String::from_utf8_lossy(&line));
+                        }
                         _ => {}
                     }
                 }
@@ -149,7 +167,7 @@ fn main() {
             });
             let init_script = format!("window.__CYNITOR = {};", shell_config);
 
-            tauri::WindowBuilder::new(app, "main", tauri::WindowUrl::App("index.html".into()))
+            tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
                 .title("Cynitor")
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(900.0, 600.0)
@@ -158,6 +176,15 @@ fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                if let Some(sidecar) = app.try_state::<Sidecar>() {
+                    if let Some(child) = sidecar.0.lock().unwrap().take() {
+                        let _ = child.kill();
+                    }
+                }
+            }
+        });
 }

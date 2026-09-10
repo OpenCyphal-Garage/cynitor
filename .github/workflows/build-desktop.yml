@@ -3,6 +3,9 @@ name: Desktop Build
 on:
   push:
     tags: ['v*']
+    # TEMPORARY, this branch only: proves the Tauri v2 build on a runner
+    # before a release depends on it. Delete the branch after.
+    branches: [tauri-v2]
   workflow_dispatch:
 
 permissions:
@@ -15,10 +18,10 @@ concurrency:
 jobs:
   linux:
     name: Linux installers
-    # Pinned deliberately, not a leftover. Tauri v1 links against
-    # webkit2gtk-4.0, which Ubuntu 24.04 (what ubuntu-latest now resolves to)
-    # no longer packages; it ships 4.1 only. Moving to ubuntu-latest requires
-    # migrating to Tauri v2 first.
+    # Tauri v2 links webkit2gtk-4.1, which 22.04 and 24.04 both provide at
+    # the same upstream version, so the resulting .deb installs on either.
+    # Kept on 22.04 deliberately: glibc is forward-compatible, so binaries
+    # built here run on newer hosts, but not the reverse.
     runs-on: ubuntu-22.04
     permissions:
       contents: write  # attach installers to the Release on a tag build
@@ -55,7 +58,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.0-dev libgtk-3-dev librsvg2-dev patchelf
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf
 
       - name: Install Python build dependencies
         run: pip install -r server/requirements.txt pyinstaller
@@ -79,7 +82,7 @@ jobs:
         # Restored from cache on subsequent runs; the guard keeps this a no-op.
         run: |
           if ! cargo tauri --version >/dev/null 2>&1; then
-            cargo install tauri-cli --locked --version '^1.6'
+            cargo install tauri-cli --locked --version '^2'
           fi
 
       - name: Compile DSDL

@@ -156,7 +156,7 @@ Prerequisites (one-time):
 
 ```bash
 # System libraries (Ubuntu/Debian)
-sudo apt-get install -y libwebkit2gtk-4.0-dev libgtk-3-dev librsvg2-dev patchelf
+sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf
 
 # Rust toolchain
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -199,7 +199,7 @@ packaging/
 ├── build.sh               # One-command build pipeline
 ├── cynitor-server.spec     # PyInstaller spec (single-file mode)
 └── tauri/
-    ├── Cargo.toml          # Tauri v1 + shell-sidecar feature
+    ├── Cargo.toml          # Tauri v2 + shell plugin
     ├── tauri.conf.json     # Window size, CSP, sidecar path, bundle targets
     ├── src/main.rs         # Sidecar lifecycle: token → spawn → wait → window → kill
     └── icons/icon.png      # App icon (replace with final design)

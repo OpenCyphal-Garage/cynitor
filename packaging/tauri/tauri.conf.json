@@ -1,40 +1,20 @@
 {
+  "productName": "Cynitor",
+  "identifier": "com.opencyphal.cynitor",
   "build": {
-    "distDir": "../../website",
-    "withGlobalTauri": false
+    "frontendDist": "../../website"
   },
-  "package": {
-    "productName": "Cynitor"
-  },
-  "tauri": {
-    "bundle": {
-      "active": true,
-      "identifier": "com.opencyphal.cynitor",
-      "icon": [
-        "icons/icon.png"
-      ],
-      "targets": ["deb", "appimage"],
-      "externalBin": [
-        "sidecar/cynitor-server"
-      ]
-    },
-    "allowlist": {
-      "shell": {
-        "sidecar": true,
-        "execute": false,
-        "open": false,
-        "scope": [
-          {
-            "name": "sidecar/cynitor-server",
-            "sidecar": true,
-            "args": false
-          }
-        ]
-      }
-    },
+  "app": {
     "windows": [],
+    "withGlobalTauri": false,
     "security": {
       "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; connect-src 'self' http://localhost:8080 ws://localhost:8080 http://127.0.0.1:8080 ws://127.0.0.1:8080; font-src 'self' https://cdn.jsdelivr.net https://unpkg.com"
     }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "appimage"],
+    "icon": ["icons/icon.png"],
+    "externalBin": ["sidecar/cynitor-server"]
   }
 }

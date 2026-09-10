@@ -260,7 +260,7 @@ cynitor/
     build.sh                One-command desktop build pipeline
     cynitor-server.spec     PyInstaller spec (single-file sidecar)
     tauri/
-      Cargo.toml            Tauri v1 Rust project
+      Cargo.toml            Tauri v2 Rust project
       tauri.conf.json       Window, CSP, sidecar, bundle config
       src/main.rs           Sidecar lifecycle, per-launch auth token, window setup
   python_compiled_messages/ nnvg output (gitignored)
@@ -310,14 +310,14 @@ The `packaging/` directory builds a standalone desktop installer. The pipeline h
 
 ### Stage 2: Tauri (binary → native installer)
 
-`packaging/tauri/` is a Tauri v1 Rust project that wraps the webview and manages the sidecar lifecycle:
+`packaging/tauri/` is a Tauri v2 Rust project that wraps the webview and manages the sidecar lifecycle:
 
 1. `main.rs` reads 32 bytes from `/dev/urandom` and hex-encodes them into a per-launch auth token.
 2. Spawns `cynitor-server` as a child process via Tauri's sidecar API, passing the token in `CYNITOR_AUTH_TOKEN`.
 3. Blocks until a TCP connect to `127.0.0.1:8080` succeeds (up to 15 seconds).
 4. Forwards sidecar stdout/stderr to the Tauri log (visible in the terminal).
 5. Creates the window with an initialization script that sets `window.__CYNITOR = { apiBase, authToken }`.
-6. On exit, Tauri kills the sidecar: it registers every spawned sidecar and terminates them in its own shutdown path, so `main.rs` keeps no handle.
+6. On exit, `main.rs` kills the sidecar itself from a `RunEvent::Exit` handler. tauri-plugin-shell registers its own child-killing handler, but it did not fire on window close: the backend outlived the app and kept port 8080. The parent-death signal in `main.py` cannot cover that either, since it only fires when the PyInstaller bootloader dies and nothing was killing the bootloader. The two mechanisms are complementary, not redundant: the shell handles a clean exit, the signal handles the shell being killed outright.
 
 **Why the token.** The backend listens on localhost, so while the app is open any page in the user's ordinary browser can reach it — and the CORS layer answers with `Access-Control-Allow-Origin: *`. Without a token, a random tab could enumerate nodes, write registers, and call services on the live CAN bus. The token is generated fresh per launch and never written to disk. Reading entropy is mandatory: if `/dev/urandom` cannot be read the app aborts rather than starting an open API.
 
