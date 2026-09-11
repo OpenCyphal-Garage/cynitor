@@ -59,7 +59,10 @@ jobs:
         working-directory: server
         run: python startup_setup.py --recompile
 
-      - name: Build
+      - name: Install packaging tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fakeroot
+
+      - name: Build binary, .deb and .AppImage
         working-directory: packaging
         run: ./build.sh
 
@@ -105,17 +108,16 @@ jobs:
           test "$api" = "401" || { echo "::error::API not protected (HTTP $api)"; exit 1; }
           echo "dashboard served from the bundle, API still requires a token"
 
-      - name: Name the artifact
+      - name: Collect artifacts
         run: |
           version=$(grep -m1 '^__version__' server/version.py | cut -d'"' -f2)
-          mkdir -p out
-          cp packaging/dist/cynitor-server "out/cynitor-server-${version}-linux-x86_64"
-          ls -lh out/
+          cp packaging/dist/cynitor-server "packaging/out/cynitor-server-${version}-linux-x86_64"
+          ls -lh packaging/out/
 
       - uses: actions/upload-artifact@v7
         with:
           name: cynitor-server-linux
-          path: out/*
+          path: packaging/out/*
           if-no-files-found: error
 
       - name: Attach the binary to the release
@@ -125,4 +127,4 @@ jobs:
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" out/* --clobber
+          gh release upload "$GITHUB_REF_NAME" packaging/out/* --clobber

@@ -1,0 +1,5 @@
+#!/bin/sh
+# Cynitor is a server, not a windowed app: run the binary and pass everything
+# straight through. HERE is the mounted AppDir.
+HERE="$(dirname "$(readlink -f "$0")")"
+exec "${HERE}/usr/bin/cynitor-server" "$@"

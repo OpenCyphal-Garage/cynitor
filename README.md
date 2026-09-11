@@ -107,11 +107,17 @@ The bus-load monitor self-disables when `canbusload` is not on PATH (utilization
 The backend serves the dashboard as well as the API, so a deployment is one
 binary and clients need nothing but a browser.
 
-Grab the binary from the [latest release](https://github.com/OpenCyphal-Garage/cynitor/releases),
-or build it yourself (see [Building the Server Binary](#building-the-server-binary)).
+Grab a build from the [latest release](https://github.com/OpenCyphal-Garage/cynitor/releases):
+a `.deb`, an `.AppImage`, or the bare binary. All three contain the same
+server and none of them open a window.
 
-Copy it to the machine with the CAN adapter and run it. Nothing else is
-needed there: no Python, no pip, no web server.
+```bash
+sudo dpkg -i cynitor-server_*_amd64.deb    # installs to /usr/bin, adds a systemd unit
+# or just run it
+chmod +x cynitor-server-*-x86_64.AppImage && ./cynitor-server-*-x86_64.AppImage
+```
+
+Nothing else is needed on that machine: no Python, no pip, no web server.
 
 ```bash
 CYNITOR_AUTH_TOKEN=$(openssl rand -hex 24) ./cynitor-server --bind 0.0.0.0
@@ -142,22 +148,36 @@ Requests for the dashboard then return 404 while the API is unchanged. The
 startup banner states which mode is running. See
 [WEBSOCKET_README.md](WEBSOCKET_README.md) for the full API reference.
 
-## Building the Server Binary
+## Building It Yourself
 
-Produces one self-contained executable with the dashboard and the compiled
-DSDL types inside it. No Python needed on the target machine.
+Tagged releases attach prebuilt artifacts, so this is only needed for
+unreleased changes or another architecture.
 
 ```bash
 pip install -r server/requirements.txt pyinstaller
 python3 server/startup_setup.py --recompile   # generate compiled DSDL first
-cd packaging && ./build.sh
+cd packaging && ./build.sh                    # binary + .deb + .AppImage
 ```
 
-The result is `packaging/dist/cynitor-server`. Copy it to the target machine
-and run it; see [Deploying to a Server](#deploying-to-a-server) above.
+`./build.sh binary` stops after the executable, which is all you need for a
+plain copy-and-run deployment. The full run also needs `fakeroot` for the
+package and downloads `appimagetool` on first use.
 
-Tagged releases attach a prebuilt Linux x86-64 binary, so building it
-yourself is only necessary for unreleased changes or another architecture.
+Everything lands in `packaging/out/`, with the bare executable at
+`packaging/dist/cynitor-server`.
+
+### Running it as a service
+
+The `.deb` installs a systemd unit, disabled by default. Configure it in
+`/etc/default/cynitor-server`, then:
+
+```bash
+sudo systemctl enable --now cynitor-server
+```
+
+Set `CYNITOR_AUTH_TOKEN` there before binding beyond loopback. The unit runs
+as root because raw SocketCAN sockets need `CAP_NET_RAW`; the file comments
+show how to narrow that to a dedicated user.
 
 ## Troubleshooting
 

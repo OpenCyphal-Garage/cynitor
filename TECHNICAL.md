@@ -257,8 +257,10 @@ cynitor/
     public_regulated_data_types/   git submodule (uavcan/, reg/)
     custom/                        user-created DSDL types (gitignored content)
   packaging/
-    build.sh                One-command build
+    build.sh                One-command build: binary, .deb, .AppImage
     cynitor-server.spec     PyInstaller spec (single-file binary)
+    deb/                    control template, systemd unit, /etc/default file
+    appimage/               AppRun, desktop entry, icon
   python_compiled_messages/ nnvg output (gitignored)
   README.md                 User-facing intro
   TECHNICAL.md              This file
@@ -296,6 +298,17 @@ The plot in `detail-panel.js#renderPlot` operates on `state.subjectHistory["{sub
 `packaging/` freezes the server into one self-contained executable. A
 deployment is that file plus a browser: the binary serves the REST API, the
 WebSocket stream and the dashboard from the same port.
+
+`build.sh` produces three artifacts from one executable: the bare binary, a
+`.deb` and an `.AppImage`. None of them open a window — the dashboard is
+served to a browser, so there is nothing to display locally.
+
+The `.deb` is the one that earns its keep: it puts the binary on `PATH`,
+ships a systemd unit with an `/etc/default` file for options, and declares
+`Conflicts`/`Replaces` against the old `cynitor` package so upgrading from the
+windowed builds is clean. The `.AppImage` is a convenience wrapper; the
+PyInstaller binary is already self-contained and needs only libc, so the
+AppImage adds packaging rather than portability.
 
 `cynitor-server.spec` drives PyInstaller. Key concerns:
 

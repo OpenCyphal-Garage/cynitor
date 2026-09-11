@@ -1,0 +1,9 @@
+# Options for the cynitor-server systemd service.
+#
+# Bind beyond loopback only with a token set: the API commands nodes on the
+# bus, so an open port is a real exposure.
+#
+#CYNITOR_AUTH_TOKEN=change-me-to-a-random-value
+#CYNITOR_ARGS=--can can0 --bind 0.0.0.0
+
+CYNITOR_ARGS=--bind 127.0.0.1

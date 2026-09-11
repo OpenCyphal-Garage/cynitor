@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Cynitor Server
+Comment=Cyphal network monitor server
+Exec=cynitor-server
+Icon=cynitor
+Categories=Utility;
+# A terminal program: it prints an address and keeps running. It opens no
+# window of its own; the dashboard is served to a browser.
+Terminal=true
