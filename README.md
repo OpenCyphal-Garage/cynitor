@@ -10,7 +10,7 @@ Cynitor watches the bus in real time, lists every node it discovers, and lets yo
 
 ## Quick Start
 
-Cynitor has two parts that run independently: a Python backend that talks to the CAN interface, and a static-file frontend that runs in any modern browser.
+Cynitor is a single server: it talks to the CAN interface and serves the dashboard to any modern browser. Run it, open the address it prints, and you are done.
 
 ### 0. Clone with submodules
 
@@ -28,7 +28,7 @@ Requires **Python 3.10 or newer**.
 
 ```bash
 cd cynitor/server
-pip install -r requirements.txt   # pycyphal + nunavut (nnvg) + aiohttp + numpy
+pip install -r requirements.txt   # pycyphal + python-can + nunavut (nnvg) + aiohttp + numpy
 python3 main.py --can vcan0       # connect to a known interface
 # or
 python3 main.py                   # pick the interface from the UI later
@@ -48,14 +48,22 @@ These extend functionality but are not required to run the dashboard — the cod
 - **Windows / macOS:** install the `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) — see [Platforms](#platforms) for the transport-spec syntax.
 - `pip install -r server/requirements-dev.txt` — only if you want to run the backend test suite (adds `pytest` and `pytest-asyncio` on top of the runtime requirements).
 
-### 2. Frontend
+### 2. Open the dashboard
+
+Point a browser at `http://localhost:8080` and click **Connect** in the
+sidebar. That is the whole frontend: nothing to install, nothing to build.
+
+#### Editing the frontend
+
+Only if you are changing `website/` and want reloads without restarting the
+backend, serve it separately:
 
 ```bash
-cd website
-python3 -m http.server 5500
+cd website && python3 -m http.server 5500
 ```
 
-Open `http://localhost:5500` and click **Connect** in the sidebar.
+Then open `http://localhost:5500` instead. The address field defaults to
+`http://localhost:8080`, which is where the backend is listening.
 
 ## Features
 
@@ -82,7 +90,17 @@ Open `http://localhost:5500` and click **Connect** in the sidebar.
 | Direct | `python3 main.py --can vcan0` | You know the interface and want CAN running on launch |
 | Selection | `python3 main.py` | You want to pick the interface from the UI dropdown |
 
-In selection mode the HTTP server starts immediately, but pycyphal is not initialized until the user posts to `/api/can/connect`. The same UI flow lets you disconnect and reconnect to a different interface without restarting the backend. Pass `--recompile` to force `nnvg` to regenerate compiled DSDL Python from `dsdl_messages/`.
+In selection mode the HTTP server starts immediately, but pycyphal is not initialized until the user posts to `/api/can/connect`. The same UI flow lets you disconnect and reconnect to a different interface without restarting the backend. Naming an interface that does not exist is not fatal: the server warns, lists what is available, and falls back to selection mode.
+
+Other options:
+
+| Flag | Effect |
+|------|--------|
+| `--bind <host>` | Listen on `<host>` (default `127.0.0.1`; `0.0.0.0` to expose on the network) |
+| `--port <n>` | Listen on `<n>` instead of 8080 |
+| `--no-frontend` | Serve only the API and WebSocket, not the dashboard |
+| `--recompile` | Force `nnvg` to regenerate compiled DSDL from `dsdl_messages/` |
+| `--version` | Print the version and exit |
 
 ## Platforms
 
@@ -185,14 +203,14 @@ show how to narrow that to a dedicated user.
 
 ## Troubleshooting
 
-**"Frontend Server Unavailable" overlay appears.** The static-file server on port 5500 stopped responding. Restart it with `cd website && python3 -m http.server 5500`. Cynitor reloads automatically once it's back.
+**"Frontend Server Unavailable" overlay appears.** Only happens when the dashboard is served separately for frontend work: the static-file server on port 5500 stopped responding. Restart it with `cd website && python3 -m http.server 5500`. Cynitor reloads automatically once it's back. Served from the backend, this cannot occur.
 
 **Backend won't connect to CAN.** Check that the interface exists (`ip link show vcan0`) and that you have permission to open it. If `yakut accommodate` fails, the backend logs a warning but still starts — the node ID just won't be auto-assigned. Check `/api/logs` or stderr for the full error.
 
 **No nodes appearing.** Confirm there are publishers on the bus (`yakut sub uavcan.node.Heartbeat.1.0`). On a virtual interface (`vcan0`) you also need a publisher on the same `vcan` interface — the backend doesn't generate traffic on its own.
 
 
-**Port 5500 in use.** Run `python3 -m http.server 8088` (or any free port) and open the matching URL.
+**Port already in use.** For the backend, pass `--port 9099` (or any free port). For the separate frontend server used during development, run `python3 -m http.server 8088` and open the matching URL.
 
 ## Documentation
 
