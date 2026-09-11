@@ -1,0 +1,8 @@
+# Development / test-only dependencies. Install with:
+#   pip install -r requirements-dev.txt
+# Includes everything from requirements.txt plus the test runner.
+
+-r requirements.txt
+
+pytest>=7,<10
+pytest-asyncio>=0.23,<2.0

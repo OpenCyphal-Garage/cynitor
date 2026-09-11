@@ -349,7 +349,23 @@ const sendServiceRequest = async (nodeId, serviceId) => {
     if (idx >= 0) state.serviceCallHistory[idx] = entry;
     else state.serviceCallHistory.push(entry);
   } catch (e) {
-    _setCallState({ nodeId, serviceId, status: 'error', response: null, error: e.message || 'Request failed', latencyMs: null }, inSubjectsView);
+    // 504 timeout (HTTP) and 500 generic backend exception both carry a
+    // structured body — distinguish so the call panel reads "Timed out"
+    // with the real latency, not a flat "error".
+    const body = e?.data || {};
+    if (e?.status === 504 || body.status === 'timeout') {
+      _setCallState({
+        nodeId, serviceId, status: 'timeout', response: null,
+        error: body.error || e.message || 'Service call timed out',
+        latencyMs: body.latency_ms ?? null,
+      }, inSubjectsView);
+    } else {
+      _setCallState({
+        nodeId, serviceId, status: 'error', response: null,
+        error: body.error || e.message || 'Request failed',
+        latencyMs: body.latency_ms ?? null,
+      }, inSubjectsView);
+    }
   }
 
   _rerenderServiceUI(inSubjectsView, schema, nodeId);

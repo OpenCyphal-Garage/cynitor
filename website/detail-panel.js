@@ -180,7 +180,9 @@ const renderSelectedNodeContent = () => {
       content.innerHTML = state.pendingReconnect
         ? svcStateMsg('<span class="svc-spinner"></span>', 'Reconnecting to backend…', 'Restoring previous session.')
         : svcStateMsg('⏻', 'Not connected to backend', 'Connect to the backend server to inspect node details.');
-    } else if (state.canState !== CONN.CONNECTED) {
+    } else if (!state.replayActive && state.canState !== CONN.CONNECTED) {
+      // Replay is a valid event source — only flag CAN state when no replay
+      // is in progress.
       content.innerHTML = state.canState === CONN.CONNECTING
         ? svcStateMsg('<span class="svc-spinner"></span>', 'Connecting to CAN interface…', 'Establishing CAN bus connection.')
         : svcStateMsg('⛓', 'CAN bus not connected', 'Connect a CAN interface to discover online nodes.');

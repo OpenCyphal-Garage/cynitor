@@ -18,14 +18,27 @@ const GraphView = (() => {
     positions: {},
     selectedId: null,
     zoom: null,
-    showSubjects: true,
+    view: 'node-centric',
     hideOffline: false,
+    hideSystem: false,
     filterText: '',
     gravityMetric: 'none',
     showGrid: true,
     showLinkStats: false,
     initialized: false,
   };
+
+  const VIEW_OPTIONS = [
+    { value: 'nodes', label: 'Nodes only' },
+    { value: 'node-centric', label: 'Node-centric' },
+    { value: 'subject-centric', label: 'Subject-centric' },
+  ];
+
+  const SYSTEM_SUBJECT_MIN = 6144;
+  const SYSTEM_SERVICE_MIN = 256;
+  const _isSystemSubject = (sid) => Number(sid) >= SYSTEM_SUBJECT_MIN;
+  const _isSystemService = (sid) => Number(sid) >= SYSTEM_SERVICE_MIN;
+  const _showSubs = () => gState.view !== 'nodes';
 
   const GRAVITY_OPTIONS = [
     { value: 'none', label: 'none' },
@@ -48,8 +61,9 @@ const GraphView = (() => {
     const data = {
       positions: gState.positions,
       zoom: gState.zoom,
-      showSubjects: gState.showSubjects,
+      view: gState.view,
       hideOffline: gState.hideOffline,
+      hideSystem: gState.hideSystem,
       filterText: gState.filterText,
       gravityMetric: gState.gravityMetric,
       showGrid: gState.showGrid,
@@ -71,8 +85,13 @@ const GraphView = (() => {
       const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
       if (raw.positions && typeof raw.positions === 'object') gState.positions = raw.positions;
       if (raw.zoom && typeof raw.zoom === 'object') gState.zoom = raw.zoom;
-      if (typeof raw.showSubjects === 'boolean') gState.showSubjects = raw.showSubjects;
+      if (typeof raw.view === 'string' && VIEW_OPTIONS.some(o => o.value === raw.view)) {
+        gState.view = raw.view;
+      } else if (typeof raw.showSubjects === 'boolean') {
+        gState.view = raw.showSubjects ? 'node-centric' : 'nodes';
+      }
       if (typeof raw.hideOffline === 'boolean') gState.hideOffline = raw.hideOffline;
+      if (typeof raw.hideSystem === 'boolean') gState.hideSystem = raw.hideSystem;
       if (typeof raw.filterText === 'string') gState.filterText = raw.filterText;
       if (typeof raw.gravityMetric === 'string' && GRAVITY_OPTIONS.some(o => o.value === raw.gravityMetric)) {
         gState.gravityMetric = raw.gravityMetric;
@@ -96,25 +115,38 @@ const GraphView = (() => {
     const links = [];
     const subjectSet = new Map();
 
+    const hiddenSubs = state.hiddenSubjectIds || new Set();
+    const hiddenNodeKeys = state.hiddenNodeIds || new Set();
+    const _isHiddenSubject = (sid) => hiddenSubs.has(sid) || hiddenSubs.has(String(sid));
+    const _isHiddenNode = (node) => {
+      const key = typeof nodeStableKey === 'function' ? nodeStableKey(node) : null;
+      return key ? hiddenNodeKeys.has(key) : false;
+    };
+
     for (const node of Object.values(nodes)) {
+      if (_isHiddenNode(node)) continue;
       const nid = node.node_id;
       const id = `dev:${nid}`;
       deviceNodes.push({
         id,
         nodeId: nid,
         type: 'device',
-        label: _truncate(node.name || `Node ${nid}`, 20),
-        fullName: node.name || null,
+        label: _deviceDisplayLabel(node, nid),
+        fullName: _deviceFullName(node, nid),
+        uniqueId: node.unique_id || null,
+        stableKey: typeof nodeStableKey === 'function' ? nodeStableKey(node) : null,
         health: getNodeHealthValue(nid),
         disappeared: !!node.has_disappeared,
       });
 
       for (const sid of node.publishers || []) {
+        if (_isHiddenSubject(sid)) continue;
         if (!subjectSet.has(sid)) subjectSet.set(sid, { pubs: [], subs: [] });
         subjectSet.get(sid).pubs.push(nid);
         links.push({ source: id, target: `sub:${sid}`, type: 'pub', subjectId: sid });
       }
       for (const sid of node.subscribers || []) {
+        if (_isHiddenSubject(sid)) continue;
         if (!subjectSet.has(sid)) subjectSet.set(sid, { pubs: [], subs: [] });
         subjectSet.get(sid).subs.push(nid);
         links.push({ source: `sub:${sid}`, target: id, type: 'sub', subjectId: sid });
@@ -206,6 +238,13 @@ const GraphView = (() => {
     return typeof getNodeRate === 'function' && getNodeRate(nodeId) > 0;
   };
 
+  const _deviceFullName = (raw, nid) => {
+    const alias = typeof getNodeAlias === 'function' ? getNodeAlias(raw?.unique_id) : null;
+    return alias || raw?.name || `Node ${nid}`;
+  };
+
+  const _deviceDisplayLabel = (raw, nid) => _truncate(_deviceFullName(raw, nid), 20);
+
   const _linkStatText = (link) => {
     let rate = 0, payload = 0;
     for (const sid of _linkSubjectIds(link)) {
@@ -230,11 +269,17 @@ const GraphView = (() => {
   const _metricValue = (node, metric) => {
     if (metric === 'none') return 0;
     const raw = state.latestNodesPayload?.nodes?.[String(node.nodeId ?? '')];
+    const filterSubs = (arr) => gState.hideSystem ? arr.filter(sid => !_isSystemSubject(sid)) : arr;
+    const filterSvcs = (arr) => gState.hideSystem ? arr.filter(sid => !_isSystemService(sid)) : arr;
     if (node.type === 'device') {
-      const pubs = raw?.publishers?.length || 0;
-      const subs = raw?.subscribers?.length || 0;
-      const servers = raw?.servers?.length || 0;
-      const clients = raw?.clients?.length || 0;
+      const pubsList = filterSubs(raw?.publishers || []);
+      const subsList = filterSubs(raw?.subscribers || []);
+      const serversList = filterSvcs(raw?.servers || []);
+      const clientsList = filterSvcs(raw?.clients || []);
+      const pubs = pubsList.length;
+      const subs = subsList.length;
+      const servers = serversList.length;
+      const clients = clientsList.length;
       switch (metric) {
         case 'degree': return pubs + subs + servers + clients;
         case 'subjects': return pubs + subs;
@@ -242,7 +287,7 @@ const GraphView = (() => {
         case 'rate': return typeof getNodeRate === 'function' ? getNodeRate(node.nodeId) : 0;
         case 'payload': {
           let total = 0;
-          for (const sid of _deviceSubjectIds(raw)) {
+          for (const sid of [...pubsList, ...subsList]) {
             total += state.latestBySubject.get(sid)?.payload_bytes || 0;
           }
           return total;
@@ -303,13 +348,19 @@ const GraphView = (() => {
     const toolbar = document.createElement('div');
     toolbar.className = 'graph-toolbar';
     toolbar.innerHTML = `
-      <label class="graph-toggle">
-        <input type="checkbox" id="graphShowSubjects" ${gState.showSubjects ? 'checked' : ''} />
-        <span>Show subjects</span>
-      </label>
+      <div class="graph-select-group">
+        <label for="graphView">View</label>
+        <select id="graphView" class="graph-select" aria-label="View mode">
+          ${VIEW_OPTIONS.map(o => `<option value="${o.value}">${o.label}</option>`).join('')}
+        </select>
+      </div>
       <label class="graph-toggle">
         <input type="checkbox" id="graphHideOffline" ${gState.hideOffline ? 'checked' : ''} />
         <span>Hide offline</span>
+      </label>
+      <label class="graph-toggle">
+        <input type="checkbox" id="graphHideSystem" ${gState.hideSystem ? 'checked' : ''} />
+        <span>Hide system</span>
       </label>
       <label class="graph-toggle">
         <input type="checkbox" id="graphShowGrid" ${gState.showGrid ? 'checked' : ''} />
@@ -317,7 +368,7 @@ const GraphView = (() => {
       </label>
       <label class="graph-toggle">
         <input type="checkbox" id="graphShowLinkStats" ${gState.showLinkStats ? 'checked' : ''} />
-        <span>Show link stats</span>
+        <span>Link stats</span>
       </label>
       <input type="text" id="graphFilter" class="graph-filter" placeholder="Filter by id, name, or type…" aria-label="Filter graph" />
       <div class="graph-select-group">
@@ -328,16 +379,24 @@ const GraphView = (() => {
       </div>
       <button class="graph-btn" id="graphResetLayout" aria-label="Reset graph layout">Reset layout</button>
       <button class="graph-btn" id="graphUnpinAll" aria-label="Unpin all nodes">Unpin all</button>
-      <div class="graph-legend" aria-hidden="true">
-        <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device"></span>device</span>
-        <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--subject"></span>subject</span>
-        <span class="graph-legend-item"><span class="graph-legend-line"></span>idle</span>
-        <span class="graph-legend-item"><span class="graph-legend-line graph-legend-line--live"></span>live</span>
-      </div>
+      <button class="graph-btn graph-hidden-badge hidden" id="graphHiddenBadge" aria-label="Show all hidden">0 hidden — show</button>
     `;
     root.appendChild(toolbar);
+
+    const legendBar = document.createElement('div');
+    legendBar.className = 'graph-legend-bar';
+    legendBar.innerHTML = `
+      <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device"></span>device</span>
+      <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--subject"></span>subject</span>
+      <span class="graph-legend-item"><span class="graph-legend-line"></span>idle link</span>
+      <span class="graph-legend-item"><span class="graph-legend-line graph-legend-line--live"></span>live link</span>
+      <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--pulse"></span>publishing</span>
+    `;
+    root.appendChild(legendBar);
+
     document.getElementById('graphFilter').value = gState.filterText || '';
     document.getElementById('graphGravity').value = gState.gravityMetric || 'none';
+    document.getElementById('graphView').value = gState.view || 'node-centric';
 
     // SVG
     const svgWrap = document.createElement('div');
@@ -346,7 +405,7 @@ const GraphView = (() => {
 
     // Info panel — placed inside svgWrap so positioning is in canvas pixel space.
     const info = document.createElement('div');
-    info.className = 'graph-info';
+    info.className = 'graph-info hidden';
     info.id = 'graphInfo';
     svgWrap.appendChild(info);
 
@@ -423,13 +482,18 @@ const GraphView = (() => {
     });
 
     // Toolbar events
-    document.getElementById('graphShowSubjects').addEventListener('change', (e) => {
-      gState.showSubjects = e.target.checked;
+    document.getElementById('graphView').addEventListener('change', (e) => {
+      gState.view = e.target.value;
       save();
       _render(deriveGraph());
     });
     document.getElementById('graphHideOffline').addEventListener('change', (e) => {
       gState.hideOffline = e.target.checked;
+      save();
+      _render(deriveGraph());
+    });
+    document.getElementById('graphHideSystem').addEventListener('change', (e) => {
+      gState.hideSystem = e.target.checked;
       save();
       _render(deriveGraph());
     });
@@ -467,6 +531,12 @@ const GraphView = (() => {
       prevSnapshot = null;
       _render(deriveGraph());
     });
+    document.getElementById('graphHiddenBadge').addEventListener('click', () => {
+      if (typeof unhideAllNodes === 'function') unhideAllNodes();
+      if (typeof unhideAllSubjects === 'function') unhideAllSubjects();
+      _render(deriveGraph());
+      _renderHiddenBadge();
+    });
     document.getElementById('graphUnpinAll').addEventListener('click', () => {
       for (const key of Object.keys(gState.positions)) {
         delete gState.positions[key].pinned;
@@ -496,11 +566,31 @@ const GraphView = (() => {
   const _render = (graph) => {
     const { deviceNodes, subjectNodes, links, collapsedLinks, adjacency } = graph;
 
-    const showSubs = gState.showSubjects;
+    const placeholderHtml = typeof eventSourcePlaceholder === 'function'
+      ? eventSourcePlaceholder('view the topology graph') : null;
+    const svgWrap = svg?.node()?.parentNode;
+    if (svgWrap) {
+      let overlay = svgWrap.querySelector('.graph-conn-overlay');
+      if (placeholderHtml) {
+        if (!overlay) {
+          overlay = document.createElement('div');
+          overlay.className = 'graph-conn-overlay';
+          svgWrap.appendChild(overlay);
+        }
+        overlay.innerHTML = placeholderHtml;
+        prevSnapshot = null;
+        return;
+      }
+      if (overlay) overlay.remove();
+    }
+
+    const showSubs = _showSubs();
+    const subjectsOnTop = gState.view === 'subject-centric';
     const filterStr = (gState.filterText || '').trim().toLowerCase();
     const byId = new Map([...deviceNodes, ...subjectNodes].map(n => [n.id, n]));
 
     const passesOfflineGate = (n) => !(n.type === 'device' && gState.hideOffline && n.disappeared);
+    const passesSystemGate = (n) => !(gState.hideSystem && n.type === 'subject' && _isSystemSubject(n.subjectId));
     const matchesFilter = (n) => {
       if (!filterStr) return true;
       if (n.type === 'device') {
@@ -513,7 +603,7 @@ const GraphView = (() => {
 
     const baseVisible = new Set();
     for (const n of byId.values()) {
-      if (passesOfflineGate(n) && matchesFilter(n)) baseVisible.add(n.id);
+      if (passesOfflineGate(n) && passesSystemGate(n) && matchesFilter(n)) baseVisible.add(n.id);
     }
     const visibleIds = new Set(baseVisible);
     if (filterStr) {
@@ -522,7 +612,7 @@ const GraphView = (() => {
         if (!nb) continue;
         for (const nbId of nb) {
           const nbNode = byId.get(nbId);
-          if (nbNode && passesOfflineGate(nbNode)) visibleIds.add(nbId);
+          if (nbNode && passesOfflineGate(nbNode) && passesSystemGate(nbNode)) visibleIds.add(nbId);
         }
       }
     }
@@ -569,7 +659,13 @@ const GraphView = (() => {
     simulation.nodes(allNodes);
     simulation.force('link', d3.forceLink(allLinks).id(d => d.id).distance(d => showSubs ? 80 : 110).strength(0.4));
     if (showSubs) {
-      simulation.force('bipartite', d3.forceY(d => d.type === 'device' ? height * 0.33 : height * 0.67).strength(0.06));
+      const top = height * 0.33;
+      const bottom = height * 0.67;
+      simulation.force('bipartite', d3.forceY(d => {
+        const isSubject = d.type === 'subject';
+        const goTop = subjectsOnTop ? isSubject : !isSubject;
+        return goTop ? top : bottom;
+      }).strength(0.06));
     } else {
       simulation.force('bipartite', null);
     }
@@ -651,6 +747,19 @@ const GraphView = (() => {
     gState._visibleIds = visibleIds;
     prevSnapshot = _snapshotKey();
     _renderLinkStats();
+    _renderHiddenBadge();
+  };
+
+  const _renderHiddenBadge = () => {
+    const btn = document.getElementById('graphHiddenBadge');
+    if (!btn) return;
+    const n = (state.hiddenNodeIds?.size || 0) + (state.hiddenSubjectIds?.size || 0);
+    if (n === 0) {
+      btn.classList.add('hidden');
+      return;
+    }
+    btn.classList.remove('hidden');
+    btn.textContent = `${n} hidden — show`;
   };
 
   const _renderLinkStats = () => {
@@ -669,7 +778,10 @@ const GraphView = (() => {
     const enter = sel.enter().append('text')
       .attr('class', 'graph-link-label')
       .attr('text-anchor', 'middle');
-    enter.merge(sel).text(d => _linkStatText(d));
+    enter.merge(sel)
+      .text(d => _linkStatText(d))
+      .attr('x', d => (d.source.x + d.target.x) / 2)
+      .attr('y', d => (d.source.y + d.target.y) / 2 - 3);
   };
 
   const _seedNewNode = (node, allNodes, allLinks, adjacency, width, height) => {
@@ -874,6 +986,12 @@ const GraphView = (() => {
     const panel = document.getElementById('graphInfo');
     if (!panel) return;
 
+    // Don't wipe an in-progress inline rename when the periodic refresh tick
+    // (REFRESH_MS / nodes-payload update) re-enters here. The rename input
+    // commits on Enter/blur; until then keep the panel DOM intact.
+    const renameInput = panel.querySelector('.graph-info-rename');
+    if (renameInput && document.activeElement === renameInput) return;
+
     if (!id) {
       panel.classList.add('hidden');
       panel.innerHTML = '';
@@ -936,13 +1054,21 @@ const GraphView = (() => {
     const health = node.health || 'UNKNOWN';
     const hClass = getHealthCssClass(health);
     const alias = typeof getNodeAlias === 'function' ? getNodeAlias(raw?.unique_id) : null;
-    const displayName = alias || node.label;
+    const displayName = alias || node.fullName || node.label;
 
     let html = `<div class="graph-info-header">
       <span class="graph-info-type">Device</span>
-      <button class="graph-info-close" id="graphInfoClose" aria-label="Close info panel">&times;</button>
+      <div class="graph-info-actions">
+        <button class="graph-info-icon-btn" id="graphInfoRename" aria-label="Rename device" title="Rename">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        </button>
+        <button class="graph-info-icon-btn" id="graphInfoHide" aria-label="Hide device" title="Hide">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.5 18.5 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+        </button>
+        <button class="graph-info-close" id="graphInfoClose" aria-label="Close info panel">&times;</button>
+      </div>
     </div>
-    <div class="graph-info-title">${escapeHtml(displayName)}</div>
+    <div class="graph-info-title" id="graphInfoTitle" data-uid="${escapeHtml(raw?.unique_id_hex || '')}">${escapeHtml(displayName)}</div>
     <div class="graph-info-meta">
       <span>ID: ${node.nodeId}</span>
       <span class="graph-info-health ${hClass}">${escapeHtml(health)}</span>
@@ -982,15 +1108,59 @@ const GraphView = (() => {
 
     panel.innerHTML = html;
     document.getElementById('graphInfoClose')?.addEventListener('click', () => _selectNode(null));
+    document.getElementById('graphInfoHide')?.addEventListener('click', () => {
+      if (typeof hideNode === 'function') hideNode(node.nodeId);
+      _selectNode(null);
+      _render(deriveGraph());
+      _renderHiddenBadge();
+    });
+    document.getElementById('graphInfoRename')?.addEventListener('click', () => {
+      _startRename(node, raw);
+    });
+  };
+
+  const _startRename = (node, raw) => {
+    const titleEl = document.getElementById('graphInfoTitle');
+    if (!titleEl) return;
+    const uid = raw?.unique_id;
+    const current = (typeof getNodeAlias === 'function' && getNodeAlias(uid)) || raw?.name || '';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'graph-info-rename';
+    input.value = current;
+    input.maxLength = 64;
+    input.setAttribute('aria-label', 'Rename device');
+    titleEl.replaceWith(input);
+    input.focus();
+    input.select();
+    let committed = false;
+    const commit = (save) => {
+      if (committed) return;
+      committed = true;
+      if (save && typeof setNodeAlias === 'function') setNodeAlias(uid, input.value);
+      const id = node.id;
+      _render(deriveGraph());
+      _selectNode(id);
+    };
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); commit(false); }
+    });
+    input.addEventListener('blur', () => commit(true));
   };
 
   const _renderSubjectInfo = (panel, node) => {
     const ev = state.latestBySubject.get(node.subjectId);
     let html = `<div class="graph-info-header">
       <span class="graph-info-type">Subject</span>
-      <button class="graph-info-close" id="graphInfoClose" aria-label="Close info panel">&times;</button>
+      <div class="graph-info-actions">
+        <button class="graph-info-icon-btn" id="graphInfoHide" aria-label="Hide subject" title="Hide">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.5 18.5 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+        </button>
+        <button class="graph-info-close" id="graphInfoClose" aria-label="Close info panel">&times;</button>
+      </div>
     </div>
-    <div class="graph-info-title">${escapeHtml(node.label)}</div>
+    <div class="graph-info-title">${escapeHtml(node.fullType || node.label)}</div>
     <div class="graph-info-meta">
       <span>ID: ${node.subjectId}</span>
       ${node.rate != null ? `<span>${Number(node.rate).toFixed(1)} msg/s</span>` : ''}
@@ -1029,6 +1199,12 @@ const GraphView = (() => {
 
     panel.innerHTML = html;
     document.getElementById('graphInfoClose')?.addEventListener('click', () => _selectNode(null));
+    document.getElementById('graphInfoHide')?.addEventListener('click', () => {
+      if (typeof hideSubject === 'function') hideSubject({ id: node.subjectId });
+      _selectNode(null);
+      _render(deriveGraph());
+      _renderHiddenBadge();
+    });
   };
 
   // ── Live refresh ──
@@ -1055,17 +1231,24 @@ const GraphView = (() => {
   };
 
   const _updateVisuals = () => {
+    let labelTextChanged = false;
     gNodes.selectAll('.graph-node--device').each(function(d) {
       const newHealth = getNodeHealthValue(d.nodeId);
       const raw = state.latestNodesPayload?.nodes?.[String(d.nodeId)];
       d.health = newHealth;
       d.disappeared = raw?.has_disappeared || false;
+      const newLabel = _deviceDisplayLabel(raw, d.nodeId);
+      if (newLabel !== d.label) { d.label = newLabel; labelTextChanged = true; }
+      d.fullName = _deviceFullName(raw, d.nodeId);
       const g = d3.select(this);
       g.select('.graph-device-circle')
         .attr('stroke', d.disappeared ? 'var(--unknown)' : getHealthColor(newHealth))
         .attr('opacity', d.disappeared ? 0.4 : 1);
       g.classed('graph-node--live', isDeviceLive(d.nodeId, d.disappeared));
     });
+    if (labelTextChanged && gLabels) {
+      gLabels.selectAll('.graph-label--device').text(d => d.label);
+    }
 
     gLinks.selectAll('.graph-link').each(function(d) {
       const rate = linkRate(d);
@@ -1077,6 +1260,8 @@ const GraphView = (() => {
     if (gState.showLinkStats) {
       gLinkLabels.selectAll('.graph-link-label').text(d => _linkStatText(d));
     }
+
+    _renderHiddenBadge();
 
     if (gState.selectedId) _renderInfo(gState.selectedId);
   };

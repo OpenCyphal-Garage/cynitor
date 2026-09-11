@@ -153,8 +153,12 @@ const updateDashboardConnectButton = () => {
   if (!button) {
     return;
   }
-  button.textContent = state.dashboardConnected ? 'Disconnect' : 'Connect';
-  button.disabled = state.canConnecting || state.canDisconnecting;
+  if (state.dashboardConnecting) {
+    button.textContent = 'Connecting…';
+  } else {
+    button.textContent = state.dashboardConnected ? 'Disconnect' : 'Connect';
+  }
+  button.disabled = state.canConnecting || state.canDisconnecting || state.dashboardConnecting;
   updateSemaphores();
 };
 
@@ -168,12 +172,41 @@ const updateCanConnectButton = () => {
   updateSemaphores();
 };
 
+const STALE_WS_THRESHOLD_MS = 10000;
+
+const _attachReplayIfActive = async () => {
+  if (!state.dashboardConnected) return;
+  try {
+    const s = await requestJson('/api/replay/status');
+    if (s && s.active && typeof showReplayStrip === 'function') {
+      _applyReplayStatus?.(s);
+      showReplayStrip();
+    }
+  } catch (_) { /* nothing to attach */ }
+};
+
+const _updateStaleBanner = () => {
+  const banner = el('staleBanner');
+  if (!banner) return;
+  const last = state.lastWsMessageMs;
+  const open = state.dashboardConnected && last > 0;
+  const gapMs = open ? (Date.now() - last) : 0;
+  if (open && gapMs > STALE_WS_THRESHOLD_MS) {
+    const seconds = Math.floor(gapMs / 1000);
+    banner.textContent = `Connection paused — last update ${seconds}s ago. Data may be stale.`;
+    banner.classList.remove('hidden');
+  } else {
+    banner.classList.add('hidden');
+  }
+};
+
 const startThroughputTimer = () => {
   if (state.throughputTimer) clearInterval(state.throughputTimer);
   state.throughputTimer = window.setInterval(() => {
     state.wsThroughput = state.wsBytesAccum;
     state.wsBytesAccum = 0;
     updateSemaphores();
+    _updateStaleBanner();
   }, 1000);
 };
 
@@ -184,6 +217,8 @@ const stopThroughputTimer = () => {
   }
   state.wsBytesAccum = 0;
   state.wsThroughput = 0;
+  state.lastWsMessageMs = 0;
+  _updateStaleBanner();
 };
 
 // ── WebSocket ──
@@ -207,11 +242,17 @@ const connectWs = () => {
   }
 
   state.userClosedWs = false;
-  state.ws = new WebSocket(`${wsBase()}/ws`);
+  state.ws = new WebSocket(wsUrlWithToken('/ws'));
 
   state.ws.onopen = () => {
     state.wsReconnectAttempts = 0;
+    state.lastWsMessageMs = Date.now();
+    _updateStaleBanner();
     updateSemaphores();
+    // If a replay session is already running (other tab, page reload during
+    // playback, backend restarted with state restored), attach the playback
+    // strip on connect.
+    _attachReplayIfActive();
   };
 
   state.ws.onclose = () => {
@@ -229,8 +270,35 @@ const connectWs = () => {
   state.ws.onmessage = (message) => {
     try {
       state.wsBytesAccum += (message.data?.length || 0);
+      state.lastWsMessageMs = Date.now();
       const event = JSON.parse(message.data);
       if (event.type === 'filter_updated' || event.type === 'pong') {
+        return;
+      }
+      if (event.type === 'replay_ended') {
+        // Two distinct paths:
+        //   finished=true  → playback reached the end naturally; transition
+        //                    the strip to a "Finished" mode and keep the
+        //                    caches populated so the user can inspect the
+        //                    final state. Cache cleanup happens when the
+        //                    user dismisses via Close.
+        //   finished=false → user clicked Stop; tear down immediately.
+        const finishedNaturally = !!event.finished;
+        if (finishedNaturally) {
+          state.replayActive = false;
+          state.replayPaused = false;
+          state.replayFinished = true;
+          state.replayPositionS = state.replayDurationS;
+          if (typeof syncReplayStrip === 'function') syncReplayStrip();
+        } else {
+          state.latestBySubject.clear();
+          state.latestByNode.clear();
+          state.subjectHistory.clear();
+          if (typeof hideReplayStrip === 'function') hideReplayStrip();
+          if (typeof getAllNodes === 'function') getAllNodes();
+          renderNodesTable?.();
+          renderSelectedNodeContent?.();
+        }
         return;
       }
       if (event.type === 'metrics') {
@@ -251,6 +319,16 @@ const connectWs = () => {
             state._busFullArmed = true;
           }
         }
+        return;
+      }
+      // Raw frame-capture stream (Debugging view, opt-in). Only this client
+      // receives it, and only after it sent a {type:'capture'} subscribe.
+      if (event.type === 'can_frame') {
+        DebugView.onFrames(event);
+        return;
+      }
+      if (event.type === 'capture_status') {
+        DebugView.onCaptureStatus(event);
         return;
       }
       cacheEvent(event);
@@ -518,17 +596,35 @@ const connectDashboard = async () => {
     return;
   }
 
+  state.dashboardConnecting = true;
+  updateDashboardConnectButton();
+  renderNodesTable();
+  renderSelectedNodeContent();
+
   let statusData;
   try {
     statusData = await requestJson('/api/status');
-  } catch {
-    updateSemaphores();
+  } catch (error) {
+    state.dashboardConnecting = false;
+    updateDashboardConnectButton();
+    renderNodesTable();
+    renderSelectedNodeContent();
+    showToast(`Backend unreachable: ${error.message}`, 'error');
     return;
   }
 
+  state.dashboardConnecting = false;
   state.dashboardConnected = true;
   updateDashboardConnectButton();
   startStatusPolling();
+
+  // Open WS + throughput meter + node polling as soon as the dashboard is
+  // connected, regardless of CAN state — this is the only path that lets
+  // replay events reach the frontend without an active CAN session.
+  startThroughputTimer();
+  connectWs();
+  await getAllNodes();
+  startNodesPolling();
 
   // If backend already has CAN running, sync state
   if (statusData.status === 'running' && statusData.can_interface) {
@@ -552,6 +648,7 @@ const connectDashboard = async () => {
   renderNodesTable();
   renderSelectedNodeContent();
   if (state.activeView === 'dsdl') DsdlView.init();
+  if (state.activeView === 'debug') DebugView.init();
   fetchRecordings();
   saveSettings();
 };

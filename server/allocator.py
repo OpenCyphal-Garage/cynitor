@@ -134,6 +134,14 @@ class AllocatorManager:
         self._task = asyncio.create_task(self._monitor_loop())
 
     def _start_local_allocator(self) -> None:
+        # NOTE: This must run on the asyncio main thread, not a worker.
+        # AllocatorApp -> CANTransport -> PythonCANMedia.start() calls
+        # asyncio.get_event_loop() in its calling thread (to capture the loop
+        # for its background reader). On Python 3.10+ get_event_loop() raises
+        # in a worker thread that has no associated loop, so wrapping this in
+        # asyncio.to_thread breaks /api/can/connect for the local-allocator
+        # path. Constructor latency is bounded (subprocess thread spawn) so
+        # the brief loop occupancy is acceptable here.
         if self._allocator is None:
             self._allocator = AllocatorApp(iface_name=self._iface_name)
 

@@ -4,15 +4,18 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
 
 from log_store import InMemoryLogStore, APILogHandler
-from startup_setup import prepare_runtime
+from startup_setup import prepare_runtime, resolve_project_root
+from version import __version__
 
 IS_LINUX = sys.platform.startswith("linux")
 
@@ -174,12 +177,18 @@ class CANSession:
         self.telemetry = None
         self.allocator_manager = None
         self.event_logger = None
+        self.frame_capture = None
         self.bus_load: Optional[BusLoadMonitor] = None
         self.registered_nodes: set[int] = set()
         self._tasks: list[asyncio.Task] = []
         self._lock = asyncio.Lock()
         self._disconnect_task: Optional[asyncio.Task] = None
         self.last_error: Optional[str] = None
+        # Recording-replay engine. None unless a replay session is in progress.
+        # Mutually exclusive with scanner — the WS handler chooses telemetry
+        # vs replay based on which is non-None, and connect()/start_replay()
+        # refuse to run while the other side is active.
+        self.replay = None
 
     @property
     def is_running(self) -> bool:
@@ -187,14 +196,25 @@ class CANSession:
 
     async def connect(self, can_iface: str, force_compile: bool = False) -> None:
         """Start all CAN components."""
+        # Fast-fail before the slow prepare_runtime step. The double-check inside
+        # the lock guards against concurrent connect() calls that both passed
+        # this check before prepare_runtime returned.
+        if self.is_running:
+            raise RuntimeError("Already connected")
+        if self.replay is not None:
+            raise RuntimeError("Replay session is active — stop it before connecting CAN")
+
+        # prepare_runtime can take seconds (DSDL compile via nnvg, env setup).
+        # Running it outside the lock keeps a concurrent disconnect() responsive
+        # instead of blocking it behind a cold-start connect.
+        await asyncio.to_thread(prepare_runtime, can_iface, force_compile)
+
         async with self._lock:
             if self.is_running:
                 raise RuntimeError("Already connected")
             self.last_error = None
 
             try:
-                await asyncio.to_thread(prepare_runtime, can_iface, force_compile)
-
                 from scanner_node import ScannerNode
                 from telemetry_manager import TelemetryManager
                 from allocator import AllocatorManager
@@ -210,6 +230,12 @@ class CANSession:
                 logger.info("Initializing TelemetryManager...")
                 self.telemetry = TelemetryManager(self.scanner)
                 await self.telemetry.start()
+
+                # Frame-capture tap is created up front but stays dormant until a
+                # Debugging-view client explicitly starts it (it changes bus
+                # behaviour, so it is never auto-enabled).
+                from frame_capture import FrameCaptureManager
+                self.frame_capture = FrameCaptureManager(self.scanner)
 
                 logger.info("Initializing EventLogger...")
                 self.event_logger = EventLogger(
@@ -254,6 +280,64 @@ class CANSession:
         async with self._lock:
             await self._teardown()
 
+    def rescan_registrations(self) -> None:
+        """Force the register loop to re-attempt every appeared node on its next tick.
+
+        Call this after a successful DSDL compile so that services/publishers whose
+        type imports failed earlier (because the type wasn't compiled yet) get
+        retried — registered_nodes only re-triggers add_servers / add_subscriptions
+        for nodes not already in registered_nodes, and unavailable service_metadata
+        entries would otherwise stick until the node disappears.
+        """
+        if not self.is_running or not self.scanner:
+            return
+        self.registered_nodes.clear()
+        for key, meta in list(self.scanner.service_metadata.items()):
+            if meta.get("unavailable"):
+                self.scanner.service_metadata.pop(key, None)
+        logger.info("Cleared registration state — register loop will re-attempt all nodes")
+
+    async def start_replay(self, recording_id: int, speed: float = 1.0,
+                             start_offset_s: float = 0.0) -> dict:
+        """Open a recording for playback. Refuses if CAN is connected or
+        another replay is already running.
+        """
+        if self.is_running:
+            raise RuntimeError("CAN is connected — disconnect before starting replay")
+        if self.replay is not None:
+            raise RuntimeError("Replay already in progress")
+        if self.event_logger is None:
+            # event_logger lives on the session and gets torn down on disconnect.
+            # When CAN has never been connected this session it doesn't exist yet,
+            # so we create a transient one bound to the same DB.
+            from event_logger import EventLogger
+            self.event_logger = EventLogger(db_path="telemetry_events.db",
+                                            retention_seconds=86400.0,
+                                            max_events=5_000_000)
+            await self.event_logger.start()
+        from replay import ReplayManager
+        self.replay = ReplayManager(self.event_logger.db_path,
+                                    recording_id=recording_id, speed=speed)
+
+        def _on_finish() -> None:
+            # Clear the session attribute when playback ends so the WS handler
+            # exits the replay branch and a new replay can be started.
+            self.replay = None
+
+        self.replay._on_finish = _on_finish
+        try:
+            return await self.replay.start(start_offset_s=start_offset_s)
+        except Exception:
+            self.replay = None
+            raise
+
+    async def stop_replay(self) -> None:
+        if self.replay is None:
+            return
+        target = self.replay
+        self.replay = None
+        await target.stop()
+
     async def _teardown(self) -> None:
         """Internal cleanup — caller must hold self._lock."""
         logger.info("Tearing down CAN session...")
@@ -282,6 +366,8 @@ class CANSession:
         if self.allocator_manager:
             await self.allocator_manager.stop()
             self.allocator_manager = None
+        # Capture ends implicitly when the transport closes in scanner.close().
+        self.frame_capture = None
         if self.scanner:
             self.scanner.close()
             self.scanner = None
@@ -345,6 +431,70 @@ async def register_nodes(scanner, registered_nodes_set: set[int]) -> None:
 # ---------------------------------------------------------------------------
 # Background tasks
 # ---------------------------------------------------------------------------
+
+def get_can_link_diagnostics(iface: str) -> dict:
+    """Best-effort controller/bus diagnostics for a CAN interface.
+
+    Parses ``ip -details -statistics link show <iface>`` plus sysfs operstate.
+    SocketCAN-specific (Linux). All fields are optional — virtual interfaces
+    (vcan) expose no CAN controller state, so most values come back ``None``.
+    Never raises; returns whatever could be read.
+    """
+    result: dict = {
+        "operstate": None, "state": None, "bitrate": None, "dbitrate": None,
+        "berr_tx": None, "berr_rx": None, "restart_ms": None,
+        "restarts": None, "bus_errors": None, "arbitration_lost": None,
+        "error_warning": None, "error_passive": None, "bus_off": None,
+    }
+    if not IS_LINUX:
+        return result
+
+    try:
+        result["operstate"] = (
+            (Path("/sys/class/net") / iface / "operstate").read_text(encoding="utf-8").strip()
+        )
+    except Exception:
+        pass
+
+    try:
+        proc = subprocess.run(
+            ["ip", "-details", "-statistics", "link", "show", iface],
+            check=False, capture_output=True, text=True, timeout=3,
+        )
+    except Exception:
+        return result
+    if proc.returncode != 0:
+        return result
+    out = proc.stdout
+
+    def _int(pattern: str, group: int = 1):
+        m = re.search(pattern, out)
+        return int(m.group(group)) if m else None
+
+    m = re.search(r"can state\s+(\S+)", out)
+    if m:
+        result["state"] = m.group(1)
+    result["bitrate"] = _int(r"\bbitrate\s+(\d+)")
+    result["dbitrate"] = _int(r"\bdbitrate\s+(\d+)")
+    result["restart_ms"] = _int(r"restart-ms\s+(\d+)")
+    berr = re.search(r"berr-counter\s+tx\s+(\d+)\s+rx\s+(\d+)", out)
+    if berr:
+        result["berr_tx"], result["berr_rx"] = int(berr.group(1)), int(berr.group(2))
+
+    # CAN error-state-change counters appear as a labelled header row followed
+    # by the values, only with -statistics and only on real controllers.
+    counters = re.search(
+        r"re-started\s+bus-errors\s+arbit-lost\s+error-warn\s+error-pass\s+bus-off"
+        r"\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)",
+        out,
+    )
+    if counters:
+        (result["restarts"], result["bus_errors"], result["arbitration_lost"],
+         result["error_warning"], result["error_passive"], result["bus_off"]) = (
+            int(counters.group(i)) for i in range(1, 7)
+        )
+    return result
+
 
 def _check_can_health(iface: str) -> Optional[str]:
     """Check CAN interface health via system. Returns error message or None.
@@ -423,38 +573,132 @@ async def _event_logger_loop(event_logger, queue: asyncio.Queue) -> None:
         raise
 
 
+async def attach_or_fall_back(session, can_iface: str, force_compile: bool = False) -> bool:
+    """Attach to `can_iface`, or warn and leave the server in selection mode.
+
+    A bad --can is not worth killing the server over. The dashboard is already
+    serving by this point, and it is the obvious place to pick the right
+    interface, so say what went wrong, show what is actually available, and
+    carry on. Returns whether the attach succeeded.
+    """
+    try:
+        await session.connect(can_iface, force_compile=force_compile)
+        return True
+    except Exception as exc:
+        logger.warning("Could not attach to %r: %s", can_iface, exc)
+        try:
+            available = await asyncio.to_thread(discover_can_interfaces)
+        except Exception:
+            # Nothing on this path may take the server down; that is the whole
+            # point of falling back rather than exiting.
+            available = []
+        if available:
+            logger.warning("Available CAN interfaces: %s", ", ".join(available))
+        else:
+            logger.warning(
+                "No CAN interfaces found. Create a virtual one with: "
+                "sudo modprobe vcan && sudo ip link add dev vcan0 type vcan "
+                "&& sudo ip link set up vcan0"
+            )
+        logger.warning("Continuing in selection mode — pick an interface in the dashboard.")
+        return False
+
+
+def show_token_on_terminal(token: str, stream=None) -> bool:
+    """Print the auth token where a person can copy it, and nowhere else.
+
+    Deliberately not logged. The server's own log buffer is served through
+    /api/logs and rendered in the dashboard's log panel, and under a service
+    manager anything on stdout is captured into the system journal — so
+    logging a secret would scatter copies of it.
+
+    Printed only when a terminal is attached, which is exactly when someone is
+    there to read it. Supervised runs get nothing.
+
+    Returns whether it printed.
+    """
+    stream = stream or sys.stderr
+    if not token or not getattr(stream, "isatty", lambda: False)():
+        return False
+    print(
+        f"\n  Auth token (paste this into the dashboard when prompted):"
+        f"\n\n      {token}\n",
+        file=stream,
+        flush=True,
+    )
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
-async def main(can_iface: Optional[str] = None, force_compile: bool = False) -> None:
+async def main(can_iface: Optional[str] = None, force_compile: bool = False, bind: str = "127.0.0.1",
+               port: int = 8080, serve_frontend: bool = True) -> None:
     from websocket_server import WebSocketServer
     from dsdl_manager import DsdlManager
 
     session = CANSession()
-    project_root = Path(__file__).resolve().parent.parent
+    project_root = resolve_project_root()
     dsdl_mgr = DsdlManager(project_root)
+
+    # Optional bearer-token auth. When CYNITOR_AUTH_TOKEN is set in the
+    # environment, every REST/WS request outside /api/health must present
+    # the token. When unset, the server runs open. Strongly recommended
+    # whenever --bind 0.0.0.0 is used.
+    auth_token = os.environ.get("CYNITOR_AUTH_TOKEN", "").strip() or None
 
     ws_server = WebSocketServer(
         session=session,
-        host="0.0.0.0",
-        port=8080,
+        host=bind,
+        port=port,
         log_store=_log_store,
         dsdl_manager=dsdl_mgr,
+        auth_token=auth_token,
+        # Serve the dashboard too, so deploying to a server is one binary and
+        # clients need only a browser. --no-frontend turns that off for
+        # API-only deployments, and a checkout without website/ is API-only
+        # regardless.
+        website_dir=(project_root / "website") if serve_frontend else None,
     )
     await ws_server.start()
 
     logger.info("=" * 60)
     logger.info("SERVER RUNNING")
     logger.info("=" * 60)
-    logger.info("REST API:    http://localhost:8080/api/")
-    logger.info("Health:      http://localhost:8080/api/health")
-    logger.info("Status:      http://localhost:8080/api/status")
+    logger.info("Bound to:    %s:%d", bind, port)
+    logger.info("Auth:        %s", "token required (CYNITOR_AUTH_TOKEN set)" if auth_token else "OPEN (no token)")
+    show_token_on_terminal(auth_token)
+    if bind == "0.0.0.0" and not auth_token:
+        logger.warning("Server is bound to 0.0.0.0 with NO auth — reachable from any network peer. Set CYNITOR_AUTH_TOKEN to require a bearer token.")
+    elif bind == "0.0.0.0":
+        logger.info("Server is bound to 0.0.0.0 with token auth — clients must present Authorization: Bearer <token>.")
+    logger.info("REST API:    http://localhost:%d/api/", port)
+    logger.info("Health:      http://localhost:%d/api/health", port)
+    logger.info("Status:      http://localhost:%d/api/status", port)
+    if ws_server.website_dir:
+        logger.info("Dashboard:   http://localhost:%d/", port)
+    else:
+        logger.info("Dashboard:   not served (API only)")
+    if can_iface:
+        logger.info("Mode:        direct  (attached to %s at startup)", can_iface)
+    else:
+        logger.info("Mode:        selection  (waiting for the UI or POST /api/can/connect)")
+    logger.info("-" * 60)
+    logger.info("Startup options:")
+    logger.info("  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0)")
+    logger.info("  --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)")
+    logger.info("  --port <n>       listen on <n> instead of 8080")
+    logger.info("  --recompile      force DSDL recompilation via nnvg")
+    logger.info("  --no-frontend    serve only the API and WebSocket, not the dashboard")
+    logger.info("  --help           full reference")
+    if not can_iface:
+        logger.info("Selection-mode startup (no --can): connect from the UI or POST /api/can/connect")
     logger.info("=" * 60)
 
     try:
         if can_iface:
-            await session.connect(can_iface, force_compile=force_compile)
+            await attach_or_fall_back(session, can_iface, force_compile)
 
         await asyncio.Event().wait()
 
@@ -470,8 +714,53 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False) -> 
         logger.info("Shutdown complete")
 
 
+def _shutdown_on_sigterm(_signum, _frame) -> None:
+    """Turn SIGTERM into the interrupt the entry point already handles.
+
+    Without this, SIGTERM kills the process outright and `main`'s finally
+    block never runs, so the CAN session and HTTP server are not closed down.
+    """
+    raise KeyboardInterrupt
+
+
+def _exit_when_parent_dies() -> None:
+    """Ask the kernel to signal us when our parent process goes away.
+
+    The packaged server is a PyInstaller single-file binary: a bootloader
+    parent with this interpreter as its child. A SIGKILL to the bootloader
+    cannot be forwarded, so without this the interpreter outlives whatever
+    started it and keeps holding port 8080. The next start would then find a
+    stale server answering on the port it wanted.
+
+    Linux only; a no-op elsewhere.
+    """
+    if not IS_LINUX:
+        return
+    original_ppid = os.getppid()
+    try:
+        import ctypes
+
+        PR_SET_PDEATHSIG = 1
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        if libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0) != 0:
+            logger.debug("prctl(PR_SET_PDEATHSIG) failed; parent-death cleanup disabled")
+            return
+    except Exception as exc:
+        logger.debug("Parent-death cleanup unavailable: %s", exc)
+        return
+
+    # Closes the race where the parent exited before the call above landed, in
+    # which case the signal will never arrive. Compare against the parent we
+    # started with rather than against pid 1: an orphan is reparented to the
+    # nearest subreaper, which is only init when no other one is registered.
+    if os.getppid() != original_ppid:
+        logger.warning("Parent process exited during startup; shutting down")
+        raise SystemExit(0)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the telemetry server")
+    parser.add_argument("--version", action="version", version=f"cynitor-server {__version__}")
     parser.add_argument(
         "--can",
         default=None,
@@ -482,10 +771,35 @@ if __name__ == "__main__":
         action="store_true",
         help="Force DSDL recompilation even if already compiled",
     )
+    parser.add_argument(
+        "--bind",
+        default="127.0.0.1",
+        help="Host/IP to bind the HTTP server to (default: 127.0.0.1; use 0.0.0.0 to expose on the network)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="TCP port to listen on (default: 8080)",
+    )
+    parser.add_argument(
+        "--no-frontend",
+        action="store_true",
+        help="Serve only the REST API and WebSocket; do not serve the dashboard",
+    )
     args = parser.parse_args()
 
+    signal.signal(signal.SIGTERM, _shutdown_on_sigterm)
+    _exit_when_parent_dies()
+
     try:
-        asyncio.run(main(can_iface=args.can, force_compile=args.recompile))
+        asyncio.run(main(
+            can_iface=args.can,
+            force_compile=args.recompile,
+            bind=args.bind,
+            port=args.port,
+            serve_frontend=not args.no_frontend,
+        ))
     except KeyboardInterrupt:
         logger.info("Interrupted by user")
     except Exception as e:

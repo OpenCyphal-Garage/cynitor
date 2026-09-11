@@ -60,22 +60,28 @@ EventLogger.start()        SQLite persistence
 | `scanner_node.py` | CAN network discovery: heartbeat + port list subscriptions, dynamic per-subject subscribers, per-service clients, service schema introspection with STANDARD_SERVICES fallback |
 | `node_info.py` | Per-node lifecycle state: appearance, last-heartbeat timestamp, disappearance threshold (>1.1s), port lists, GetInfo response |
 | `telemetry_manager.py` | Event router: maintains `latest_by_subject` and `latest_by_node` caches, broadcasts to subscriber queues |
-| `websocket_server.py` | aiohttp HTTP+WS server, REST endpoints, per-client WebSocket filtering, periodic metrics broadcast, node history and service call history endpoints |
+| `websocket_server.py` | aiohttp HTTP+WS server, REST endpoints, per-client WebSocket filtering, periodic metrics broadcast, node history and service call history endpoints; also serves `website/` so one binary hosts both the API and the dashboard |
 | `event_logger.py` | SQLite persistence with batch writes, `asyncio.to_thread` for non-blocking I/O, configurable retention, node lifecycle history (30-day), service call history with response bodies |
 | `allocator.py` | Node-ID allocator detection / fallback (CentralizedAllocator), 10s re-check |
 | `startup_setup.py` | DSDL compilation via `nnvg`, sets `UAVCAN__CAN__IFACE` / `UAVCAN__CAN__MTU`, calls `yakut accommodate` for node ID |
 | `node_identity_map.py` | Bidirectional `unique_id ↔ node_id` mapping with displacement detection, snapshot storage, and SQLite-backed persistence |
 | `log_store.py` | In-memory deque (max 5000) fed by a `logging.Handler`; exposed via `/api/logs` |
 | `dsdl_manager.py` | DSDL discovery, namespace tree, source/compiled state, custom-type CRUD under `dsdl_messages/custom/`, recompile orchestration |
+| `replay.py` | Recording-replay engine: streams `recording_events` rows back through subscriber queues at controlled speed; mirrors `TelemetryManager`'s broadcast shape so the WS handler picks one source per session (telemetry XOR replay) |
 
 ### CLI flags
 
 ```
 --can <iface>     CAN interface name (vcan0, slcan0, can0, ...). Required for direct mode.
 --recompile       Force `nnvg` to regenerate Python from DSDL even if outputs exist.
+--bind <host>     Host/IP to bind the HTTP server to (default 127.0.0.1; use 0.0.0.0 to expose on the network).
+--port <n>        TCP port to listen on (default 8080).
+--no-frontend     Serve only the REST API and WebSocket, not the dashboard.
 ```
 
 Without `--can`, the backend starts in selection mode. Use `POST /api/can/connect` with `{"interface": "..."}` to attach.
+
+By default the dashboard is served from the same port as the API, so a deployment is one binary. `--no-frontend` turns that off for API-only deployments, where something other than the browser dashboard is consuming the data. A checkout with no `website/` directory is API-only regardless. The startup banner says which mode is active.
 
 ### DSDL
 
@@ -104,9 +110,10 @@ All frontend code lives in `website/`. Plain HTML/CSS/JS. No build step. D3 (CDN
 | `registers-panel.js` | Register read/write UI: renders register list, type validation, edit controls, offline caching |
 | `history-panel.js` | Node lifecycle history: timeline rendering, event labels/badges, subject activity summary, time-range filtering |
 | `subjects-panel.js` | Subject browser: Tabulator-based table of all subjects and services, inline service expansion with node selector, integrated persistent history. Uses a stash/unstash pattern to protect the inline service detail DOM node from Tabulator's virtual re-renders |
-| `graph-view.js` | Network topology: D3 force-directed bipartite graph of device and subject nodes, drag-to-pin with persistent positions, adjacency highlighting, info panel overlay, subject toggle |
+| `graph-view.js` | Network topology: D3 force-directed graph with three view modes (nodes only / node-centric / subject-centric), live link traffic, drag-to-pin with persistent positions, adjacency highlighting, info panel that follows the selected node, hide-system / hide-offline / per-node-or-subject hide with restore badge, inline device rename, gravity bias by metric |
 | `dsdl-view.js` | DSDL Inspector tab: namespace tree with bus-activity badges, field-level search, dependency navigation, custom-type editor with compile-state lock |
-| `record-view.js` | Record tab: subject/service/node pickers, per-recording cards with progress bars (with "no limit" rendering for unbounded recordings), live polling, edit-limits modal, duplicate, CSV/JSON export |
+| `record-view.js` | Record tab: subject/service/node pickers, per-recording cards with progress bars (with "no limit" rendering for unbounded recordings), live polling, edit-limits modal, duplicate, CSV/JSON export, Play-replay button on completed recordings |
+| `replay-strip.js` | Replay playback strip above the main view: position scrub, speed selector, pause/resume/stop, MM:SS/MM:SS time display; polls `/api/replay/status` every 1 s; transitions to a "Finished" mode (Replay-again / Close) when the backend's `replay_ended` sentinel arrives with `finished: true` |
 | `log-panel.js` | Right log panel: collapsible/resizable shell, ring buffer (cap 2000, not persisted), Cyphal feed (diagnostic.Record + user-added text subjects), Server poller (`/api/logs` every 2s), severity floor across sources, per-source toggle pills with count badges, disconnect indicator on the Server pill |
 | `connection.js` | WebSocket lifecycle, REST polling (status, nodes, interfaces), throughput meter, semaphores, `disconnectAll` shared teardown; forwards every event to `ingestLogEvent` for the log panel |
 | `app.js` | Boot file: DOM event wiring (`bind`), settings restore, frontend-server heartbeat, sidebar view tab switching |
@@ -138,7 +145,7 @@ The frontend never blocks on a single source. WebSocket is for live events; REST
 Six views share the same WebSocket and REST data:
 - **Nodes view** — Tabulator table of nodes (with ghost rows for displaced identities pinned to bottom), detail panel below with tabs (Publishers, Subscribers, Servers, Clients, Registers, History).
 - **Subjects view** — Tabulator table of all subjects and services across the network. Services can be expanded inline with a node selector and request form. Both views use `services-panel.js` for service interaction but maintain isolated state via the `forSubjects` parameter pattern.
-- **Graph view** — D3 force-directed bipartite topology showing device nodes (circles) and subject nodes (diamonds) with directional pub/sub links. Supports drag-to-pin with persistent positions, zoom/pan, adjacency highlighting, and a toggle to collapse subjects into device-to-device edges.
+- **Graph view** — D3 force-directed graph showing device nodes (circles) and subject nodes (diamonds) with directional pub/sub links and animated live-traffic indicators. Three view modes (nodes only / node-centric / subject-centric), drag-to-pin with persistent positions, zoom/pan, adjacency highlighting, hide-system / hide-offline / per-node-or-subject hide with a restore badge, inline device rename, gravity bias by total links / channels / rate / payload.
 - **Compare view** — independent graphs for side-by-side multi-series comparison.
 - **DSDL view** — namespace tree of loaded types with bus-activity badges, custom-type editor.
 - **Record view** — capture filtered events into per-recording SQLite stores with limits.
@@ -151,7 +158,7 @@ The global `state` object holds everything mutable: connection flags, timer IDs,
 
 Service interaction state is duplicated per view to prevent cross-contamination: `serviceCallState` / `_subjectServiceCallState`, `expandedServiceId` / `_subjectExpandedServiceId`, and `_subjectServiceNodeId`. Shared rendering functions in `services-panel.js` accept a `forSubjects` boolean to read/write the correct slot. Plot subject selection is similarly isolated: `_nodesPlotSubject` and `_subjectsPlotSubject` are saved/restored on view switch so closing a plot in one view doesn't affect the other. Detail panel height and collapsed state are stored per-view (`_nodesDetailHeight`/`_nodesDetailCollapsed`, `_subjectsDetailHeight`/`_subjectsDetailCollapsed`) and swapped on view switch.
 
-`localStorage` persistence (key `pycyphal.dashboard.settings.v2`) is debounced 250ms and flushed on `beforeunload`. Heavy or transient data (telemetry payloads, full table rows) is *not* persisted — only layout/preferences.
+`localStorage` persistence (key `cynitor.dashboard.settings.v1`, with `pycyphal.dashboard.settings.v2` read once as a legacy fallback for users upgrading from the pre-rename build) is debounced 250ms and flushed on `beforeunload`. Heavy or transient data (telemetry payloads, full table rows) is *not* persisted — only layout/preferences.
 
 ### Cache pruning
 
@@ -214,13 +221,16 @@ cynitor/
     node_info.py            Per-node state tracking
     node_identity_map.py    Stable unique_id ↔ node_id mapping
     telemetry_manager.py    Event routing and caching
-    websocket_server.py     REST + WebSocket server
+    websocket_server.py     REST + WebSocket server, serves the dashboard
     event_logger.py         SQLite event persistence
     allocator.py            Node-ID allocation management
     startup_setup.py        DSDL compilation, env setup
     log_store.py            In-memory log buffer for /api/logs
     dsdl_manager.py         DSDL discovery, namespace tree, custom-type CRUD
-    requirements.txt        Python deps
+    replay.py               Recording replay engine (subscriber queues + timing)
+    frame_capture.py        Raw CAN frame capture (transport-level tap)
+    requirements.txt        Python runtime deps
+    requirements-dev.txt    Adds pytest + pytest-asyncio for the test suite
     tests/                  pytest unit tests
   website/
     index.html              Layout
@@ -236,14 +246,22 @@ cynitor/
     subjects-panel.js       Subject browser (subjects view) with inline service expansion
     graph-view.js           D3 force-directed network topology
     dsdl-view.js            DSDL Inspector view + custom-type editor
-    record-view.js          Record tab: pickers, per-recording cards, export
+    record-view.js          Record tab: pickers, per-recording cards, export, replay launcher
+    replay-strip.js         Replay playback strip: scrub, speed, pause/stop/finish-mode
+    debug-view.js           Raw CAN frame debugging view (opt-in capture)
     log-panel.js            Right log panel: Cyphal + Server feeds, picker, filters
     connection.js           WS + polling + lifecycle
     app.js                  Boot, bindings, heartbeat, view switching
+    config.js               Empty placeholder; the backend serves its own
     styles.css              Theme and layout
   dsdl_messages/
     public_regulated_data_types/   git submodule (uavcan/, reg/)
     custom/                        user-created DSDL types (gitignored content)
+  packaging/
+    build.sh                One-command build: binary, .deb, .AppImage
+    cynitor-server.spec     PyInstaller spec (single-file binary)
+    deb/                    control template, systemd unit, /etc/default file
+    appimage/               AppRun, desktop entry, icon
   python_compiled_messages/ nnvg output (gitignored)
   README.md                 User-facing intro
   TECHNICAL.md              This file
@@ -276,6 +294,69 @@ cynitor/
 
 The plot in `detail-panel.js#renderPlot` operates on `state.subjectHistory["{subject_id}:{attr}"]` time series. Per-attribute panels are joined by attribute name; new attributes appear automatically once they arrive in cached events.
 
+## Packaging
+
+`packaging/` freezes the server into one self-contained executable. A
+deployment is that file plus a browser: the binary serves the REST API, the
+WebSocket stream and the dashboard from the same port.
+
+`build.sh` produces three artifacts from one executable: the bare binary, a
+`.deb` and an `.AppImage`. None of them open a window — the dashboard is
+served to a browser, so there is nothing to display locally.
+
+The `.deb` is the one that earns its keep: it puts the binary on `PATH`,
+ships a systemd unit with an `/etc/default` file for options, and declares
+`Conflicts`/`Replaces` against the old `cynitor` package so upgrading from the
+windowed builds is clean. The `.AppImage` is a convenience wrapper; the
+PyInstaller binary is already self-contained and needs only libc, so the
+AppImage adds packaging rather than portability.
+
+`cynitor-server.spec` drives PyInstaller. Key concerns:
+
+- **Hidden imports** — pycyphal and python-can use dynamic imports extensively. The spec enumerates every submodule our code touches.
+- **Bundled data** — `python_compiled_messages/` (pre-compiled DSDL), `dsdl_messages/` (source definitions) and `website/` (the dashboard) are packed into the binary.
+- **pydsdl's vendored parser** — pydsdl reaches `parsimonious` by prepending its own `third_party` directory to `sys.path`. That directory is not a package, so static analysis cannot follow the import; the spec ships the tree as data at the same relative path and aborts if pydsdl ever moves it.
+- **Compiled DSDL is mandatory** — the spec aborts if `python_compiled_messages/` is absent, because `nnvg` is not bundled and the frozen binary cannot regenerate it. Run `python3 server/startup_setup.py --recompile` before building.
+- **Project root detection** — `startup_setup.resolve_project_root()` returns `sys._MEIPASS` when frozen. It is the only frozen-aware code: `prepare_runtime()` derives `sys.path`, `PYCYPHAL_PATH` and `CYPHAL_PATH` from it, and runs before anything imports the generated `uavcan.*` packages, so no PyInstaller runtime hook is needed.
+
+### Versioning and releases
+
+The version lives in exactly one place, `server/version.py`, and the binary
+reports it with `--version`.
+
+To cut a release, bump that version first, then tag to match:
+
+```bash
+# edit server/version.py -> __version__ = "0.8.0"
+git commit -am "Release 0.8.0" && git push
+git tag v0.8.0 && git push origin v0.8.0
+```
+
+The tag triggers `build-server.yml`, which refuses to build when the tag and
+the module disagree, so a `v0.8.0` tag cannot publish a binary named `0.7.0`.
+The build is done on the oldest supported distribution on purpose: glibc is
+forward compatible, so the artifact runs on newer systems but not the reverse.
+
+Every release build runs the binary against a CAN interface that does not
+exist. Direct-attach mode reaches the pycyphal, pydsdl and python-can imports
+before it touches any device, so that exercises the whole chain and fails if
+anything is missing from the bundle. Two releases shipped unusable before this
+check existed, because the binary started and served the dashboard perfectly
+and only failed on connect.
+
+### Process lifetime
+
+The frozen binary is a bootloader parent with the interpreter as its child. A
+`SIGKILL` to the bootloader cannot be forwarded, so `main.py` arms
+`PR_SET_PDEATHSIG` at startup to be signalled when its parent dies; otherwise
+the server can outlive whatever started it and keep holding port 8080.
+`SIGTERM` is routed into the existing interrupt path so the CAN session and
+HTTP server shut down in order.
+
+The orphan guard compares against the parent recorded at startup rather than
+against pid 1, because an orphan is reparented to the nearest subreaper, which
+is only init when no other one is registered.
+
 ## Testing
 
 Backend unit tests live in `server/tests/`:
@@ -286,10 +367,11 @@ cd server && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests/ -v -p pyte
 
 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` prevents ROS2 plugin conflicts in some environments. Required: `pip install pytest pytest-asyncio aiohttp`.
 
-Frontend e2e tests live in `.claude/tests/` and require the frontend running on port 5500:
+Frontend e2e tests live in `tests/e2e/` and serve `website/` themselves (or reuse a server already on port 5500):
 
 ```bash
-cd .claude/tests/01_landing_page && python test.py
+pip install -r tests/e2e/requirements.txt && playwright install chromium
+cd tests/e2e && python3 test_landing_page.py
 ```
 
 ## Conventions

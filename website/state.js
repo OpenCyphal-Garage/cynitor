@@ -18,6 +18,7 @@ const state = {
   nodesTimer: null,
   throughputTimer: null,
   dashboardConnected: false,
+  dashboardConnecting: false,
   canState: CONN.IDLE,
   preferredCanInterface: '',
   favouriteNodeIds: new Set(),
@@ -44,6 +45,7 @@ const state = {
   savedCompareConfigs: [],
   wsBytesAccum: 0,
   wsThroughput: 0,
+  lastWsMessageMs: 0,
   busUtilization: null,
   busLoadHistory: [],
   _busFullArmed: true,
@@ -81,6 +83,22 @@ const state = {
   recordings: [],
   activeRecordingId: null,
   recordBuffer: null,
+  // Replay session state — populated by /api/replay/* responses and the
+  // /api/replay/status poll while replay is active. Mirrors CANSession.replay
+  // on the backend.
+  replayActive: false,
+  replayRecordingId: null,
+  replayPositionS: 0,
+  replayDurationS: 0,
+  replaySpeed: 1.0,
+  replayPaused: false,
+  replayEventsEmitted: 0,
+  replayTotalEvents: 0,
+  replayStatusTimer: null,
+  // True when the playback engine reached the end naturally (vs the user
+  // clicking Stop). Keeps the strip visible in a "Finished" mode with a
+  // Replay-again / Close affordance until the user dismisses it.
+  replayFinished: false,
   recordFilterDraft: {
     subject_ids: [], service_ids: [], node_ids: [], message_types: [],
     name: '', notes: '',
@@ -231,6 +249,9 @@ const getHealthColor = (health) => HEALTH_CSS_COLOR[classifyHealth(health)] || '
 
 const connectionPlaceholder = (context) => {
   if (!state.dashboardConnected) {
+    if (state.dashboardConnecting) {
+      return svcStateMsg('<span class="svc-spinner"></span>', 'Connecting to backend…', 'Reaching the backend server.');
+    }
     if (state.pendingReconnect) {
       return svcStateMsg('<span class="svc-spinner"></span>', 'Reconnecting to backend…', 'Restoring previous session.');
     }
@@ -243,6 +264,17 @@ const connectionPlaceholder = (context) => {
     return svcStateMsg('⛓', 'CAN bus not connected', `Connect a CAN interface to ${context}.`);
   }
   return null;
+};
+
+// Same as connectionPlaceholder but treats an active replay session as a
+// valid event source. Use this in panels that only consume cached events
+// (node table, graph view, detail panel root, plots) — they should render
+// during replay even though CAN is disconnected by definition. Live-RPC
+// panels (registers, history, services) keep using connectionPlaceholder
+// because they need a real bus.
+const eventSourcePlaceholder = (context) => {
+  if (state.replayActive) return null;
+  return connectionPlaceholder(context);
 };
 
 const diffUpdateTable = (tabulator, data, keyField) => {
@@ -342,18 +374,51 @@ const showToast = (message, type = 'info', durationMs = 5000) => {
 const apiBase = () => el('apiBase').value.trim().replace(/\/$/, '');
 const wsBase = () => apiBase().replace(/^http/, 'ws');
 
+// Configuration the backend injects via /config.js before any page script
+// runs. Empty when a plain static file server delivers the page instead, in
+// which case the built-in defaults apply.
+const serverConfig = () => window.__CYNITOR || {};
+
+const AUTH_TOKEN_KEY = 'cynitor.auth.token';
+const getAuthToken = () => {
+  try { return localStorage.getItem(AUTH_TOKEN_KEY) || ''; } catch (_) { return ''; }
+};
+const setAuthToken = (token) => {
+  try {
+    if (token) localStorage.setItem(AUTH_TOKEN_KEY, token);
+    else localStorage.removeItem(AUTH_TOKEN_KEY);
+  } catch (_) {}
+};
+
+// Build a wsBase that carries the auth token as a query param when set —
+// browsers don't let JS attach custom headers to WebSocket handshakes, so
+// query string is the only path for the WS auth check.
+const wsUrlWithToken = (path) => {
+  const base = `${wsBase()}${path}`;
+  const token = getAuthToken();
+  if (!token) return base;
+  const sep = base.includes('?') ? '&' : '?';
+  return `${base}${sep}token=${encodeURIComponent(token)}`;
+};
+
 const withSmartJsonHeaders = (options = {}) => {
   const method = String(options.method || 'GET').toUpperCase();
   const hasBody = options.body !== undefined && options.body !== null;
   const isSimpleMethod = method === 'GET' || method === 'HEAD';
+  const token = getAuthToken();
+  const baseHeaders = {
+    ...(options.headers || {}),
+    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+  };
   if (isSimpleMethod && !hasBody) {
-    return options;
+    if (!token) return options;
+    return { ...options, headers: baseHeaders };
   }
   return {
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      ...(options.headers || {}),
+      ...baseHeaders,
     },
   };
 };
@@ -379,13 +444,85 @@ const requestJson = async (path, options = {}) => {
   }
 
   const data = await response.json().catch(() => ({}));
+  if (response.status === 401) {
+    // Backend requires CYNITOR_AUTH_TOKEN. Drop any stale stored token and
+    // prompt the user. Throws so the caller's catch handler runs.
+    setAuthToken('');
+    showAuthModal(data.error || 'Missing or invalid token');
+    const err = new Error(data.error || 'Authentication required');
+    err.status = 401;
+    err.data = data;
+    throw err;
+  }
   if (!response.ok) {
     const detail = data.error
       || (Array.isArray(data.errors) && data.errors.length ? data.errors.join('\n') : null);
-    throw new Error(detail || `HTTP ${response.status} for ${path}`);
+    const err = new Error(detail || `HTTP ${response.status} for ${path}`);
+    // Attach the raw status and body so callers can distinguish e.g. a 504
+    // service-call timeout (body carries {status: "timeout", latency_ms, error})
+    // from a generic 500 with the same envelope.
+    err.status = response.status;
+    err.data = data;
+    throw err;
   }
   return data;
 };
+
+// ── Auth token modal ──
+
+let _authModalResolver = null;
+
+const showAuthModal = (errorMsg) => {
+  const modal = el('authModal');
+  if (!modal) return;
+  const apiBaseEl = el('authModalApiBase');
+  if (apiBaseEl) apiBaseEl.textContent = apiBase();
+  const errEl = el('authModalError');
+  if (errEl) {
+    if (errorMsg) {
+      errEl.textContent = errorMsg;
+      errEl.classList.remove('hidden');
+    } else {
+      errEl.classList.add('hidden');
+    }
+  }
+  const input = el('authModalInput');
+  if (input) {
+    input.value = '';
+    setTimeout(() => input.focus(), 50);
+  }
+  modal.classList.remove('hidden');
+};
+
+const hideAuthModal = () => {
+  const modal = el('authModal');
+  if (modal) modal.classList.add('hidden');
+};
+
+const _bindAuthModalOnce = () => {
+  const btn = el('authModalSave');
+  const input = el('authModalInput');
+  if (!btn || !input || btn.dataset.bound) return;
+  btn.dataset.bound = '1';
+  const commit = () => {
+    const token = input.value.trim();
+    if (!token) return;
+    setAuthToken(token);
+    hideAuthModal();
+    // The caller decides what to retry — most paths will recover on the
+    // next status poll / WS reconnect tick.
+    if (typeof connectDashboard === 'function') {
+      // best-effort reconnect; safe to call even if already connected
+      try { connectDashboard(); } catch (_) {}
+    }
+  };
+  btn.addEventListener('click', commit);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+  });
+};
+
+document.addEventListener('DOMContentLoaded', _bindAuthModalOnce);
 
 // ── localStorage settings ──
 
@@ -492,7 +629,10 @@ window.addEventListener('beforeunload', () => {
 
 const loadSettings = () => {
   const settings = readSettings();
-  if (typeof settings.apiBase === 'string' && settings.apiBase.trim()) {
+  const injectedApiBase = serverConfig().apiBase;
+  if (injectedApiBase) {
+    el('apiBase').value = injectedApiBase;
+  } else if (typeof settings.apiBase === 'string' && settings.apiBase.trim()) {
     el('apiBase').value = settings.apiBase;
   }
   if (settings.tableSort && settings.tableSort.key) {
@@ -574,7 +714,7 @@ const loadSettings = () => {
   if (settings.nodeAliases && typeof settings.nodeAliases === 'object') {
     state.nodeAliases = settings.nodeAliases;
   }
-  if (['subjects', 'graph', 'compare', 'dsdl', 'record'].includes(settings.activeView)) {
+  if (['subjects', 'graph', 'compare', 'dsdl', 'record', 'debug'].includes(settings.activeView)) {
     state.activeView = settings.activeView;
   }
   if (settings.recordFilterDraft && typeof settings.recordFilterDraft === 'object') {

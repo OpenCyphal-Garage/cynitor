@@ -1,0 +1,16 @@
+Package: cynitor-server
+Version: @VERSION@
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: OpenCyphal-Garage <https://github.com/OpenCyphal-Garage/cynitor>
+Depends: libc6
+Conflicts: cynitor
+Replaces: cynitor
+Description: Cyphal network monitor
+ Serves the Cynitor dashboard together with its REST and WebSocket API for
+ monitoring Cyphal (UAVCAN) networks over CAN bus.
+ .
+ Everything is inside one executable: no Python installation is required, and
+ clients need only a browser. Start the service or run cynitor-server
+ directly, then open the address it prints.

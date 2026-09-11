@@ -68,6 +68,45 @@ In this mode, the server starts on port 8080 immediately. Use the REST API to co
 
 Once connected, CAN telemetry begins. Disconnect with `POST /api/can/disconnect`.
 
+By default the server binds to `127.0.0.1` (localhost only). To expose it on the network — for example to reach the dashboard from another host on a trusted LAN — pass `--bind`:
+
+```bash
+python3 main.py --can vcan0 --bind 0.0.0.0
+```
+
+When exposed on a non-loopback address, require a bearer token by setting the `CYNITOR_AUTH_TOKEN` environment variable:
+
+```bash
+CYNITOR_AUTH_TOKEN=$(openssl rand -hex 24) python3 main.py --can vcan0 --bind 0.0.0.0
+```
+
+With the variable set, every REST and WebSocket request outside `/api/health` must present the token. Static dashboard assets are exempt: a browser has to load the page before it can prompt for a token, and the markup is not secret. Concretely, `/ws`, `/api` and everything under `/api/` are protected; every other path is served open.
+
+Protected requests must present the token as:
+- REST: `Authorization: Bearer <token>` header
+- WebSocket: `?token=<token>` query parameter (browsers can't attach custom headers on WS handshakes)
+
+Unauthenticated requests get `HTTP 401 {"error": "missing or invalid token"}`. With the variable unset the server runs open — same behaviour as before this option existed. The frontend prompts the user to paste the token on the first 401 and stores it in `localStorage` under `cynitor.auth.token`.
+
+When a terminal is attached, the server prints the token once at startup so it can be copied into the dashboard. It is written straight to stderr rather than logged: the log buffer is served through `/api/logs` and rendered in the dashboard's log panel, and a service manager captures stdout into the system journal, so logging it would scatter copies. Runs without a terminal, which is every supervised run, print nothing.
+
+
+### Serving the dashboard
+
+When a `website/` directory is present next to the server (a source checkout, or bundled inside the frozen binary), the dashboard is served from the same port as the API:
+
+| Route | Serves |
+|-------|--------|
+| `GET /` | `website/index.html` |
+| `GET /config.js` | Generated: `window.__CYNITOR = {"apiBase": "<this request's origin>"}` |
+| `GET /<path>` | Any other file under `website/` |
+
+These are registered after the API routes, so `/api/*` and `/ws` always win over the catch-all static mount.
+
+Start the server with `--no-frontend` to omit them entirely, for deployments where something other than the dashboard consumes the API. Those three routes then return `404` and everything else is unchanged.
+
+`config.js` is how a browser-served dashboard learns its API address. The checked-in `website/config.js` is an empty placeholder, which is what a separate static file server on port 5500 delivers, leaving the address field at its built-in default. Served from the backend, the generated version wins and points the page at the origin it was fetched from, so no per-client configuration is needed.
+
 ### 3. Runtime Environment
 
 At startup, Python setup runs automatically and configures:
@@ -92,11 +131,22 @@ Output:
 ============================================================
 SERVER RUNNING
 ============================================================
+Bound to:    127.0.0.1:8080
 REST API:    http://localhost:8080/api/
 Health:      http://localhost:8080/api/health
 Status:      http://localhost:8080/api/status
+Mode:        selection  (waiting for the UI or POST /api/can/connect)
+------------------------------------------------------------
+Startup options:
+  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0)
+  --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)
+  --port <n>       listen on <n> instead of 8080
+  --recompile      force DSDL recompilation via nnvg
+  --help           full reference
 ============================================================
 ```
+
+In direct mode (`--can <iface>`) the `Mode:` line reads `direct (attached to <iface> at startup)` and the block ends with a hint pointing back at selection mode. When `--bind 0.0.0.0` is passed, an additional `WARNING` line is emitted before the tips block to make the network-exposed posture obvious.
 
 ## Usage
 
@@ -131,7 +181,20 @@ ws.send(JSON.stringify({
 
 // Ping to keep connection alive
 ws.send(JSON.stringify({ type: 'ping' }));
+
+// Subscribe to the raw frame-capture stream (Debugging view). Off by default.
+// Enabling starts transport-level capture if not already active — see the note
+// below. Send enabled:false to stop receiving frames on this connection.
+ws.send(JSON.stringify({ type: 'capture', enabled: true }));
 ```
+
+> **Frame capture is sticky and changes bus behaviour.** pycyphal implements
+> capture by reconfiguring the acceptance filter to accept all frames and
+> forcing loopback on every outgoing frame. It cannot be stopped without closing
+> the transport (a CAN disconnect), and it adds bus/CPU overhead. It is therefore
+> opt-in: only clients that send `{type:'capture',enabled:true}` receive frames,
+> and `enabled:false` only stops *forwarding* to that client — the transport tap
+> stays active until disconnect.
 
 **Server Messages:**
 
@@ -163,6 +226,59 @@ Metrics (sent to all clients every 1 second):
     "bus_utilization": 3.0
 }
 ```
+
+Filter acknowledgement (sent in response to a client `filter` message):
+```json
+{
+    "type": "filter_updated",
+    "subject_ids": [7509, 7510],
+    "node_ids": [1, 2],
+    "message_types": ["Heartbeat_1_0"]
+}
+```
+
+Each field echoes the active filter for the client. Empty / omitted dimensions mean "match anything in that dimension".
+
+Pong (sent in response to a client `ping` message):
+```json
+{ "type": "pong" }
+```
+
+Capture status (sent in response to a client `capture` message):
+```json
+{ "type": "capture_status", "active": true, "stats": { "captured": 0, "rx": 0, "tx": 0, "cyphal": 0, "foreign": 0, "dropped": 0 } }
+```
+`active` reflects whether transport-level capture is running. When enabling
+fails because no CAN session exists, the message carries `"active": false` and an
+`"error"` field. A disable reply carries `"active": false, "forwarding": false`.
+
+Raw frame batch (sent only to clients that opted into capture; batched ~every
+120 ms to bound message rate):
+```json
+{
+    "type": "can_frame",
+    "stats": { "captured": 1024, "rx": 1000, "tx": 24, "cyphal": 1010, "foreign": 14, "dropped": 0 },
+    "frames": [
+        {
+            "t": 12345.678, "ts": 1741949445.123, "dir": "rx",
+            "id": "0x107D552A", "ext": true, "dlc": 8, "data": "01 02 03 04 05 06 07 E5",
+            "cyphal": true, "priority": "NOMINAL", "src": 42, "dst": null,
+            "kind": "msg", "port": 7509, "transfer_id": 5, "start": true, "end": true
+        },
+        { "t": 12345.679, "ts": 1741949445.124, "dir": "rx", "id": "0x00000123", "ext": false, "dlc": 2, "data": "AA BB", "cyphal": false }
+    ]
+}
+```
+`dir` is `tx`/`rx` (TX = forced-loopback of our own frames). For Cyphal frames,
+`kind` is `msg`/`req`/`resp` and `port` is the subject- or service-ID; non-Cyphal
+("foreign") frames carry only the raw fields with `cyphal: false`.
+
+Protocol errors (sent when the client sends a frame the server cannot parse):
+```json
+{ "error": "Invalid JSON" }
+```
+
+These do not include a `type` field; the bare `error` key signals a protocol-level problem rather than a domain event. Subsequent frames are still accepted on the same connection.
 
 ### REST API
 
@@ -209,6 +325,64 @@ Response:
 ```
 
 Returns `409` if not connected.
+
+**Transport-layer diagnostics (Debugging view):**
+```bash
+curl http://localhost:8080/api/can/transport
+```
+
+Read-only snapshot of the CAN transport *below* the DSDL/application layer —
+used by the Debugging tab. When no CAN session is active it returns
+`{"connected": false}` (HTTP 200) so the UI can render an idle state.
+
+Response (connected):
+```json
+{
+  "connected": true,
+  "interface": "vcan0",
+  "protocol": {"mtu": 7, "transfer_id_modulo": 32, "max_nodes": 128, "is_fd": false},
+  "statistics": {
+    "in_frames": 1024, "in_frames_cyphal": 1000, "in_frames_cyphal_accepted": 980,
+    "in_frames_errored": 0, "in_frames_loopback": 12,
+    "out_frames": 40, "out_frames_timeout": 0, "out_frames_loopback": 12,
+    "media_acceptance_filtering_efficiency": 0.96, "lost_loopback_frames": 0
+  },
+  "capture_active": false,
+  "link": {
+    "operstate": "up", "state": "ERROR-ACTIVE", "bitrate": 500000, "dbitrate": null,
+    "berr_tx": 0, "berr_rx": 0, "restart_ms": 0,
+    "restarts": 0, "bus_errors": 0, "arbitration_lost": 0,
+    "error_warning": 0, "error_passive": 0, "bus_off": 0
+  },
+  "bus_utilization": 12.0
+}
+```
+
+`protocol` / `statistics` come from pycyphal's transport (`mtu` is the
+single-frame payload limit: 7 = Classic CAN, up to 63 = CAN FD). `link` is
+best-effort controller state parsed from `ip -details -statistics link show`;
+fields are `null` on virtual interfaces (vcan) or where the controller does not
+report them. The Debugging view polls this endpoint at ~1 Hz while active.
+
+**Raw frame-capture snapshot (Debugging view frame monitor):**
+```bash
+curl 'http://localhost:8080/api/can/capture?limit=500'
+```
+
+Returns the recent-frame ring buffer plus capture counters — used to backfill
+the frame monitor on open / after reconnect. Live frames stream over the
+WebSocket `can_frame` message (see above); this endpoint does not start capture.
+
+```json
+{
+  "active": true,
+  "stats": {"captured": 1024, "rx": 1000, "tx": 24, "cyphal": 1010, "foreign": 14, "dropped": 0},
+  "frames": [ /* same per-frame shape as the can_frame stream, oldest→newest */ ]
+}
+```
+
+When no CAN session exists: `{"active": false, "stats": null, "frames": []}`.
+`limit` is clamped to 2000 (default 500).
 
 **DSDL status (does not require CAN connection):**
 ```bash
@@ -439,7 +613,7 @@ Response:
     "can_interface": "vcan0",
     "connected_clients": 3,
     "server": {
-        "host": "0.0.0.0",
+        "host": "127.0.0.1",
         "port": 8080
     }
 }
@@ -526,7 +700,7 @@ Response (success):
 }
 ```
 
-Response (timeout):
+Response (timeout, HTTP `504`):
 ```json
 {
     "status": "timeout",
@@ -535,7 +709,24 @@ Response (timeout):
 }
 ```
 
-Returns `400` for invalid request body or attribute validation errors, `404` if the service is not found on the node, `503` if CAN is not connected.
+Response (service not found, HTTP `404`):
+```json
+{
+    "status": "error",
+    "error": "Service 430 not found on node 37"
+}
+```
+
+Response (generic backend exception, HTTP `500`):
+```json
+{
+    "status": "error",
+    "latency_ms": 42,
+    "error": "<exception message>"
+}
+```
+
+Returns `400` for invalid request body or attribute validation errors, `404` if the service is not found on the node, `500` if the backend hit an unexpected error invoking the service, `503` if CAN is not connected, `504` for timeouts. The body always carries a `status` field whose values are one of `"ok"`, `"timeout"`, or `"error"`, so a client can switch on the body shape regardless of HTTP status. `latency_ms` is omitted only in the `404` case (no call was attempted).
 
 **Get client ports for a node (with type names and server cross-references):**
 ```bash
@@ -698,7 +889,7 @@ Named captures with optional length/event-count limits. Two storage modes:
 - **`dedicated`** (default for new recordings) — matching subject events and service calls stream into a per-recording table (`recording_events`) from the moment the recording starts. Survives the global buffer's retention. Quick-save snapshots matching events from the global buffer into the same table at creation time.
 - **`global`** — Phase 1 bookmarks. Metadata only; export reads from the shared `events` table within the recording's time-range × filter. Subject to global retention.
 
-All recording endpoints return `503` if no `event_logger` is initialized (no CAN session yet).
+All recording endpoints return `503` if no `event_logger` is initialized (no CAN session yet), **except** `GET /api/recordings`, which returns `200 { recordings: [] }` so the frontend's startup poll doesn't error before CAN is connected.
 
 #### List, create, inspect
 
@@ -746,13 +937,13 @@ An event matches if it satisfies **any** dimension (subject in `subject_ids` OR 
 #### Export
 
 ```http
-GET    /api/recordings/{rec_id}/export?format=csv     → text/csv stream
-GET    /api/recordings/{rec_id}/export?format=json    → application/json
+GET    /api/recordings/{rec_id}/export?format=csv      → text/csv stream
+GET    /api/recordings/{rec_id}/export?format=jsonl    → application/x-ndjson stream
 ```
 
 CSV columns: `recording_id, timestamp_unix, timestamp, subject_id, publisher_node_id, unique_id, message_type, rate, attribute, value, unit`. One row per attribute (events with N attributes → N rows). Service-call rows currently appear with their `service_id` in the `subject_id` column and service metadata in `attributes_json` — a future CSV revision may add a dedicated `kind`/`service_id` column.
 
-JSON returns `{ recording, events: [...], truncated, exported_at_unix }`. Each event carries a `kind` field (`'subject'` or `'service_call'`) and either `subject_id` or `service_id`. Buffered with a hard cap of 200,000 events; set `truncated=true` if reached. Use CSV for larger windows.
+JSONL (JSON Lines) streams one JSON object per line. The first line is a header: `{ "recording": {...}, "exported_at_unix": float }`. Every subsequent line is a single event object with `kind`, `subject_id`/`service_id`, `timestamp_unix`, `attributes`, etc. Streamed with the same pagination as CSV — no hard event cap.
 
 Both formats set `Content-Disposition: attachment; filename="<sanitized-name>.<ext>"`.
 
@@ -774,6 +965,85 @@ Stats about the shared `events` ring used by legacy bookmarks and quick-save:
 ```
 
 Use this to surface "what's available for quick-save" and to estimate observed message rate (count / (newest - oldest)).
+
+### Replay (`/api/replay/*`)
+
+A recording stored under `recording_events` can be streamed back through the same WebSocket the live telemetry flows on. Replay events carry the `replay: true` field but otherwise look identical to live events — frontends consume them through their normal cache path.
+
+**Invariant:** replay is mutually exclusive with an active CAN session. Starting replay while CAN is connected returns `409`; calling `/api/can/connect` while a replay is running returns `409` with the same body shape. Only one replay session at a time; multiple browser tabs all watch the same one.
+
+**Start playback:**
+```bash
+curl -X POST http://localhost:8080/api/replay/start \
+  -H 'Content-Type: application/json' \
+  -d '{"recording_id": 42, "speed": 2.0, "start_offset_s": 0}'
+```
+- `recording_id` (required, integer)
+- `speed` (optional, 0.1–50.0, default `1.0`)
+- `start_offset_s` (optional, seconds from the recording's first event)
+
+Response on success — current replay status:
+```json
+{
+  "active": true,
+  "recording_id": 42,
+  "position_s": 0.0,
+  "duration_s": 32.4,
+  "speed": 2.0,
+  "paused": false,
+  "events_emitted": 0,
+  "total_events": 65,
+  "finished": false
+}
+```
+
+Returns `404` if the recording has no `kind='subject'` rows to replay, `409` if CAN is connected or another replay is in progress.
+
+**Control playback (pause / resume / stop):**
+```bash
+curl -X POST http://localhost:8080/api/replay/control \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "pause"}'
+```
+`action` is one of `"pause"`, `"resume"`, `"stop"`. Returns the latest status (or `{"active": false}` after stop). `404` if no replay is running and the action is not `stop`; `400` for an unknown action.
+
+**Seek to a position:**
+```bash
+curl -X POST http://localhost:8080/api/replay/seek \
+  -H 'Content-Type: application/json' \
+  -d '{"position_s": 12.5}'
+```
+`position_s` is clamped to `[0, duration_s]`. Returns 404 if no replay is running.
+
+**Change speed without re-seeking:**
+```bash
+curl -X POST http://localhost:8080/api/replay/speed \
+  -H 'Content-Type: application/json' \
+  -d '{"speed": 5.0}'
+```
+`speed` is clamped to `[0.1, 50.0]`. Returns 404 if no replay is running.
+
+**Query current status (poll-friendly):**
+```bash
+curl http://localhost:8080/api/replay/status
+```
+Returns the same shape as the start response; `{"active": false}` when no replay is running.
+
+**Replay-ended WebSocket sentinel:**
+
+When replay terminates — naturally at the end of the recording, or because a client called `stop` — the backend pushes one frame to every subscribed client before tearing the WS down:
+```json
+{
+  "type": "replay_ended",
+  "recording_id": 42,
+  "finished": true
+}
+```
+`finished` distinguishes the two paths: `true` means playback reached the end, `false` means a client stopped it. Frontends can use this to switch back to an idle state without polling.
+
+**MVP scope notes:**
+- Only `kind='subject'` rows are replayed. `service_call` rows stay in storage for export but aren't played.
+- `/api/nodes` during replay is synthesised from the recording's publisher list — no GetInfo / health / mode / uptime / client port lists. The placeholder payload carries `_replay: true` on each node so consumers can flag the view as approximate.
 
 ### Event Logger (SQLite)
 
@@ -814,11 +1084,17 @@ count = logger.get_event_count()
 
 ### Port and Host
 
-Edit `main.py`:
+The host is controlled by the `--bind` CLI flag (default `127.0.0.1`):
+
+```bash
+python3 main.py --can vcan0 --bind 0.0.0.0
+```
+
+For non-default ports, edit `main.py` directly:
 ```python
 ws_server = WebSocketServer(
     session=session,
-    host="127.0.0.1",  # Change host
+    host=bind,
     port=9000,          # Change port
     log_store=_log_store,
 )
@@ -888,7 +1164,7 @@ Use `max_events` in EventLogger to prevent database bloat.
 **WebSocket connection refused:**
 - Ensure `main.py` is running
 - Check firewall (port 8080)
-- Verify `0.0.0.0` binding or change to `127.0.0.1` for local-only
+- The server binds to `127.0.0.1` by default; if you need to reach it from another host, restart with `--bind 0.0.0.0` (no auth is enforced — only do this on a trusted network)
 
 **High memory usage:**
 - Reduce TelemetryManager queue size

@@ -86,9 +86,22 @@ def _auto_node_id() -> str | None:
     return value
 
 
+def resolve_project_root() -> Path:
+    """
+    Directory that holds dsdl_messages/ and python_compiled_messages/.
+
+    Under PyInstaller the source tree does not exist on disk: bundled data is
+    unpacked to a temporary directory that the frozen binary reports through
+    sys._MEIPASS. Everywhere else the root is the parent of server/.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS)
+    return Path(__file__).resolve().parent.parent
+
+
 def prepare_runtime(can_iface: str = "can0", force_compile: bool = False) -> None:
     """Prepare environment variables, sys.path, and optional DSDL compilation for runtime."""
-    project_root = Path(__file__).resolve().parent.parent
+    project_root = resolve_project_root()
     dsdl_dir = project_root / "dsdl_messages"
     public_types_dir = dsdl_dir / "public_regulated_data_types"
     uavcan_dir = public_types_dir / "uavcan"

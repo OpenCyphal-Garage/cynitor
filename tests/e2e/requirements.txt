@@ -1,0 +1,3 @@
+# End-to-end test dependencies. Pinned exactly: each Playwright release expects
+# a specific Chromium build, and CI keys its browser cache on this file.
+playwright==1.58.0

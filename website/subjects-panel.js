@@ -14,7 +14,7 @@ const _fmtDate = (unix) => {
 };
 
 const subjectsPlaceholder = () => {
-  return connectionPlaceholder('browse subjects and services')
+  return eventSourcePlaceholder('browse subjects and services')
     || svcStateMsg('<span class="svc-spinner"></span>', 'Waiting for traffic…', 'Listening on the CAN bus. Subjects and services will appear as nodes communicate.');
 };
 
@@ -635,6 +635,7 @@ const switchView = (view) => {
   const compareEl = el('compareContainer');
   const dsdlEl = el('dsdlContainer');
   const recordEl = el('recordContainer');
+  const debugEl = el('debugContainer');
   const detailHandle = el('detailResizeHandle');
   const detailPanel = el('detailPanel');
 
@@ -660,6 +661,8 @@ const switchView = (view) => {
     DsdlView.hide();
   } else if (prevView === 'record') {
     setRecordViewActive(false);
+  } else if (prevView === 'debug') {
+    DebugView.hide();
   }
 
   // Hide all content panes
@@ -669,6 +672,7 @@ const switchView = (view) => {
   compareEl.classList.add('hidden');
   dsdlEl.classList.add('hidden');
   recordEl.classList.add('hidden');
+  debugEl.classList.add('hidden');
 
   // Activate target view
   if (view === 'subjects') {
@@ -713,6 +717,11 @@ const switchView = (view) => {
     recordEl.classList.remove('hidden');
     initRecordView();
     setRecordViewActive(true);
+  } else if (view === 'debug') {
+    detailHandle.classList.add('hidden');
+    detailPanel.classList.add('hidden');
+    debugEl.classList.remove('hidden');
+    DebugView.init();
   } else {
     state.selectedPlotSubject = state._nodesPlotSubject ?? null;
     stopPlotAnim();

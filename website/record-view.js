@@ -4,7 +4,10 @@
 // Cross-tab live indicator on the Record tab button.
 
 const RECORD_POLL_LIVE_MS = 2000;
-const RECORD_POLL_IDLE_MS = 30000;
+// Idle (no live recording) poll cadence. Recordings change when the user
+// starts/stops one, auto-stop fires on the backend, or another client edits
+// the list; 5 s keeps the UI feeling responsive without spamming the API.
+const RECORD_POLL_IDLE_MS = 5000;
 const BUFFER_POLL_MS = 15000;
 const BYTES_PER_EVENT_ESTIMATE = 250;
 
@@ -344,9 +347,10 @@ const _buildCard = (rec) => {
     <div class="record-card-actions">
       ${live ? '<button class="btn-mini" data-action="stop">Stop</button>' : ''}
       ${live ? '<button class="btn-mini" data-action="edit-limits" aria-label="Edit limits">Edit limits</button>' : ''}
+      ${!live ? _playButtonHtml(rec) : ''}
       <button class="btn-mini" data-action="duplicate" aria-label="Start new recording with same configuration" title="Start a new recording with the same filter and limits">New like this</button>
       <button class="btn-mini" data-action="export-csv" aria-label="Export CSV">CSV</button>
-      <button class="btn-mini" data-action="export-json" aria-label="Export JSON">JSON</button>
+      <button class="btn-mini" data-action="export-jsonl" aria-label="Export JSONL">JSONL</button>
       <button class="btn-mini" data-action="rename" aria-label="Rename">Rename</button>
       <button class="btn-mini" data-action="delete" aria-label="Delete">Delete</button>
       ${legacy ? '<button class="btn-mini btn-danger" data-action="purge" aria-label="Delete + purge events from global buffer" title="Delete recording AND its events from the global buffer">Purge</button>' : ''}
@@ -356,17 +360,31 @@ const _buildCard = (rec) => {
   card.addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-action]');
     if (!btn) return;
+    if (btn.disabled) return;
     const action = btn.dataset.action;
     if (action === 'stop') stopRecording(rec.id);
     else if (action === 'edit-limits') openEditLimitsModal(rec);
+    else if (action === 'play') startReplay(rec.id);
     else if (action === 'duplicate') duplicateRecording(rec);
     else if (action === 'export-csv') exportRecording(rec.id, 'csv');
-    else if (action === 'export-json') exportRecording(rec.id, 'json');
+    else if (action === 'export-jsonl') exportRecording(rec.id, 'jsonl');
     else if (action === 'rename') renameRecording(rec.id);
     else if (action === 'delete') deleteRecording(rec.id, false);
     else if (action === 'purge') deleteRecording(rec.id, true);
   });
   return card;
+};
+
+const _playButtonHtml = (rec) => {
+  // Replay requires CAN disconnected and no other replay running.
+  const blockedByCan = !!state.canConnected;
+  const blockedByReplay = !!state.replayActive;
+  const disabled = blockedByCan || blockedByReplay;
+  const title = blockedByCan
+    ? 'Disconnect from CAN to replay'
+    : (blockedByReplay ? 'Another replay is already running' : 'Replay this recording');
+  return `<button class="btn-mini" data-action="play" aria-label="Replay recording"`
+    + ` title="${escapeHtml(title)}"${disabled ? ' disabled' : ''}>▶ Play</button>`;
 };
 
 const renderRecordList = () => {
@@ -406,6 +424,10 @@ const fetchRecordings = async () => {
     state.activeRecordingId = null;
     refreshRecordTabIndicator();
     renderRecordList();
+    // Keep the poll loop alive even while disconnected so the list resumes
+    // updating automatically once the backend comes back, without requiring
+    // the user to switch tabs or refresh the page.
+    _scheduleNextRecordPoll();
     return;
   }
   try {

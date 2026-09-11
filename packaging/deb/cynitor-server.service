@@ -1,0 +1,19 @@
+[Unit]
+Description=Cynitor Cyphal network monitor
+Documentation=https://github.com/OpenCyphal-Garage/cynitor
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/cynitor-server
+ExecStart=/usr/bin/cynitor-server $CYNITOR_ARGS
+Restart=on-failure
+RestartSec=5
+# Raw SocketCAN sockets need CAP_NET_RAW. Running as root is the simple
+# default; to harden, create a dedicated user and grant only that capability:
+#   User=cynitor
+#   AmbientCapabilities=CAP_NET_RAW
+#   CapabilityBoundingSet=CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target

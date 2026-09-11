@@ -4,10 +4,12 @@ Walks DSDL source directories, parses type definitions,
 and reports compilation status. Independent of CAN connection.
 """
 
+import importlib
 import logging
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -200,7 +202,36 @@ class DsdlManager:
 
         for f in matches:
             f.unlink()
+
+        # Also remove any compiled output for this type so it disappears from
+        # the runtime in step with the source. The compiled .py and its pycache
+        # entry are produced by nunavut at <compiled_dir>/<ns_path>/<Type>_<MAJOR>_<MINOR>.{py,pyc}.
+        # We deliberately leave the namespace's __init__.py alone — recompiling
+        # the namespace regenerates it cleanly; trying to patch it here is too
+        # risky if other types share the namespace.
+        major, minor = version.split(".")
+        compiled_ns_dir = self.compiled_dir / Path(*namespace.split("."))
+        compiled_basename = f"{type_name}_{major}_{minor}"
+        for stem_path in (
+            compiled_ns_dir / f"{compiled_basename}.py",
+            compiled_ns_dir / "__pycache__" / f"{compiled_basename}.cpython-310.pyc",
+        ):
+            try:
+                if stem_path.is_file():
+                    stem_path.unlink()
+            except OSError as exc:
+                logger.warning("Failed to remove compiled artifact %s: %s", stem_path, exc)
+        # Catch any other pycache variants (different Python versions) with a glob
+        pyc_glob = compiled_ns_dir / "__pycache__"
+        if pyc_glob.is_dir():
+            for pyc in pyc_glob.glob(f"{compiled_basename}.cpython-*.pyc"):
+                try:
+                    pyc.unlink()
+                except OSError as exc:
+                    logger.warning("Failed to remove %s: %s", pyc, exc)
+
         self.invalidate_cache()
+        self._refresh_python_module_cache()
 
         full_name = f"{namespace}.{type_name}.{version}"
         return {"full_name": full_name, "deleted": True}
@@ -438,7 +469,27 @@ class DsdlManager:
         self.invalidate_cache()
         if errors:
             return {"ok": False, "errors": errors}
+        # Drop Python's cached module objects for any namespace under
+        # compiled_dir so the scanner's next import_module() picks up the
+        # freshly generated .py files instead of the pre-compile snapshot
+        # already in sys.modules.
+        self._refresh_python_module_cache()
         return {"ok": True}
+
+    def _refresh_python_module_cache(self) -> None:
+        if not self.compiled_dir.is_dir():
+            return
+        importlib.invalidate_caches()
+        compiled_top_namespaces = {
+            p.name for p in self.compiled_dir.iterdir()
+            if p.is_dir() and not p.name.startswith("_") and not p.name.startswith(".")
+        }
+        if not compiled_top_namespaces:
+            return
+        for module_name in list(sys.modules):
+            top = module_name.split(".", 1)[0]
+            if top in compiled_top_namespaces:
+                sys.modules.pop(module_name, None)
 
     def _nnvg_compile(self, target: Path, lookups: list[Path], label: str) -> list[str]:
         args = ["nnvg", "--target-language", "py", str(target)]

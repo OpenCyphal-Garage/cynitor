@@ -190,8 +190,9 @@ const renderRegistersTab = async (force) => {
   const content = el('selectedNodeContent');
   const nodeId = state.selectedNodeId;
 
-  if (!state.dashboardConnected || state.canState !== CONN.CONNECTED) {
-    content.innerHTML = svcStateMsg('○', 'Connect to view registers', 'Connect to the CAN bus first.');
+  const placeholder = connectionPlaceholder('view registers');
+  if (placeholder) {
+    content.innerHTML = placeholder;
     return;
   }
   if (nodeId == null) {

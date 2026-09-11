@@ -121,8 +121,9 @@ const renderHistoryTab = async () => {
   const content = el('selectedNodeContent');
   const nodeId = state.selectedNodeId;
 
-  if (!state.dashboardConnected || state.canState !== CONN.CONNECTED) {
-    content.innerHTML = svcStateMsg('○', 'Connect to view history', 'Connect to the CAN bus to see node history.');
+  const placeholder = connectionPlaceholder('view history');
+  if (placeholder) {
+    content.innerHTML = placeholder;
     return;
   }
   if (nodeId == null) {
