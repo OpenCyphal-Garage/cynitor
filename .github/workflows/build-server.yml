@@ -1,0 +1,128 @@
+name: Server Build
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux binary
+    # Built on the oldest supported release on purpose: glibc is forward
+    # compatible, so a binary built here runs on newer distributions, but not
+    # the other way round.
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write  # attach the binary to the Release on a tag build
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # public_regulated_data_types supplies the uavcan/ and reg/ trees the
+          # DSDL compile step reads.
+          submodules: recursive
+
+      - name: Check the tag matches the declared version
+        # The binary is named from server/version.py, so a tag that disagrees
+        # would publish a mismatched artifact. Fail before building.
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          declared=$(grep -m1 '^__version__' server/version.py | cut -d'"' -f2)
+          tagged="${GITHUB_REF_NAME#v}"
+          if [ "$declared" != "$tagged" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match server/version.py ($declared)."
+            echo "Bump that version, commit, delete the tag, and re-tag."
+            exit 1
+          fi
+          echo "Version $declared matches tag $GITHUB_REF_NAME"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+          cache: pip
+          cache-dependency-path: server/requirements.txt
+
+      - name: Install build dependencies
+        run: pip install -r server/requirements.txt pyinstaller
+
+      - name: Compile DSDL
+        # python_compiled_messages/ is gitignored and the frozen binary cannot
+        # regenerate it (nnvg is not bundled), so it must exist before
+        # PyInstaller runs. The spec refuses to build without it.
+        working-directory: server
+        run: python startup_setup.py --recompile
+
+      - name: Build
+        working-directory: packaging
+        run: ./build.sh
+
+      - name: Smoke-test the binary
+        # Two packaging bugs shipped in a row because every check we had
+        # passed: the binary started and served the dashboard, yet could not
+        # reach a bus. Both were modules missing from the bundle, and both only
+        # surface when the CAN stack is imported, which happens on connect.
+        #
+        # Direct-attach mode reaches those imports before touching any device,
+        # so an interface that does not exist exercises the whole chain without
+        # needing the vcan kernel module, which runner kernels do not ship.
+        run: |
+          set -euo pipefail
+
+          log=$(mktemp)
+          packaging/dist/cynitor-server --can nosuchcan0 >"$log" 2>&1 || true
+
+          if grep -q "No module named" "$log"; then
+            echo "::error::binary is missing a bundled module"
+            grep -m3 "No module named" "$log"
+            exit 1
+          fi
+          grep -qiE "No such device|Could not access SocketCAN" "$log" || {
+            echo "::error::binary never reached the CAN device layer"
+            tail -40 "$log"
+            exit 1
+          }
+          echo "CAN stack imports cleanly inside the bundle"
+
+          TOKEN=smoke-test-token
+          CYNITOR_AUTH_TOKEN="$TOKEN" packaging/dist/cynitor-server &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+
+          curl --retry 60 --retry-delay 1 --retry-connrefused -sf -o /dev/null \
+            http://127.0.0.1:8080/api/health
+
+          page=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/)
+          test "$page" = "200" || { echo "::error::dashboard not served (HTTP $page)"; exit 1; }
+
+          api=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/status)
+          test "$api" = "401" || { echo "::error::API not protected (HTTP $api)"; exit 1; }
+          echo "dashboard served from the bundle, API still requires a token"
+
+      - name: Name the artifact
+        run: |
+          version=$(grep -m1 '^__version__' server/version.py | cut -d'"' -f2)
+          mkdir -p out
+          cp packaging/dist/cynitor-server "out/cynitor-server-${version}-linux-x86_64"
+          ls -lh out/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cynitor-server-linux
+          path: out/*
+          if-no-files-found: error
+
+      - name: Attach the binary to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" out/* --clobber

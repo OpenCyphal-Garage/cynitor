@@ -107,15 +107,11 @@ The bus-load monitor self-disables when `canbusload` is not on PATH (utilization
 The backend serves the dashboard as well as the API, so a deployment is one
 binary and clients need nothing but a browser.
 
-Build the standalone backend once (see [Desktop App](#desktop-app) for the
-prerequisites, then run only the first step):
+Grab the binary from the [latest release](https://github.com/OpenCyphal-Garage/cynitor/releases),
+or build it yourself (see [Building the Server Binary](#building-the-server-binary)).
 
-```bash
-cd packaging && python3 -m PyInstaller cynitor-server.spec --noconfirm
-```
-
-Copy `packaging/dist/cynitor-server` to the machine with the CAN adapter and
-run it. Nothing else is needed there: no Python, no pip, no web server.
+Copy it to the machine with the CAN adapter and run it. Nothing else is
+needed there: no Python, no pip, no web server.
 
 ```bash
 CYNITOR_AUTH_TOKEN=$(openssl rand -hex 24) ./cynitor-server --bind 0.0.0.0
@@ -146,64 +142,22 @@ Requests for the dashboard then return 404 while the API is unchanged. The
 startup banner states which mode is running. See
 [WEBSOCKET_README.md](WEBSOCKET_README.md) for the full API reference.
 
-## Desktop App
+## Building the Server Binary
 
-Cynitor can be packaged as a standalone desktop application using [Tauri](https://tauri.app/). The installer bundles the Python backend as a frozen sidecar binary — no Python installation required on the target machine.
-
-### Building
-
-Prerequisites (one-time):
+Produces one self-contained executable with the dashboard and the compiled
+DSDL types inside it. No Python needed on the target machine.
 
 ```bash
-# System libraries (Ubuntu/Debian)
-sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf
-
-# Rust toolchain
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Python build tool
-pip install pyinstaller
+pip install -r server/requirements.txt pyinstaller
+python3 server/startup_setup.py --recompile   # generate compiled DSDL first
+cd packaging && ./build.sh
 ```
 
-Build:
+The result is `packaging/dist/cynitor-server`. Copy it to the target machine
+and run it; see [Deploying to a Server](#deploying-to-a-server) above.
 
-```bash
-cd packaging
-./build.sh            # debug build
-./build.sh release    # .deb + .AppImage installers
-```
-
-The release build produces:
-
-| Format | Location |
-|--------|----------|
-| `.deb` | `packaging/tauri/target/release/bundle/deb/cynitor_*.deb` |
-| `.AppImage` | `packaging/tauri/target/release/bundle/appimage/cynitor_*.AppImage` |
-
-### How it works
-
-```
-Tauri shell (native window + system webview)
-├── website/           loaded directly into the webview
-└── cynitor-server     PyInstaller single-file sidecar
-```
-
-On launch, the Tauri shell generates a random bearer token, spawns the Python backend sidecar with that token in `CYNITOR_AUTH_TOKEN`, waits for it to start listening on `localhost:8080`, then loads the frontend into the webview with the token already injected. The frontend connects to the backend the same way it does in browser mode, and authenticates without prompting. On exit, the sidecar is killed automatically.
-
-The token matters because the backend listens on localhost: while the app is open, any page in your ordinary browser could otherwise reach the API and command nodes on the bus. A fresh token per launch closes that off, and it is never written to disk.
-
-### Packaging structure
-
-```
-packaging/
-├── build.sh               # One-command build pipeline
-├── cynitor-server.spec     # PyInstaller spec (single-file mode)
-└── tauri/
-    ├── Cargo.toml          # Tauri v2 + shell plugin
-    ├── tauri.conf.json     # Window size, CSP, sidecar path, bundle targets
-    ├── src/main.rs         # Sidecar lifecycle: token → spawn → wait → window → kill
-    └── icons/icon.png      # App icon (replace with final design)
-```
+Tagged releases attach a prebuilt Linux x86-64 binary, so building it
+yourself is only necessary for unreleased changes or another architecture.
 
 ## Troubleshooting
 
@@ -213,7 +167,6 @@ packaging/
 
 **No nodes appearing.** Confirm there are publishers on the bus (`yakut sub uavcan.node.Heartbeat.1.0`). On a virtual interface (`vcan0`) you also need a publisher on the same `vcan` interface — the backend doesn't generate traffic on its own.
 
-**Desktop app opens a blank white window.** The app renders through shared memory rather than the graphics device precisely to avoid this, so you shouldn't hit it. If you do, something has forced the graphics path back on — check whether `WEBKIT_DISABLE_DMABUF_RENDERER` is set to `0` in your environment. Don't run the app with `sudo`: it needs no root, and `sudo` discards the environment that controls this.
 
 **Port 5500 in use.** Run `python3 -m http.server 8088` (or any free port) and open the matching URL.
 

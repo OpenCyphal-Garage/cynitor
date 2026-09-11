@@ -1,4 +1,4 @@
-# PyInstaller spec for the Cynitor backend sidecar.
+# PyInstaller spec for the Cynitor server.
 #
 # Build:
 #   cd cynitor/packaging
@@ -167,7 +167,7 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
-# Single-file executable so Tauri can manage it as one sidecar binary.
+# Single-file executable: a deployment is this one file plus a browser.
 exe = EXE(
     pyz,
     a.scripts,

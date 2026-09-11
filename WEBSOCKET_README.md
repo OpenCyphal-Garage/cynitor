@@ -88,7 +88,6 @@ Protected requests must present the token as:
 
 Unauthenticated requests get `HTTP 401 {"error": "missing or invalid token"}`. With the variable unset the server runs open — same behaviour as before this option existed. The frontend prompts the user to paste the token on the first 401 and stores it in `localStorage` under `cynitor.auth.token`.
 
-The desktop build always sets the variable. The Tauri shell generates a random token per launch, passes it to the sidecar in `CYNITOR_AUTH_TOKEN`, and injects it into the webview as `window.__CYNITOR.authToken` before any page script runs. `getAuthToken()` prefers that injected value over `localStorage`, so the packaged app authenticates without prompting and the token never reaches disk.
 
 ### Serving the dashboard
 

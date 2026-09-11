@@ -374,15 +374,13 @@ const showToast = (message, type = 'info', durationMs = 5000) => {
 const apiBase = () => el('apiBase').value.trim().replace(/\/$/, '');
 const wsBase = () => apiBase().replace(/^http/, 'ws');
 
-// Values the desktop shell injects before any page script runs; empty in
-// browser mode. The shell owns the backend it spawned, so anything it
-// provides wins over a value saved in localStorage by a different setup.
-const shellConfig = () => window.__CYNITOR || {};
+// Configuration the backend injects via /config.js before any page script
+// runs. Empty when a plain static file server delivers the page instead, in
+// which case the built-in defaults apply.
+const serverConfig = () => window.__CYNITOR || {};
 
 const AUTH_TOKEN_KEY = 'cynitor.auth.token';
 const getAuthToken = () => {
-  const injected = shellConfig().authToken;
-  if (injected) return injected;
   try { return localStorage.getItem(AUTH_TOKEN_KEY) || ''; } catch (_) { return ''; }
 };
 const setAuthToken = (token) => {
@@ -631,7 +629,7 @@ window.addEventListener('beforeunload', () => {
 
 const loadSettings = () => {
   const settings = readSettings();
-  const injectedApiBase = shellConfig().apiBase;
+  const injectedApiBase = serverConfig().apiBase;
   if (injectedApiBase) {
     el('apiBase').value = injectedApiBase;
   } else if (typeof settings.apiBase === 'string' && settings.apiBase.trim()) {

@@ -15,6 +15,7 @@ from typing import Optional
 
 from log_store import InMemoryLogStore, APILogHandler
 from startup_setup import prepare_runtime, resolve_project_root
+from version import __version__
 
 IS_LINUX = sys.platform.startswith("linux")
 
@@ -667,12 +668,11 @@ def _shutdown_on_sigterm(_signum, _frame) -> None:
 def _exit_when_parent_dies() -> None:
     """Ask the kernel to signal us when our parent process goes away.
 
-    In the packaged app the backend is a PyInstaller single-file binary: a
-    bootloader parent with this interpreter as its child. The desktop shell
-    kills the bootloader with SIGKILL, which cannot be forwarded, so without
-    this the server outlives the closing window and keeps holding port 8080.
-    The next launch would then find that stale server answering, and
-    authenticate its fresh token against it.
+    The packaged server is a PyInstaller single-file binary: a bootloader
+    parent with this interpreter as its child. A SIGKILL to the bootloader
+    cannot be forwarded, so without this the interpreter outlives whatever
+    started it and keeps holding port 8080. The next start would then find a
+    stale server answering on the port it wanted.
 
     Linux only; a no-op elsewhere.
     """
@@ -702,6 +702,7 @@ def _exit_when_parent_dies() -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the telemetry server")
+    parser.add_argument("--version", action="version", version=f"cynitor-server {__version__}")
     parser.add_argument(
         "--can",
         default=None,

@@ -257,12 +257,8 @@ cynitor/
     public_regulated_data_types/   git submodule (uavcan/, reg/)
     custom/                        user-created DSDL types (gitignored content)
   packaging/
-    build.sh                One-command desktop build pipeline
-    cynitor-server.spec     PyInstaller spec (single-file sidecar)
-    tauri/
-      Cargo.toml            Tauri v2 Rust project
-      tauri.conf.json       Window, CSP, sidecar, bundle config
-      src/main.rs           Sidecar lifecycle, per-launch auth token, window setup
+    build.sh                One-command build
+    cynitor-server.spec     PyInstaller spec (single-file binary)
   python_compiled_messages/ nnvg output (gitignored)
   README.md                 User-facing intro
   TECHNICAL.md              This file
@@ -295,81 +291,53 @@ cynitor/
 
 The plot in `detail-panel.js#renderPlot` operates on `state.subjectHistory["{subject_id}:{attr}"]` time series. Per-attribute panels are joined by attribute name; new attributes appear automatically once they arrive in cached events.
 
-## Packaging (Desktop Distribution)
+## Packaging
 
-The `packaging/` directory builds a standalone desktop installer. The pipeline has two stages:
+`packaging/` freezes the server into one self-contained executable. A
+deployment is that file plus a browser: the binary serves the REST API, the
+WebSocket stream and the dashboard from the same port.
 
-### Stage 1: PyInstaller (Python → single-file binary)
+`cynitor-server.spec` drives PyInstaller. Key concerns:
 
-`cynitor-server.spec` freezes the entire `server/` directory, plus bundled DSDL types, into one executable. Key concerns:
-
-- **Hidden imports** — pycyphal and python-can use dynamic imports extensively. The spec enumerates every submodule our code touches (transport.can, media.pythoncan, media.socketcan, application.*, etc.).
-- **Bundled data** — `python_compiled_messages/` (pre-compiled DSDL) and `dsdl_messages/` (source definitions) are packed into the binary.
-- **Project root detection** — `startup_setup.resolve_project_root()` checks `sys.frozen` and returns `sys._MEIPASS` (PyInstaller's extraction dir) instead of `Path(__file__).parent.parent`. This is the only frozen-aware code: `prepare_runtime()` derives `sys.path`, `PYCYPHAL_PATH` and `CYPHAL_PATH` from it, and it runs inside `CANSession.connect()` before anything imports the generated `uavcan.*` packages, so no PyInstaller runtime hook is needed.
+- **Hidden imports** — pycyphal and python-can use dynamic imports extensively. The spec enumerates every submodule our code touches.
+- **Bundled data** — `python_compiled_messages/` (pre-compiled DSDL), `dsdl_messages/` (source definitions) and `website/` (the dashboard) are packed into the binary.
+- **pydsdl's vendored parser** — pydsdl reaches `parsimonious` by prepending its own `third_party` directory to `sys.path`. That directory is not a package, so static analysis cannot follow the import; the spec ships the tree as data at the same relative path and aborts if pydsdl ever moves it.
 - **Compiled DSDL is mandatory** — the spec aborts if `python_compiled_messages/` is absent, because `nnvg` is not bundled and the frozen binary cannot regenerate it. Run `python3 server/startup_setup.py --recompile` before building.
-
-### Stage 2: Tauri (binary → native installer)
-
-`packaging/tauri/` is a Tauri v2 Rust project that wraps the webview and manages the sidecar lifecycle:
-
-1. `main.rs` reads 32 bytes from `/dev/urandom` and hex-encodes them into a per-launch auth token.
-2. Spawns `cynitor-server` as a child process via Tauri's sidecar API, passing the token in `CYNITOR_AUTH_TOKEN`.
-3. Blocks until a TCP connect to `127.0.0.1:8080` succeeds (up to 15 seconds).
-4. Forwards sidecar stdout/stderr to the Tauri log (visible in the terminal).
-5. Creates the window with an initialization script that sets `window.__CYNITOR = { apiBase, authToken }`.
-6. On exit, `main.rs` kills the sidecar itself from a `RunEvent::Exit` handler. tauri-plugin-shell registers its own child-killing handler, but it did not fire on window close: the backend outlived the app and kept port 8080. The parent-death signal in `main.py` cannot cover that either, since it only fires when the PyInstaller bootloader dies and nothing was killing the bootloader. The two mechanisms are complementary, not redundant: the shell handles a clean exit, the signal handles the shell being killed outright.
-
-**Why the token.** The backend listens on localhost, so while the app is open any page in the user's ordinary browser can reach it — and the CORS layer answers with `Access-Control-Allow-Origin: *`. Without a token, a random tab could enumerate nodes, write registers, and call services on the live CAN bus. The token is generated fresh per launch and never written to disk. Reading entropy is mandatory: if `/dev/urandom` cannot be read the app aborts rather than starting an open API.
-
-**Why software rendering.** `main.rs` sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` unless the caller already chose a value. WebKit otherwise passes frames between its processes as graphics-memory handles, which needs `/dev/dri`. That device is unavailable on virtual machines, containers and remote desktops, where the allocation fails and the renderer produces no surface at all: the window opens and is never painted, with no error dialog. The dashboard is SVG shapes and text, so the graphics path accelerates only compositing and buys nothing measurable here. A blank window is a poor trade for efficiency this app cannot use. Set the variable explicitly, including to `0`, to override.
-
-**Why an initialization script, not `eval`.** The script runs before any page script on every navigation, so the frontend's very first request already carries the token. A post-load `window.eval` would race the first poll and surface a spurious token prompt. `state.js` reads the object through one `shellConfig()` accessor; `getAuthToken()` and the API-base loader both prefer an injected value over `localStorage`, because the shell owns the backend it spawned. Browser mode sees an empty object and behaves as before. The window is therefore built in `main.rs` rather than declared in `tauri.conf.json`, whose `windows` array is empty.
-
-`tauri.conf.json` configures:
-- `distDir` → points to `website/` (loaded into the webview as-is, no build step).
-- `externalBin` → the sidecar binary, named with the target triple suffix.
-- `security.csp` → allows `cdn.jsdelivr.net` (D3) and `unpkg.com` (Tabulator) for scripts and styles, plus `localhost:8080` and `127.0.0.1:8080` for API/WS. Both CDN hosts must stay listed or the corresponding library silently fails to load in the packaged app.
-- `allowlist.shell.scope` → the sidecar entry sets `args: false`, so page script cannot respawn the backend with attacker-chosen flags such as `--bind 0.0.0.0`.
-- `bundle.targets` → `deb` and `appimage` for Linux.
-
-### Build flow
-
-```
-./build.sh release
-  ├─ PyInstaller  → dist/cynitor-server  (54 MB single-file binary)
-  ├─ Copy         → tauri/sidecar/cynitor-server-<triple>
-  └─ cargo tauri build
-       ├─ cynitor_<version>_amd64.deb      (~58 MB)
-       └─ cynitor_<version>_amd64.AppImage (~148 MB)
-```
+- **Project root detection** — `startup_setup.resolve_project_root()` returns `sys._MEIPASS` when frozen. It is the only frozen-aware code: `prepare_runtime()` derives `sys.path`, `PYCYPHAL_PATH` and `CYPHAL_PATH` from it, and runs before anything imports the generated `uavcan.*` packages, so no PyInstaller runtime hook is needed.
 
 ### Versioning and releases
 
-The version lives in exactly one place, `packaging/tauri/Cargo.toml`.
-`tauri.conf.json` deliberately omits `package.version` so Tauri falls back to
-the Cargo manifest, and the installer filenames follow from it.
+The version lives in exactly one place, `server/version.py`, and the binary
+reports it with `--version`.
 
 To cut a release, bump that version first, then tag to match:
 
 ```bash
-# edit packaging/tauri/Cargo.toml -> version = "0.2.0"
-git commit -am "Release 0.2.0" && git push
-git tag v0.2.0 && git push origin v0.2.0
+# edit server/version.py -> __version__ = "0.8.0"
+git commit -am "Release 0.8.0" && git push
+git tag v0.8.0 && git push origin v0.8.0
 ```
 
-The tag triggers `build-desktop.yml`, which refuses to build when the tag and
-the manifest disagree, so a `v0.2.0` tag can never publish installers named
-`0.1.0`. If it rejects you, bump the manifest, delete the tag, and re-tag.
+The tag triggers `build-server.yml`, which refuses to build when the tag and
+the module disagree, so a `v0.8.0` tag cannot publish a binary named `0.7.0`.
+The build is done on the oldest supported distribution on purpose: glibc is
+forward compatible, so the artifact runs on newer systems but not the reverse.
+
+Every release build runs the binary against a CAN interface that does not
+exist. Direct-attach mode reaches the pycyphal, pydsdl and python-can imports
+before it touches any device, so that exercises the whole chain and fails if
+anything is missing from the bundle. Two releases shipped unusable before this
+check existed, because the binary started and served the dashboard perfectly
+and only failed on connect.
 
 ### Process lifetime
 
-The backend is a PyInstaller single-file binary: a bootloader parent with the
-interpreter as its child. Tauri kills the bootloader with `SIGKILL`, which
-cannot be forwarded, so `main.py` arms `PR_SET_PDEATHSIG` at startup to be
-signalled when its parent dies. Without it the server outlives the closing
-window, keeps port 8080, and the next launch authenticates a fresh token
-against that stale server. `SIGTERM` is routed into the existing interrupt
-path so the CAN session and HTTP server shut down in order.
+The frozen binary is a bootloader parent with the interpreter as its child. A
+`SIGKILL` to the bootloader cannot be forwarded, so `main.py` arms
+`PR_SET_PDEATHSIG` at startup to be signalled when its parent dies; otherwise
+the server can outlive whatever started it and keep holding port 8080.
+`SIGTERM` is routed into the existing interrupt path so the CAN session and
+HTTP server shut down in order.
 
 The orphan guard compares against the parent recorded at startup rather than
 against pid 1, because an orphan is reparented to the nearest subreaper, which
