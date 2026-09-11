@@ -88,6 +88,8 @@ Protected requests must present the token as:
 
 Unauthenticated requests get `HTTP 401 {"error": "missing or invalid token"}`. With the variable unset the server runs open — same behaviour as before this option existed. The frontend prompts the user to paste the token on the first 401 and stores it in `localStorage` under `cynitor.auth.token`.
 
+When a terminal is attached, the server prints the token once at startup so it can be copied into the dashboard. It is written straight to stderr rather than logged: the log buffer is served through `/api/logs` and rendered in the dashboard's log panel, and a service manager captures stdout into the system journal, so logging it would scatter copies. Runs without a terminal, which is every supervised run, print nothing.
+
 
 ### Serving the dashboard
 

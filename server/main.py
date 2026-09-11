@@ -604,6 +604,31 @@ async def attach_or_fall_back(session, can_iface: str, force_compile: bool = Fal
         return False
 
 
+def show_token_on_terminal(token: str, stream=None) -> bool:
+    """Print the auth token where a person can copy it, and nowhere else.
+
+    Deliberately not logged. The server's own log buffer is served through
+    /api/logs and rendered in the dashboard's log panel, and under a service
+    manager anything on stdout is captured into the system journal — so
+    logging a secret would scatter copies of it.
+
+    Printed only when a terminal is attached, which is exactly when someone is
+    there to read it. Supervised runs get nothing.
+
+    Returns whether it printed.
+    """
+    stream = stream or sys.stderr
+    if not token or not getattr(stream, "isatty", lambda: False)():
+        return False
+    print(
+        f"\n  Auth token (paste this into the dashboard when prompted):"
+        f"\n\n      {token}\n",
+        file=stream,
+        flush=True,
+    )
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -643,6 +668,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("=" * 60)
     logger.info("Bound to:    %s:8080", bind)
     logger.info("Auth:        %s", "token required (CYNITOR_AUTH_TOKEN set)" if auth_token else "OPEN (no token)")
+    show_token_on_terminal(auth_token)
     if bind == "0.0.0.0" and not auth_token:
         logger.warning("Server is bound to 0.0.0.0 with NO auth — reachable from any network peer. Set CYNITOR_AUTH_TOKEN to require a bearer token.")
     elif bind == "0.0.0.0":

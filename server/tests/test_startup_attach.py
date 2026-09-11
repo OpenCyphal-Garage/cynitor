@@ -5,6 +5,7 @@ itself down and exited, taking the dashboard with it. That is the wrong trade,
 because the dashboard is exactly where a user would correct the mistake.
 """
 
+import io
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -78,3 +79,43 @@ class TestFailedAttach:
         with patch.object(main, "discover_can_interfaces", side_effect=RuntimeError("boom")):
             assert await main.attach_or_fall_back(session, "can0") is False
         assert "selection mode" in caplog.text.lower()
+
+
+class TestShowTokenOnTerminal:
+    """The token is printed for a human to copy, and kept out of everything else.
+
+    It is deliberately not logged: the log buffer is served through /api/logs
+    and shown in the dashboard's log panel, and a service manager captures
+    stdout into the system journal.
+    """
+
+    class _Tty(io.StringIO):
+        def isatty(self):
+            return True
+
+    def test_prints_when_a_terminal_is_attached(self):
+        out = self._Tty()
+        assert main.show_token_on_terminal("secret-value", out) is True
+        assert "secret-value" in out.getvalue()
+
+    def test_silent_when_output_is_captured(self):
+        # Piped, redirected, or captured by a service manager.
+        out = io.StringIO()
+        assert main.show_token_on_terminal("secret-value", out) is False
+        assert out.getvalue() == ""
+
+    def test_silent_when_no_token_is_set(self):
+        out = self._Tty()
+        assert main.show_token_on_terminal("", out) is False
+        assert out.getvalue() == ""
+        assert main.show_token_on_terminal(None, out) is False
+
+    def test_tells_the_reader_what_to_do_with_it(self):
+        out = self._Tty()
+        main.show_token_on_terminal("secret-value", out)
+        assert "dashboard" in out.getvalue().lower()
+
+    def test_never_reaches_the_log_buffer(self, caplog):
+        out = self._Tty()
+        main.show_token_on_terminal("secret-value", out)
+        assert "secret-value" not in caplog.text

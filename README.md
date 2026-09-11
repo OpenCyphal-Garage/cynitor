@@ -123,6 +123,10 @@ Nothing else is needed on that machine: no Python, no pip, no web server.
 CYNITOR_AUTH_TOKEN=$(openssl rand -hex 24) ./cynitor-server --bind 0.0.0.0
 ```
 
+The server prints the token at startup when run from a terminal, so you can
+copy it straight out. It is written directly to the terminal rather than
+logged, so supervised runs do not leak it into the system journal.
+
 Point a browser at `http://<that-machine>:8080`. The dashboard loads, prompts
 once for the token, and remembers it. It works out its own API address from
 the page it was served from, so nothing needs configuring per client.
