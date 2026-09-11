@@ -140,6 +140,7 @@ Mode:        selection  (waiting for the UI or POST /api/can/connect)
 Startup options:
   --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0)
   --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)
+  --port <n>       listen on <n> instead of 8080
   --recompile      force DSDL recompilation via nnvg
   --help           full reference
 ============================================================

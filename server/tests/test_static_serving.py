@@ -176,3 +176,25 @@ class TestNoFrontendFlag:
         website_dir = website if serve_frontend else None
         assert _server(website_dir).website_dir is None
         assert _server(website).website_dir == website
+
+
+class TestPortIsNotHardcoded:
+    """Everything the server advertises must follow the port it actually uses.
+
+    --bind existed from the start but --port did not, so 8080 was baked into
+    the banner and into the WebSocket URL the API hands out. A server on any
+    other port was telling clients the wrong address.
+    """
+
+    @pytest.mark.asyncio
+    async def test_api_info_reports_the_real_host_and_port(self, client):
+        resp = await client.get("/api")
+        url = (await resp.json())["endpoints"]["WebSocket"]["url"]
+        # TestClient binds an arbitrary free port; the URL must follow it.
+        assert str(client.server.port) in url
+        assert "8080" not in url or client.server.port == 8080
+
+    @pytest.mark.asyncio
+    async def test_config_js_reports_the_real_host_and_port(self, client):
+        body = await (await client.get("/config.js")).text()
+        assert str(client.server.port) in body

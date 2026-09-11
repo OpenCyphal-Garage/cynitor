@@ -634,7 +634,7 @@ def show_token_on_terminal(token: str, stream=None) -> bool:
 # ---------------------------------------------------------------------------
 
 async def main(can_iface: Optional[str] = None, force_compile: bool = False, bind: str = "127.0.0.1",
-               serve_frontend: bool = True) -> None:
+               port: int = 8080, serve_frontend: bool = True) -> None:
     from websocket_server import WebSocketServer
     from dsdl_manager import DsdlManager
 
@@ -651,7 +651,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     ws_server = WebSocketServer(
         session=session,
         host=bind,
-        port=8080,
+        port=port,
         log_store=_log_store,
         dsdl_manager=dsdl_mgr,
         auth_token=auth_token,
@@ -666,18 +666,18 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("=" * 60)
     logger.info("SERVER RUNNING")
     logger.info("=" * 60)
-    logger.info("Bound to:    %s:8080", bind)
+    logger.info("Bound to:    %s:%d", bind, port)
     logger.info("Auth:        %s", "token required (CYNITOR_AUTH_TOKEN set)" if auth_token else "OPEN (no token)")
     show_token_on_terminal(auth_token)
     if bind == "0.0.0.0" and not auth_token:
         logger.warning("Server is bound to 0.0.0.0 with NO auth — reachable from any network peer. Set CYNITOR_AUTH_TOKEN to require a bearer token.")
     elif bind == "0.0.0.0":
         logger.info("Server is bound to 0.0.0.0 with token auth — clients must present Authorization: Bearer <token>.")
-    logger.info("REST API:    http://localhost:8080/api/")
-    logger.info("Health:      http://localhost:8080/api/health")
-    logger.info("Status:      http://localhost:8080/api/status")
+    logger.info("REST API:    http://localhost:%d/api/", port)
+    logger.info("Health:      http://localhost:%d/api/health", port)
+    logger.info("Status:      http://localhost:%d/api/status", port)
     if ws_server.website_dir:
-        logger.info("Dashboard:   http://localhost:8080/")
+        logger.info("Dashboard:   http://localhost:%d/", port)
     else:
         logger.info("Dashboard:   not served (API only)")
     if can_iface:
@@ -688,6 +688,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("Startup options:")
     logger.info("  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0)")
     logger.info("  --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)")
+    logger.info("  --port <n>       listen on <n> instead of 8080")
     logger.info("  --recompile      force DSDL recompilation via nnvg")
     logger.info("  --no-frontend    serve only the API and WebSocket, not the dashboard")
     logger.info("  --help           full reference")
@@ -776,6 +777,12 @@ if __name__ == "__main__":
         help="Host/IP to bind the HTTP server to (default: 127.0.0.1; use 0.0.0.0 to expose on the network)",
     )
     parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="TCP port to listen on (default: 8080)",
+    )
+    parser.add_argument(
         "--no-frontend",
         action="store_true",
         help="Serve only the REST API and WebSocket; do not serve the dashboard",
@@ -790,6 +797,7 @@ if __name__ == "__main__":
             can_iface=args.can,
             force_compile=args.recompile,
             bind=args.bind,
+            port=args.port,
             serve_frontend=not args.no_frontend,
         ))
     except KeyboardInterrupt:

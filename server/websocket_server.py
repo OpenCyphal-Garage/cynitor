@@ -111,8 +111,8 @@ class WebSocketServer:
         self.log_store = log_store
         self.dsdl_manager = dsdl_manager
         # When present, the dashboard is served from this server so a single
-        # binary is all a deployment needs. None means API-only, which is how
-        # the desktop app runs it (the shell carries its own copy of the UI).
+        # binary is all a deployment needs. None means API-only, which is what
+        # --no-frontend selects and what a checkout without website/ gets.
         self.website_dir = website_dir if website_dir and website_dir.is_dir() else None
         # When set, every request outside _AUTH_OPEN_PATHS must present this
         # token via Authorization: Bearer <token> (REST) or ?token=<token>
@@ -1198,7 +1198,9 @@ class WebSocketServer:
             "version": "2.0",
             "endpoints": {
                 "WebSocket": {
-                    "url": "ws://localhost:8080/ws",
+                    # Derived from the request so it stays correct behind a
+                    # proxy, on another host, or on a non-default port.
+                    "url": f"ws://{request.host}/ws",
                     "description": "Real-time event streaming with optional filtering"
                 },
                 "REST": {

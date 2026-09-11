@@ -75,6 +75,7 @@ EventLogger.start()        SQLite persistence
 --can <iface>     CAN interface name (vcan0, slcan0, can0, ...). Required for direct mode.
 --recompile       Force `nnvg` to regenerate Python from DSDL even if outputs exist.
 --bind <host>     Host/IP to bind the HTTP server to (default 127.0.0.1; use 0.0.0.0 to expose on the network).
+--port <n>        TCP port to listen on (default 8080).
 --no-frontend     Serve only the REST API and WebSocket, not the dashboard.
 ```
 
