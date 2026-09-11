@@ -3,7 +3,7 @@ name = "cynitor"
 # Single source of truth for the release version. tauri.conf.json omits
 # `version` so Tauri reads it from here, and the desktop workflow refuses to
 # build a tag that disagrees with it.
-version = "0.5.2"
+version = "0.6.0"
 description = "Cyphal network monitor"
 edition = "2021"
 
