@@ -78,15 +78,28 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Since 0.7.1 a bad --can is survivable: the server warns and stays
+          # up in selection mode, so this no longer exits on its own and has
+          # to be run in the background and stopped.
           log=$(mktemp)
-          packaging/dist/cynitor-server --can nosuchcan0 >"$log" 2>&1 || true
+          packaging/dist/cynitor-server --can nosuchcan0 >"$log" 2>&1 &
+          probe=$!
+          curl --retry 60 --retry-delay 1 --retry-connrefused -sf -o /dev/null \
+            http://127.0.0.1:8080/api/health
+          # Give the attach attempt time to fail and log why.
+          for _ in $(seq 1 30); do
+            grep -qiE "No module named|Could not attach to" "$log" && break
+            sleep 1
+          done
+          kill "$probe" 2>/dev/null || true
+          wait "$probe" 2>/dev/null || true
 
           if grep -q "No module named" "$log"; then
             echo "::error::binary is missing a bundled module"
             grep -m3 "No module named" "$log"
             exit 1
           fi
-          grep -qiE "No such device|Could not access SocketCAN" "$log" || {
+          grep -qiE "Could not attach to|No such device|Could not access SocketCAN" "$log" || {
             echo "::error::binary never reached the CAN device layer"
             tail -40 "$log"
             exit 1
