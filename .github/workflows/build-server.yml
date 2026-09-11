@@ -3,9 +3,6 @@ name: Server Build
 on:
   push:
     tags: ['v*']
-    # TEMPORARY, this branch only: proves the rewritten server build on a
-    # runner before a release depends on it. Delete the branch after.
-    branches: [ci-server-dryrun]
   workflow_dispatch:
 
 permissions:
