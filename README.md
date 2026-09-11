@@ -198,4 +198,4 @@ show how to narrow that to a dedicated user.
 
 - **[TECHNICAL.md](TECHNICAL.md)** — Architecture, component breakdown, data flow, project structure, extension points.
 - **[WEBSOCKET_README.md](WEBSOCKET_README.md)** — Full REST + WebSocket API contract.
-- **[RELEASE_NOTES.md](RELEASE_NOTES.md)** — Per-version changelog.
+- **[Releases](https://github.com/OpenCyphal-Garage/cynitor/releases)** — Per-version notes and prebuilt downloads.
