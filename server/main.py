@@ -573,6 +573,37 @@ async def _event_logger_loop(event_logger, queue: asyncio.Queue) -> None:
         raise
 
 
+async def attach_or_fall_back(session, can_iface: str, force_compile: bool = False) -> bool:
+    """Attach to `can_iface`, or warn and leave the server in selection mode.
+
+    A bad --can is not worth killing the server over. The dashboard is already
+    serving by this point, and it is the obvious place to pick the right
+    interface, so say what went wrong, show what is actually available, and
+    carry on. Returns whether the attach succeeded.
+    """
+    try:
+        await session.connect(can_iface, force_compile=force_compile)
+        return True
+    except Exception as exc:
+        logger.warning("Could not attach to %r: %s", can_iface, exc)
+        try:
+            available = await asyncio.to_thread(discover_can_interfaces)
+        except Exception:
+            # Nothing on this path may take the server down; that is the whole
+            # point of falling back rather than exiting.
+            available = []
+        if available:
+            logger.warning("Available CAN interfaces: %s", ", ".join(available))
+        else:
+            logger.warning(
+                "No CAN interfaces found. Create a virtual one with: "
+                "sudo modprobe vcan && sudo ip link add dev vcan0 type vcan "
+                "&& sudo ip link set up vcan0"
+            )
+        logger.warning("Continuing in selection mode — pick an interface in the dashboard.")
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -634,13 +665,13 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("  --recompile      force DSDL recompilation via nnvg")
     logger.info("  --no-frontend    serve only the API and WebSocket, not the dashboard")
     logger.info("  --help           full reference")
-    if can_iface:
+    if not can_iface:
         logger.info("Selection-mode startup (no --can): connect from the UI or POST /api/can/connect")
     logger.info("=" * 60)
 
     try:
         if can_iface:
-            await session.connect(can_iface, force_compile=force_compile)
+            await attach_or_fall_back(session, can_iface, force_compile)
 
         await asyncio.Event().wait()
 
