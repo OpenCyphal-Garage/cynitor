@@ -3,9 +3,6 @@ name: Desktop Build
 on:
   push:
     tags: ['v*']
-    # TEMPORARY, this branch only: proves the Tauri v2 build on a runner
-    # before a release depends on it. Delete the branch after.
-    branches: [tauri-v2]
   workflow_dispatch:
 
 permissions:
