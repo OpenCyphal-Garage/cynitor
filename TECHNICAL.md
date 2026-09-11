@@ -21,16 +21,20 @@ For developers working on Cynitor itself. User-facing intro: [README.md](README.
                                                 v       v
                                        WebSocketServer  EventLogger
                                        (aiohttp :8080)  (SQLite)
-                                              |  |
-                                       REST   |  | WebSocket /ws
-                                              v  v
-                                         +----------+
-                                         | Frontend |
-                                         | :5500    |
-                                         +----------+
+                                          |   |   |
+                            static files  |   |   | WebSocket /ws
+                                 + REST   |   |   |
+                                          v   v   v
+                                         +-----------+
+                                         |  Browser  |
+                                         +-----------+
 ```
 
+One process serves everything: the REST API, the WebSocket stream, and the dashboard's own files. A deployment is that binary plus a browser.
+
 The pipeline is unidirectional from bus to browser. The backend is event-pushed; the frontend pulls structural data (`/api/nodes`, `/api/status`) on a poll interval and consumes the live event stream over WebSocket.
+
+During frontend development the dashboard is often served separately on `:5500` so it can be reloaded without restarting the backend. That is the only case where two ports are involved, and it is why `website/config.js` exists: served from the backend it is replaced by a generated version naming the API origin, while the static-server copy is an empty placeholder that leaves the built-in default in place.
 
 ## Backend
 
@@ -76,6 +80,7 @@ EventLogger.start()        SQLite persistence
 --recompile       Force `nnvg` to regenerate Python from DSDL even if outputs exist.
 --bind <host>     Host/IP to bind the HTTP server to (default 127.0.0.1; use 0.0.0.0 to expose on the network).
 --port <n>        TCP port to listen on (default 8080).
+--version         Print the version and exit.
 --no-frontend     Serve only the REST API and WebSocket, not the dashboard.
 ```
 
