@@ -124,6 +124,10 @@ Object.defineProperties(state, {
 
 // Tabulator instance. Initialized in nodes-table.js#initNodesTable.
 let nodesTabulator = null;
+// Tabulator's renderer exists only once the table is built; setting data
+// before that throws ("reading 'verticalFillMode'"). A reload that
+// restores the connection fetches nodes before the build finishes.
+let _nodesTableReady = false;
 
 // Pending debounce ids for scheduleTableRefresh / scheduleDetailRefresh.
 // Live here because settings.js#saveSettings reads nodesTabulator above.
