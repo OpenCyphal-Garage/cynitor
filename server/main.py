@@ -23,11 +23,13 @@ from can_config import (
 )
 from can_discovery import AdapterCatalog, discover_adapters
 from can_hub import CANHub, HubBusLoad, pick_free_node_id
+from data_dir import ALLOCATOR_DB, EVENTS_DB, SCANNER_DB, prepare_data_dir, resolve_data_dir
 from log_store import InMemoryLogStore, APILogHandler
 from startup_setup import ensure_libusb_on_path, prepare_runtime, resolve_project_root
 from version import __version__
 
 IS_LINUX = sys.platform.startswith("linux")
+IS_WINDOWS = sys.platform == "win32"
 
 # Configure logging
 logging.basicConfig(
@@ -185,7 +187,9 @@ class BusLoadMonitor:
 class CANSession:
     """Manages the lifecycle of all CAN-dependent components."""
 
-    def __init__(self, default_bitrate: Optional[int] = None) -> None:
+    def __init__(self, default_bitrate: Optional[int] = None, data_dir: Path = Path(".")) -> None:
+        # Where the databases live; main() passes the resolved data folder.
+        self.data_dir = Path(data_dir)
         # --bitrate, used when connect() is not given one. There is no built-in
         # default: a guessed bitrate can disrupt the bus.
         self.default_bitrate = None if default_bitrate is None else validate_bitrate(default_bitrate)
@@ -266,11 +270,14 @@ class CANSession:
                 from event_logger import EventLogger
 
                 logger.info("Initializing allocator manager...")
-                self.allocator_manager = AllocatorManager(check_interval=10.0, check_timeout=3.0)
+                self.allocator_manager = AllocatorManager(
+                    check_interval=10.0, check_timeout=3.0,
+                    register_file=str(self.data_dir / ALLOCATOR_DB),
+                )
                 await self.allocator_manager.start()
 
                 logger.info("Initializing ScannerNode...")
-                self.scanner = ScannerNode()
+                self.scanner = ScannerNode(register_file=str(self.data_dir / SCANNER_DB))
 
                 logger.info("Initializing TelemetryManager...")
                 self.telemetry = TelemetryManager(self.scanner)
@@ -284,7 +291,7 @@ class CANSession:
 
                 logger.info("Initializing EventLogger...")
                 self.event_logger = EventLogger(
-                    db_path="telemetry_events.db",
+                    db_path=self.data_dir / EVENTS_DB,
                     retention_seconds=86400.0,   # keep last 24h of bus traffic
                     max_events=5_000_000,        # safety cap; bounds disk
                 )
@@ -390,7 +397,7 @@ class CANSession:
             # When CAN has never been connected this session it doesn't exist yet,
             # so we create a transient one bound to the same DB.
             from event_logger import EventLogger
-            self.event_logger = EventLogger(db_path="telemetry_events.db",
+            self.event_logger = EventLogger(db_path=self.data_dir / EVENTS_DB,
                                             retention_seconds=86400.0,
                                             max_events=5_000_000)
             await self.event_logger.start()
@@ -741,11 +748,20 @@ def show_token_on_terminal(token: str, stream=None) -> bool:
 
 async def main(can_iface: Optional[str] = None, force_compile: bool = False, bind: str = "127.0.0.1",
                port: int = 8080, serve_frontend: bool = True,
-               can_bitrate: Optional[int] = None) -> None:
+               can_bitrate: Optional[int] = None, data_dir: Optional[str] = None) -> None:
     from websocket_server import WebSocketServer
     from dsdl_manager import DsdlManager
 
-    session = CANSession(default_bitrate=can_bitrate)
+    data_path = resolve_data_dir(data_dir)
+    try:
+        moved = prepare_data_dir(data_path, legacy_dir=Path.cwd())
+    except OSError as exc:
+        logger.error("Cannot use %s as the data folder: %s. Choose another with --data-dir.", data_path, exc)
+        raise SystemExit(1) from None
+    if moved:
+        logger.info("Moved %s from %s into the data folder", ", ".join(moved), Path.cwd())
+
+    session = CANSession(default_bitrate=can_bitrate, data_dir=data_path)
     project_root = resolve_project_root()
     dsdl_mgr = DsdlManager(project_root)
 
@@ -776,6 +792,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("=" * 60)
     logger.info("Bound to:    %s:%d", bind, port)
     logger.info("Auth:        %s", "token required (CYNITOR_AUTH_TOKEN set)" if auth_token else "OPEN (no token)")
+    logger.info("Data:        %s", data_path)
     show_token_on_terminal(auth_token)
     if bind == "0.0.0.0" and not auth_token:
         logger.warning("Server is bound to 0.0.0.0 with NO auth — reachable from any network peer. Set CYNITOR_AUTH_TOKEN to require a bearer token.")
@@ -798,6 +815,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("  --bitrate <n>    bus speed in bit/s; required with --can for any adapter except SocketCAN")
     logger.info("  --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)")
     logger.info("  --port <n>       listen on <n> instead of 8080")
+    logger.info("  --data-dir <dir> keep history, recordings and node-IDs in <dir>")
     logger.info("  --recompile      force DSDL recompilation via nnvg")
     logger.info("  --no-frontend    serve only the API and WebSocket, not the dashboard")
     logger.info("  --help           full reference")
@@ -841,9 +859,11 @@ def _exit_when_parent_dies() -> None:
     started it and keeps holding port 8080. The next start would then find a
     stale server answering on the port it wanted.
 
-    Linux only; a no-op elsewhere.
+    Linux and Windows (see _exit_when_windows_parent_dies); a no-op elsewhere.
     """
     if not IS_LINUX:
+        if IS_WINDOWS:
+            _exit_when_windows_parent_dies()
         return
     original_ppid = os.getppid()
     try:
@@ -865,6 +885,50 @@ def _exit_when_parent_dies() -> None:
     if os.getppid() != original_ppid:
         logger.warning("Parent process exited during startup; shutting down")
         raise SystemExit(0)
+
+
+def _exit_when_windows_parent_dies() -> None:
+    """Windows counterpart of the parent-death signal: watch the bootloader.
+
+    Windows has no such signal, and killing the bootloader of the frozen
+    binary leaves this interpreter running and holding its port, as on Linux.
+    A thread waits on the parent's process handle instead, and when it ends,
+    delivers SIGTERM to the main thread, which the handler installed in
+    __main__ turns into the usual orderly shutdown.
+
+    Frozen builds only. There the parent is the bootloader, which waits for us
+    and so is certainly still the process that started us; run from a shell,
+    the parent could be anything, and closing a console ends us anyway.
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        import _thread
+        import ctypes
+        import threading
+        from ctypes import wintypes
+
+        SYNCHRONIZE = 0x00100000
+        INFINITE = 0xFFFFFFFF
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        parent = kernel32.OpenProcess(SYNCHRONIZE, False, os.getppid())
+    except Exception as exc:
+        logger.debug("Parent-death cleanup unavailable: %s", exc)
+        return
+    if not parent:
+        logger.debug("Parent-death cleanup unavailable: OpenProcess failed (%d)", ctypes.get_last_error())
+        return
+
+    def wait_for_parent() -> None:
+        kernel32.WaitForSingleObject(parent, INFINITE)
+        logger.warning("Parent process exited; shutting down")
+        _thread.interrupt_main(signal.SIGTERM)
+
+    threading.Thread(target=wait_for_parent, name="parent-watch", daemon=True).start()
 
 
 if __name__ == "__main__":
@@ -909,6 +973,15 @@ if __name__ == "__main__":
         help="TCP port to listen on (default: 8080)",
     )
     parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="Folder for history, recordings and the allocator's node-ID table "
+             "(default: CYNITOR_DATA_DIR, else the per-user data folder: "
+             "%%LOCALAPPDATA%%\\Cynitor, ~/.local/share/cynitor, or "
+             "~/Library/Application Support/Cynitor). Data found in the current "
+             "directory from earlier versions is moved there once.",
+    )
+    parser.add_argument(
         "--no-frontend",
         action="store_true",
         help="Serve only the REST API and WebSocket; do not serve the dashboard",
@@ -933,6 +1006,7 @@ if __name__ == "__main__":
             port=args.port,
             serve_frontend=not args.no_frontend,
             can_bitrate=args.bitrate,
+            data_dir=args.data_dir,
         ))
     except KeyboardInterrupt:
         logger.info("Interrupted by user")

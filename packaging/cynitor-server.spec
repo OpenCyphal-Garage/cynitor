@@ -4,8 +4,9 @@
 #   cd cynitor/packaging
 #   python3 -m PyInstaller cynitor-server.spec --noconfirm
 #
-# Output: dist/cynitor-server  (single-file executable)
+# Output: dist/cynitor-server  (single-file executable; cynitor-server.exe on Windows)
 
+import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(SPECPATH).resolve().parent
@@ -25,6 +26,7 @@ server_modules = [
     "can_config",
     "can_discovery",
     "can_hub",
+    "data_dir",
     "startup_setup",
     "log_store",
     "replay",
@@ -86,8 +88,10 @@ pycyphal_hidden = [
     "pycyphal.transport.commons.crc",
 ]
 
-# python-can interface backends loaded by name at runtime.
-# socketcan (Linux) and pcan (Windows) are the primary targets.
+# python-can interface backends loaded by name at runtime: socketcan on Linux;
+# elsewhere the ones the CAN hub opens and adapter discovery probes
+# (can_hub.open_adapter, can_discovery). virtual carries the hub's internal
+# channel on every OS.
 python_can_hidden = [
     "can",
     "can.interfaces",
@@ -96,7 +100,29 @@ python_can_hidden = [
     "can.interfaces.slcan",
     "can.interfaces.virtual",
     "can.interfaces.socketcand",
+    "can.interfaces.kvaser",
+    "can.interfaces.vector",
+    "can.interfaces.ixxat",
+    "can.interfaces.gs_usb",
+    "can.interfaces.udp_multicast",
 ]
+
+# Windows-only requirements (server/requirements.txt): candleLight adapters go
+# through pyusb, whose libusb DLL comes from libusb-package -- that package
+# ships its own PyInstaller hook, which bundles the DLL -- and slcan
+# discovery lists serial ports.
+if sys.platform == "win32":
+    python_can_hidden += [
+        "gs_usb",
+        "gs_usb.gs_usb",
+        "usb",
+        "usb.core",
+        "usb.util",
+        "usb.backend.libusb1",
+        "libusb_package",
+        "serial",
+        "serial.tools.list_ports",
+    ]
 
 hidden_imports = (
     server_modules

@@ -74,6 +74,7 @@ EventLogger.start()        SQLite persistence
 | `can_hub.py` | Opens a non-SocketCAN adapter once and bridges it to an in-process python-can `virtual` channel that the allocator probe, allocator and scanner all open instead; also picks Cynitor's node-ID from heartbeats on that channel; for those adapters it also measures bus load (`HubBusLoad`, from forwarded frame lengths, standing in for canbusload) and, for gs_usb, whose reads hide USB errors, checks every few seconds that the device is still enumerated |
 | `startup_setup.py` | DSDL compilation via `nnvg`, sets `UAVCAN__CAN__IFACE` / `UAVCAN__CAN__MTU`, calls `yakut accommodate` for node ID |
 | `node_identity_map.py` | Bidirectional `unique_id ↔ node_id` mapping with displacement detection, snapshot storage, and SQLite-backed persistence |
+| `data_dir.py` | The data folder: per-user default per OS (`STATE_DIRECTORY` under systemd), `--data-dir` / `CYNITOR_DATA_DIR` override, and the one-time move of databases an earlier version left in the working directory, each with its `-wal`/`-shm` files |
 | `log_store.py` | In-memory deque (max 5000) fed by a `logging.Handler`; exposed via `/api/logs` |
 | `dsdl_manager.py` | DSDL discovery, namespace tree, source/compiled state, custom-type CRUD under `dsdl_messages/custom/`, recompile orchestration |
 | `replay.py` | Recording-replay engine: streams `recording_events` rows back through subscriber queues at controlled speed; mirrors `TelemetryManager`'s broadcast shape so the WS handler picks one source per session (telemetry XOR replay) |
@@ -88,6 +89,7 @@ EventLogger.start()        SQLite persistence
 --recompile       Force `nnvg` to regenerate Python from DSDL even if outputs exist.
 --bind <host>     Host/IP to bind the HTTP server to (default 127.0.0.1; use 0.0.0.0 to expose on the network).
 --port <n>        TCP port to listen on (default 8080).
+--data-dir <dir>  Folder for the databases (default: CYNITOR_DATA_DIR, else the per-user data folder; see data_dir.py).
 --version         Print the version and exit.
 --no-frontend     Serve only the REST API and WebSocket, not the dashboard.
 ```
@@ -95,6 +97,13 @@ EventLogger.start()        SQLite persistence
 Without `--can`, the backend starts in selection mode. Use `POST /api/can/connect` with `{"interface": "..."}` to attach.
 
 By default the dashboard is served from the same port as the API, so a deployment is one binary. `--no-frontend` turns that off for API-only deployments, where something other than the browser dashboard is consuming the data. A checkout with no `website/` directory is API-only regardless. The startup banner says which mode is active.
+
+### Tests
+
+- `server/tests/` — backend unit tests (pytest); they mock the Cyphal stack. CI runs them on Linux (Python 3.10–3.12) and on Windows Server 2022 and 2025.
+- `tests/integration/hub_session.py` — a whole CAN session through the CAN hub on a python-can `virtual` bus, with the real Cyphal stack and a simulated device and plug-and-play node; needs compiled DSDL. CI runs it on Linux and both Windows images.
+- `tests/e2e/` — Playwright checks of the static dashboard.
+- `packaging/smoke-test.ps1` — checks the built Windows executable: bundled modules and libusb, a session through the hub, the dashboard and token, and that killing the PyInstaller bootloader stops the server.
 
 ### DSDL
 

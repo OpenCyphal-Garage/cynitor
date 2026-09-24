@@ -143,6 +143,7 @@ Startup options:
   --bitrate <n>    bus speed in bit/s; required with --can for any adapter except SocketCAN
   --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)
   --port <n>       listen on <n> instead of 8080
+  --data-dir <dir> keep history, recordings and node-IDs in <dir>
   --recompile      force DSDL recompilation via nnvg
   --help           full reference
 ============================================================

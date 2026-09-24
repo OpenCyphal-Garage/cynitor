@@ -105,9 +105,31 @@ Other options:
 | `--bitrate <n>` | Bus speed in bit/s. Required with `--can` for every adapter Cynitor opens itself (PCAN, gs_usb, slcan, …); there is no default, because a wrong guess disrupts the bus. Ignored for SocketCAN, whose bitrate is set with `ip link` |
 | `--bind <host>` | Listen on `<host>` (default `127.0.0.1`; `0.0.0.0` to expose on the network) |
 | `--port <n>` | Listen on `<n>` instead of 8080 |
+| `--data-dir <dir>` | Keep history, recordings and the allocator's node-ID table in `<dir>` instead of the default data folder (see [Where data is kept](#where-data-is-kept)) |
 | `--no-frontend` | Serve only the API and WebSocket, not the dashboard |
 | `--recompile` | Force `nnvg` to regenerate compiled DSDL from `dsdl_messages/` |
 | `--version` | Print the version and exit |
+
+## Where data is kept
+
+Bus history (24 h), node history (30 days), service-call history, recordings,
+remembered device names, and the allocator's table of which device got which
+node-ID are kept in SQLite files in one data folder, whatever folder Cynitor
+is started from:
+
+| OS | Data folder |
+|----|-------------|
+| Windows | `%LOCALAPPDATA%\Cynitor` |
+| Linux | `~/.local/share/cynitor` (`$XDG_DATA_HOME/cynitor`); `/var/lib/cynitor` for the systemd service |
+| macOS | `~/Library/Application Support/Cynitor` |
+
+`--data-dir <dir>` or the `CYNITOR_DATA_DIR` environment variable chooses
+another. The startup banner shows which one is in use.
+
+Earlier versions wrote these files to the folder Cynitor was started from
+(for the systemd service, `/`). If they are found there, they are moved into
+the data folder once, on the first start; data already in the data folder is
+never overwritten.
 
 ## Platforms
 
@@ -143,14 +165,21 @@ The backend serves the dashboard as well as the API, so a deployment is one
 binary and clients need nothing but a browser.
 
 Grab a build from the [latest release](https://github.com/OpenCyphal-Garage/cynitor/releases):
-a `.deb`, an `.AppImage`, or the bare binary. All three contain the same
-server and none of them open a window.
+a `.deb`, an `.AppImage`, or the bare binary for Linux, and a single `.exe`
+for Windows 10 and 11 (x64). All of them contain the same server and none of
+them open a window.
 
 ```bash
 sudo dpkg -i cynitor-server_*_amd64.deb    # installs to /usr/bin, adds a systemd unit
 # or just run it
 chmod +x cynitor-server-*-x86_64.AppImage && ./cynitor-server-*-x86_64.AppImage
 ```
+
+On Windows, run the `.exe` from a terminal, e.g.
+`.\cynitor-server-0.7.2-windows-x86_64.exe`. It includes what candleLight
+adapters (CANable) need; other adapters need their vendor's driver
+installed (PEAK, Kvaser, Vector, IXXAT). Windows may warn about an
+unrecognised app the first time, as the executable is not code-signed.
 
 Nothing else is needed on that machine: no Python, no pip, no web server.
 
@@ -204,6 +233,18 @@ package and downloads `appimagetool` on first use.
 
 Everything lands in `packaging/out/`, with the bare executable at
 `packaging/dist/cynitor-server`.
+
+On Windows there is no `.deb` or AppImage, only the executable. From the
+repository root, in PowerShell:
+
+```powershell
+pip install -r server/requirements.txt pyinstaller
+python server/startup_setup.py --recompile
+cd packaging; python -m PyInstaller cynitor-server.spec --noconfirm
+.\smoke-test.ps1          # optional: what CI checks on every build
+```
+
+The result is `packaging\dist\cynitor-server.exe`.
 
 ### Running it as a service
 

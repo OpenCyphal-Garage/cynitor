@@ -42,7 +42,7 @@ class AllocatorApp:
     REGISTER_FILE = "allocator_2app.db"
     NODE_ID = ALLOCATOR_NODE_ID
 
-    def __init__(self, iface_name: Optional[str] = None) -> None:
+    def __init__(self, iface_name: Optional[str] = None, register_file: str = REGISTER_FILE) -> None:
         node_info = uavcan.node.GetInfo_1_0.Response(
             software_version=uavcan.node.Version_1(major=1, minor=0),
             name=f"{_get_local_ip()}.allocator",
@@ -51,7 +51,7 @@ class AllocatorApp:
         can_interface = normalize_can_iface(iface_name or _iface_from_env())
         media = PythonCANMedia(iface_name=can_interface, bitrate=media_bitrate(can_interface))
         transport = CANTransport(media, local_node_id=AllocatorApp.NODE_ID)
-        self.registry = pycyphal.application.make_registry(AllocatorApp.REGISTER_FILE)
+        self.registry = pycyphal.application.make_registry(register_file)
         self.node = pycyphal.application.make_node(info=node_info, transport=transport, registry=self.registry)
         try:
             self.allocator = CentralizedAllocator(node=self.node)
@@ -105,8 +105,11 @@ async def allocator_exists(
 
 
 class AllocatorManager:
-    def __init__(self, check_interval: float = 10.0, check_timeout: float = 3.0) -> None:
+    def __init__(self, check_interval: float = 10.0, check_timeout: float = 3.0,
+                 register_file: str = AllocatorApp.REGISTER_FILE) -> None:
         self._check_interval = check_interval
+        # The allocator's node-ID table; see data_dir.
+        self._register_file = register_file
         self._check_timeout = check_timeout
         self._allocator: Optional[AllocatorApp] = None
         self._task: Optional[asyncio.Task] = None
@@ -135,7 +138,7 @@ class AllocatorManager:
         # path. Constructor latency is bounded (subprocess thread spawn) so
         # the brief loop occupancy is acceptable here.
         if self._allocator is None:
-            self._allocator = AllocatorApp(iface_name=self._iface_name)
+            self._allocator = AllocatorApp(iface_name=self._iface_name, register_file=self._register_file)
 
     async def _monitor_loop(self) -> None:
         try:

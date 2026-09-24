@@ -59,13 +59,15 @@ class ScannerNode:
         430: 'uavcan.node.GetInfo_1_0'
     }
 
-    def __init__(self) -> None:
+    def __init__(self, register_file: Optional[str] = None) -> None:
+        """``register_file`` is where the node's registers persist; the session
+        puts it in the data folder (see data_dir). Defaults to REGISTER_FILE."""
         node_information = uavcan.node.GetInfo_1.Response(
             software_version=uavcan.node.Version_1(major=1, minor=0),
             name="org.dontpanic.pycyphal.utility.monitor_app",
         )
 
-        self._node = pycyphal.application.make_node(node_information, ScannerNode.REGISTER_FILE)
+        self._node = pycyphal.application.make_node(node_information, register_file or ScannerNode.REGISTER_FILE)
         self._node.heartbeat_publisher.mode = uavcan.node.Mode_1.OPERATIONAL
         self._node.heartbeat_publisher.vendor_specific_status_code = os.getpid() % 100
 
