@@ -129,8 +129,12 @@ jobs:
 
       - name: Upload result summary
         if: always()
+        # A convenience copy of the summary; the test step above decides the
+        # job. An exhausted artifact storage quota must not fail passing tests.
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: e2e-result
           path: tests/e2e/result.md
           if-no-files-found: ignore
+          retention-days: 7
