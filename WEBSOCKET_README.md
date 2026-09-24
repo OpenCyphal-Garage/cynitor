@@ -110,7 +110,8 @@ Start the server with `--no-frontend` to omit them entirely, for deployments whe
 ### 3. Runtime Environment
 
 At startup, Python setup runs automatically and configures:
-- `UAVCAN__CAN__IFACE=socketcan:<selected_iface>`
+- `UAVCAN__CAN__IFACE=socketcan:<selected_iface>`, or the python-can spec as given (e.g. `gs_usb:0`)
+- `UAVCAN__CAN__BITRATE=<n> <n>` for non-SocketCAN adapters (cleared for SocketCAN)
 - `UAVCAN__NODE__ID` (auto-assigned if not already set)
 - `CYPHAL_PATH` and `PYCYPHAL_PATH` (DSDL locations)
 
@@ -138,7 +139,8 @@ Status:      http://localhost:8080/api/status
 Mode:        selection  (waiting for the UI or POST /api/can/connect)
 ------------------------------------------------------------
 Startup options:
-  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0)
+  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0, gs_usb:0, pcan:PCAN_USBBUS1)
+  --bitrate <n>    bus speed in bit/s; required with --can for any adapter except SocketCAN
   --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)
   --port <n>       listen on <n> instead of 8080
   --recompile      force DSDL recompilation via nnvg
@@ -312,7 +314,15 @@ Response (success):
 {"status": "running", "can_interface": "vcan0"}
 ```
 
-Returns `409` if already connected, `400` if interface is unknown.
+`interface` is either a SocketCAN name, which must be one of `available_interfaces`, or a python-can spec such as `gs_usb:0` or `pcan:PCAN_USBBUS1`, which is opened without that check. `bitrate` (integer, 1–1000000 bit/s) is the bus speed, required for every adapter except SocketCAN, which ignores it. It may be left out only if the server was started with `--bitrate`, which then applies.
+
+```bash
+curl -X POST http://localhost:8080/api/can/connect \
+  -H 'Content-Type: application/json' \
+  -d '{"interface":"gs_usb:0","bitrate":250000}'
+```
+
+Returns `409` if already connected, `400` if a SocketCAN name is unknown or `bitrate` is missing or invalid.
 
 **Disconnect from CAN:**
 ```bash

@@ -18,6 +18,8 @@ from pycyphal.transport.can import CANTransport
 from pycyphal.transport.can.media.pythoncan import PythonCANMedia
 from pycyphal.application.plug_and_play import CentralizedAllocator
 
+from can_config import media_bitrate, normalize_can_iface
+
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +27,6 @@ logger = logging.getLogger(__name__)
 
 def _iface_from_env() -> str:
     return os.environ["UAVCAN__CAN__IFACE"].strip()
-
-
-def _normalize_pythoncan_iface(iface: str) -> str:
-    value = iface.strip()
-    if ":" in value:
-        return value
-    return f"socketcan:{value}"
 
 
 def _get_local_ip() -> str:
@@ -53,9 +48,8 @@ class AllocatorApp:
             name=f"{_get_local_ip()}.allocator",
         )
 
-        can_interface = _normalize_pythoncan_iface(iface_name or _iface_from_env())
-        can_bitrate = 500000
-        media = PythonCANMedia(iface_name=can_interface, bitrate=int(can_bitrate))
+        can_interface = normalize_can_iface(iface_name or _iface_from_env())
+        media = PythonCANMedia(iface_name=can_interface, bitrate=media_bitrate(can_interface))
         transport = CANTransport(media, local_node_id=AllocatorApp.NODE_ID)
         self.registry = pycyphal.application.make_registry(AllocatorApp.REGISTER_FILE)
         self.node = pycyphal.application.make_node(info=node_info, transport=transport, registry=self.registry)
@@ -81,10 +75,8 @@ async def allocator_exists(
     node_id: int = AllocatorApp.NODE_ID,
     timeout: float = 3.0,
 ) -> bool:
-    media = PythonCANMedia(
-        iface_name=_normalize_pythoncan_iface(iface_name or _iface_from_env()),
-        bitrate=500000,
-    )
+    can_interface = normalize_can_iface(iface_name or _iface_from_env())
+    media = PythonCANMedia(iface_name=can_interface, bitrate=media_bitrate(can_interface))
     transport = CANTransport(media, local_node_id=None)
     registry = pycyphal.application.make_registry()
     probe = pycyphal.application.make_node(

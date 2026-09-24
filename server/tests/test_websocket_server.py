@@ -15,6 +15,7 @@ def _make_session(is_running=False, can_interface=None):
     session = MagicMock()
     session.is_running = is_running
     session.can_interface = can_interface
+    session.default_bitrate = None
     session.telemetry = None
     session.bus_load = None
     session.last_error = None
@@ -157,6 +158,63 @@ class TestCANConnect:
         # Simpler approach: directly call session and verify state
         await session.connect("vcan0")
         session.connect.assert_called_once_with("vcan0")
+
+
+class TestCANConnectSpecsAndBitrate:
+    """The real /api/can/connect handler, with discovery pinned."""
+
+    @pytest.mark.asyncio
+    async def test_bare_name_is_checked_against_discovery(self, client, session):
+        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+            resp = await client.post("/api/can/connect", json={"interface": "vcan99"})
+        assert resp.status == 400
+        data = await resp.json()
+        assert data["available_interfaces"] == ["vcan0"]
+        session.connect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_discovered_socketcan_name_needs_no_bitrate(self, client, session):
+        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+            resp = await client.post("/api/can/connect", json={"interface": "vcan0"})
+        assert resp.status == 200
+        session.connect.assert_awaited_once_with("vcan0", bitrate=None)
+
+    @pytest.mark.asyncio
+    async def test_explicit_spec_skips_discovery(self, client, session):
+        # Discovery never lists adapters such as gs_usb:0 (and lists nothing
+        # at all off Linux), so requiring a match made them unreachable.
+        with patch("main.discover_can_interfaces", return_value=[]) as discover:
+            resp = await client.post(
+                "/api/can/connect", json={"interface": "gs_usb:0", "bitrate": 250000},
+            )
+        assert resp.status == 200
+        discover.assert_not_called()
+        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=250000)
+
+    @pytest.mark.asyncio
+    async def test_adapter_without_bitrate_is_refused(self, client, session):
+        resp = await client.post("/api/can/connect", json={"interface": "gs_usb:0"})
+        assert resp.status == 400
+        assert "bitrate is required" in (await resp.json())["error"]
+        session.connect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_adapter_falls_back_to_server_bitrate(self, client, session):
+        # Started with --bitrate: API clients may leave it out.
+        session.default_bitrate = 250_000
+        resp = await client.post("/api/can/connect", json={"interface": "gs_usb:0"})
+        assert resp.status == 200
+        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=None)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bitrate", [0, 5_000_000, "500000", True])
+    async def test_rejects_invalid_bitrate(self, client, session, bitrate):
+        resp = await client.post(
+            "/api/can/connect", json={"interface": "gs_usb:0", "bitrate": bitrate},
+        )
+        assert resp.status == 400
+        assert "bitrate" in (await resp.json())["error"].lower()
+        session.connect.assert_not_awaited()
 
 
 class TestCANDisconnect:

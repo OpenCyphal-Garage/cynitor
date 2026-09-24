@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Optional, Set, Any
 from aiohttp import web, WSCloseCode
 
+from can_config import is_explicit_spec, resolve_bitrate
+
 
 def _csv_escape(value: Any) -> str:
     """Escape a value for inclusion in a CSV cell."""
@@ -315,18 +317,30 @@ class WebSocketServer:
         if not iface:
             return web.json_response({"error": "Field 'interface' required"}, status=400)
 
+        # Required for every adapter except SocketCAN; the server's --bitrate,
+        # if it was started with one, stands in when the request has none.
+        bitrate = payload.get("bitrate")
+        try:
+            resolve_bitrate(iface, self.session.default_bitrate if bitrate is None else bitrate)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+
         if self.session.is_running:
             return web.json_response({"error": "Already connected"}, status=409)
 
-        available = await asyncio.to_thread(discover_can_interfaces)
-        if iface not in available:
-            return web.json_response(
-                {"error": f"Unknown interface: {iface}", "available_interfaces": available},
-                status=400,
-            )
+        # Only bare SocketCAN names can be checked against discovery. A spec
+        # such as "gs_usb:0" names an adapter that discovery does not list yet
+        # (and never does off Linux), so opening it is the only real check.
+        if not is_explicit_spec(iface):
+            available = await asyncio.to_thread(discover_can_interfaces)
+            if iface not in available:
+                return web.json_response(
+                    {"error": f"Unknown interface: {iface}", "available_interfaces": available},
+                    status=400,
+                )
 
         try:
-            await self.session.connect(iface)
+            await self.session.connect(iface, bitrate=bitrate)
             return web.json_response({"status": "running", "can_interface": iface})
         except Exception as e:
             logger.error(f"Failed to connect CAN: {e}", exc_info=True)

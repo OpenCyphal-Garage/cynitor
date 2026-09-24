@@ -22,6 +22,7 @@ server_modules = [
     "telemetry_manager",
     "event_logger",
     "allocator",
+    "can_config",
     "startup_setup",
     "log_store",
     "replay",

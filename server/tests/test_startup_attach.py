@@ -60,9 +60,22 @@ class TestFailedAttach:
     @pytest.mark.asyncio
     async def test_suggests_creating_one_when_none_exist(self, session, caplog):
         session.connect.side_effect = OSError(19, "No such device")
-        with patch.object(main, "discover_can_interfaces", return_value=[]):
+        with patch.object(main, "discover_can_interfaces", return_value=[]), \
+                patch.object(main, "IS_LINUX", True):
             await main.attach_or_fall_back(session, "can0")
         assert "modprobe vcan" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_off_linux_suggests_naming_the_adapter(self, session, caplog):
+        # There is no vcan off Linux, and nothing is discovered there yet, so
+        # the useful hint is how to spell an adapter and its bus speed.
+        session.connect.side_effect = OSError("Cannot find device 0")
+        with patch.object(main, "discover_can_interfaces", return_value=[]), \
+                patch.object(main, "IS_LINUX", False):
+            await main.attach_or_fall_back(session, "gs_usb:0")
+        assert "modprobe" not in caplog.text
+        assert "gs_usb:0" in caplog.text
+        assert "--bitrate" in caplog.text
 
     @pytest.mark.asyncio
     async def test_says_it_is_carrying_on(self, session, caplog):

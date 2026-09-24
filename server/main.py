@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from can_config import is_socketcan, normalize_can_iface, resolve_bitrate, validate_bitrate
 from log_store import InMemoryLogStore, APILogHandler
 from startup_setup import prepare_runtime, resolve_project_root
 from version import __version__
@@ -171,8 +172,12 @@ class BusLoadMonitor:
 class CANSession:
     """Manages the lifecycle of all CAN-dependent components."""
 
-    def __init__(self) -> None:
+    def __init__(self, default_bitrate: Optional[int] = None) -> None:
+        # --bitrate, used when connect() is not given one. There is no built-in
+        # default: a guessed bitrate can disrupt the bus.
+        self.default_bitrate = None if default_bitrate is None else validate_bitrate(default_bitrate)
         self.can_interface: Optional[str] = None
+        self.can_bitrate: Optional[int] = None
         self.scanner = None
         self.telemetry = None
         self.allocator_manager = None
@@ -194,8 +199,15 @@ class CANSession:
     def is_running(self) -> bool:
         return self.scanner is not None
 
-    async def connect(self, can_iface: str, force_compile: bool = False) -> None:
-        """Start all CAN components."""
+    async def connect(self, can_iface: str, force_compile: bool = False,
+                      bitrate: Optional[int] = None) -> None:
+        """Start all CAN components.
+
+        `bitrate` is ignored by SocketCAN (set it with `ip link`) and required
+        for every other interface; None means `default_bitrate`. ValueError is
+        raised before anything is opened if it is missing or invalid.
+        """
+        bitrate = resolve_bitrate(can_iface, self.default_bitrate if bitrate is None else bitrate)
         # Fast-fail before the slow prepare_runtime step. The double-check inside
         # the lock guards against concurrent connect() calls that both passed
         # this check before prepare_runtime returned.
@@ -204,10 +216,20 @@ class CANSession:
         if self.replay is not None:
             raise RuntimeError("Replay session is active — stop it before connecting CAN")
 
+        spec = normalize_can_iface(can_iface)
+        if is_socketcan(spec):
+            if bitrate is not None:
+                logger.info("Connecting to %s; ignoring bitrate %d, SocketCAN's own setting applies", spec, bitrate)
+                bitrate = None
+            else:
+                logger.info("Connecting to %s (bitrate is set by SocketCAN, not by Cynitor)", spec)
+        else:
+            logger.info("Connecting to %s at %d bit/s", spec, bitrate)
+
         # prepare_runtime can take seconds (DSDL compile via nnvg, env setup).
         # Running it outside the lock keeps a concurrent disconnect() responsive
         # instead of blocking it behind a cold-start connect.
-        await asyncio.to_thread(prepare_runtime, can_iface, force_compile)
+        await asyncio.to_thread(prepare_runtime, can_iface, force_compile, bitrate)
 
         async with self._lock:
             if self.is_running:
@@ -267,6 +289,7 @@ class CANSession:
                 await self.bus_load.start()
 
                 self.can_interface = can_iface
+                self.can_bitrate = bitrate
                 logger.info("CAN session started on %s", can_iface)
             except Exception:
                 try:
@@ -373,6 +396,7 @@ class CANSession:
             self.scanner = None
         self.registered_nodes.clear()
         self.can_interface = None
+        self.can_bitrate = None
 
         logger.info("CAN session stopped")
 
@@ -594,11 +618,20 @@ async def attach_or_fall_back(session, can_iface: str, force_compile: bool = Fal
             available = []
         if available:
             logger.warning("Available CAN interfaces: %s", ", ".join(available))
-        else:
+        elif IS_LINUX:
             logger.warning(
                 "No CAN interfaces found. Create a virtual one with: "
                 "sudo modprobe vcan && sudo ip link add dev vcan0 type vcan "
                 "&& sudo ip link set up vcan0"
+            )
+        else:
+            # Only SocketCAN is discovered so far, so off Linux the list is
+            # always empty and the adapter has to be named explicitly.
+            logger.warning(
+                "CAN adapters are not listed automatically on this OS. Name the "
+                "python-can interface and channel instead, e.g. gs_usb:0 "
+                "(CANable/candleLight), pcan:PCAN_USBBUS1, slcan:COM5@115200 "
+                "or kvaser:0, and set the bus speed with --bitrate."
             )
         logger.warning("Continuing in selection mode — pick an interface in the dashboard.")
         return False
@@ -634,11 +667,12 @@ def show_token_on_terminal(token: str, stream=None) -> bool:
 # ---------------------------------------------------------------------------
 
 async def main(can_iface: Optional[str] = None, force_compile: bool = False, bind: str = "127.0.0.1",
-               port: int = 8080, serve_frontend: bool = True) -> None:
+               port: int = 8080, serve_frontend: bool = True,
+               can_bitrate: Optional[int] = None) -> None:
     from websocket_server import WebSocketServer
     from dsdl_manager import DsdlManager
 
-    session = CANSession()
+    session = CANSession(default_bitrate=can_bitrate)
     project_root = resolve_project_root()
     dsdl_mgr = DsdlManager(project_root)
 
@@ -686,7 +720,8 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
         logger.info("Mode:        selection  (waiting for the UI or POST /api/can/connect)")
     logger.info("-" * 60)
     logger.info("Startup options:")
-    logger.info("  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0)")
+    logger.info("  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0, gs_usb:0, pcan:PCAN_USBBUS1)")
+    logger.info("  --bitrate <n>    bus speed in bit/s; required with --can for any adapter except SocketCAN")
     logger.info("  --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)")
     logger.info("  --port <n>       listen on <n> instead of 8080")
     logger.info("  --recompile      force DSDL recompilation via nnvg")
@@ -764,7 +799,24 @@ if __name__ == "__main__":
     parser.add_argument(
         "--can",
         default=None,
-        help="CAN interface name (if omitted, select from the UI)",
+        help="CAN interface: a SocketCAN name (vcan0, can0) or a python-can spec "
+             "such as gs_usb:0, pcan:PCAN_USBBUS1, slcan:COM5@115200 "
+             "(if omitted, select from the UI)",
+    )
+
+    def _bitrate_arg(text: str) -> int:
+        try:
+            return validate_bitrate(int(text))
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(str(exc)) from None
+
+    parser.add_argument(
+        "--bitrate",
+        type=_bitrate_arg,
+        default=None,
+        help="CAN bitrate in bit/s; must match the bus. Required with --can for every "
+             "adapter Cynitor opens itself (PCAN, gs_usb, slcan, Kvaser, ...). Ignored "
+             "for SocketCAN, whose bitrate is set with `ip link`.",
     )
     parser.add_argument(
         "--recompile",
@@ -788,6 +840,13 @@ if __name__ == "__main__":
         help="Serve only the REST API and WebSocket; do not serve the dashboard",
     )
     args = parser.parse_args()
+    if args.can:
+        # Refuse up front rather than start and fall back to selection mode:
+        # the fix is on the command line, not in the dashboard.
+        try:
+            resolve_bitrate(args.can, args.bitrate)
+        except ValueError as exc:
+            parser.error(f"{exc}. Pass it with --bitrate.")
 
     signal.signal(signal.SIGTERM, _shutdown_on_sigterm)
     _exit_when_parent_dies()
@@ -799,6 +858,7 @@ if __name__ == "__main__":
             bind=args.bind,
             port=args.port,
             serve_frontend=not args.no_frontend,
+            can_bitrate=args.bitrate,
         ))
     except KeyboardInterrupt:
         logger.info("Interrupted by user")

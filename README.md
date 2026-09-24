@@ -96,6 +96,7 @@ Other options:
 
 | Flag | Effect |
 |------|--------|
+| `--bitrate <n>` | Bus speed in bit/s. Required with `--can` for every adapter Cynitor opens itself (PCAN, gs_usb, slcan, …); there is no default, because a wrong guess disrupts the bus. Ignored for SocketCAN, whose bitrate is set with `ip link` |
 | `--bind <host>` | Listen on `<host>` (default `127.0.0.1`; `0.0.0.0` to expose on the network) |
 | `--port <n>` | Listen on `<n>` instead of 8080 |
 | `--no-frontend` | Serve only the API and WebSocket, not the dashboard |
@@ -106,17 +107,25 @@ Other options:
 
 **Linux** is the primary platform — SocketCAN (`vcan0`, `can0`, `slcan0`, …) is auto-discovered and the bus-load monitor uses `canbusload` from `can-utils`.
 
-**Windows / macOS** are supported with reduced introspection. The interface dropdown will be empty (no SocketCAN equivalent), so connect by passing a full pycyphal transport spec — any string that contains `:` is forwarded to pycyphal unchanged:
+**Windows / macOS** are supported with reduced introspection. The interface dropdown will be empty (no SocketCAN equivalent), so connect by naming the adapter as `<python-can interface>:<channel>` — any string that contains `:` is passed to pycyphal as is, without being checked against the dropdown. Unlike SocketCAN, these adapters run at whatever bitrate Cynitor opens them with, so you have to give it, and it has to match the bus. There is no default: a node joining at the wrong speed floods the bus with error frames.
 
 ```bash
-# Windows example: PCAN USB via python-can
+# PEAK PCAN-USB
+python3 main.py --can pcan:PCAN_USBBUS1 --bitrate 500000
+# CANable / candleLight firmware
+python3 main.py --can gs_usb:0 --bitrate 500000
+# CANable / slcan firmware
+python3 main.py --can slcan:COM5@115200 --bitrate 500000
+
+# Or connect a running backend
 curl -X POST http://localhost:8080/api/can/connect \
   -H 'Content-Type: application/json' \
-  -d '{"interface":"pythoncan:pcan:PCAN_USBBUS1"}'
-
-# Or run the backend directly with the same string
-python3 main.py --can pythoncan:pcan:PCAN_USBBUS1
+  -d '{"interface":"pcan:PCAN_USBBUS1","bitrate":500000}'
 ```
+
+On Windows, `pip install -r requirements.txt` also installs what candleLight adapters (`gs_usb`) need, including the libusb DLL. The older `pythoncan:pcan:PCAN_USBBUS1` spelling is still accepted.
+
+**Known limitation:** Cynitor currently opens the interface more than once. SocketCAN allows that; adapters that only one program can open at a time — candleLight (`gs_usb`) and slcan COM ports — refuse the second open, so they do not work yet.
 
 The bus-load monitor self-disables when `canbusload` is not on PATH (utilization stays at 0%); the rest of the stack — REST/WebSocket server, DSDL Inspector, recordings, log panel, telemetry — works the same on all three OSes. Install whichever `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) and pass its transport string.
 

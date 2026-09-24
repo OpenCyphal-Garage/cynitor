@@ -5,3 +5,9 @@
 pycyphal[transport-can-pythoncan]>=1.27,<2.0
 aiohttp>=3.8,<4.0
 numpy>=1.20,<3.0
+# Windows only: candleLight adapters such as the CANable (python-can "gs_usb")
+# are reached through pyusb, which needs a libusb DLL that Windows does not
+# ship. libusb-package bundles it; startup_setup puts it on PATH. On Linux the
+# kernel's gs_usb driver exposes these adapters as SocketCAN instead.
+gs_usb>=0.3; sys_platform == "win32"
+libusb-package>=1.0.26; sys_platform == "win32"

@@ -76,7 +76,10 @@ EventLogger.start()        SQLite persistence
 ### CLI flags
 
 ```
---can <iface>     CAN interface name (vcan0, slcan0, can0, ...). Required for direct mode.
+--can <iface>     CAN interface: a SocketCAN name (vcan0, slcan0, can0, ...) or a python-can spec
+                  (gs_usb:0, pcan:PCAN_USBBUS1, slcan:COM5@115200, ...). Required for direct mode.
+--bitrate <n>     Bus speed in bit/s. Required with --can for non-SocketCAN adapters; no default. Every component that
+                  opens the bus reads it from UAVCAN__CAN__BITRATE, which prepare_runtime sets.
 --recompile       Force `nnvg` to regenerate Python from DSDL even if outputs exist.
 --bind <host>     Host/IP to bind the HTTP server to (default 127.0.0.1; use 0.0.0.0 to expose on the network).
 --port <n>        TCP port to listen on (default 8080).
