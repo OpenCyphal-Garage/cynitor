@@ -176,6 +176,27 @@ class ScannerNode:
         """
         return re.sub(r'(?<=\d)\.(?=\d)|(?<=\w)\.(?=\d)', '_', dsdl_type)
 
+    @staticmethod
+    def _canonical_type_name(module_name: str) -> str:
+        """The spelling the compiled type actually has, if ``module_name`` differs only in case.
+
+        DSDL type names are case-sensitive, but some firmware advertises them
+        in lowercase ("uavcan.register.access.1.0"), and the class lookup then
+        fails. When the exact name does not exist and exactly one type in the
+        namespace matches it ignoring case, that one is meant. Anything else --
+        an unknown namespace, an exact match, no match, several -- is returned
+        unchanged.
+        """
+        namespace, _, name = module_name.rpartition(".")
+        try:
+            module = importlib.import_module(namespace)
+        except ImportError:
+            return module_name
+        if hasattr(module, name):
+            return module_name
+        matches = [attr for attr in dir(module) if attr.lower() == name.lower()]
+        return f"{namespace}.{matches[0]}" if len(matches) == 1 else module_name
+
     async def _read_register(self, register_access_client, reg_name: str,
                              node_id: int) -> tuple[str | None, Any | None] | None:
         """
@@ -232,7 +253,15 @@ class ScannerNode:
             logging.warning(f"Type register '{type_reg_name}' has unexpected type '{type_field_name}' (expected string)")
             return None
 
-        return port_id, self._dsdl_type_to_module_name(str(type_value))
+        advertised = self._dsdl_type_to_module_name(str(type_value))
+        canonical = self._canonical_type_name(advertised)
+        if canonical != advertised:
+            # The node's firmware should be fixed; say which register is wrong.
+            logging.warning(
+                f"Node {node_id} advertises '{type_value}' in '{type_reg_name}'; DSDL type names "
+                f"are case-sensitive. Using {canonical}."
+            )
+        return port_id, canonical
 
     async def update_reg_list(self, node_id: int) -> tuple[dict[int, str], dict[int, str]]:
         """
