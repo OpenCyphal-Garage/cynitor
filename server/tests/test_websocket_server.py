@@ -17,6 +17,7 @@ def _make_session(is_running=False, can_interface=None):
     session.can_interface = can_interface
     session.default_bitrate = None
     session.can_bitrate = None
+    session.hub = None
     session.telemetry = None
     session.bus_load = None
     session.last_error = None
@@ -681,18 +682,25 @@ class TestTransportDiagnostics:
         scanner.get_transport_info.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_transport_behind_hub_skips_iproute2(self, client, session):
-        # An adapter such as gs_usb:0 has no kernel device for `ip link` to read.
+    async def test_transport_behind_hub_reports_the_hub(self, client, session):
+        # An adapter such as gs_usb:0 has no kernel device for `ip link` to
+        # read; the hub says what it knows instead.
         session.is_running = True
         session.can_interface = "gs_usb:0"
         session.bus_load = None
+        session.hub = MagicMock()
+        session.hub.link_diagnostics = MagicMock(return_value={
+            "bitrate": 500000, "adapter_frames_in": 10,
+            "adapter_frames_out": 4, "adapter_send_failures": 0,
+        })
         scanner = MagicMock()
         scanner.get_transport_info = MagicMock(return_value={"protocol": None, "statistics": None})
         session.scanner = scanner
         with patch("main.get_can_link_diagnostics") as diagnostics:
             resp = await client.get("/api/can/transport")
         assert resp.status == 200
-        assert (await resp.json())["link"] == {}
+        link = (await resp.json())["link"]
+        assert link["bitrate"] == 500000 and link["adapter_send_failures"] == 0
         diagnostics.assert_not_called()
 
     @pytest.mark.asyncio

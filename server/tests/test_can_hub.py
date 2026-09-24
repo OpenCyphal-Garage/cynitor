@@ -15,7 +15,16 @@ import can
 import pytest
 
 import can_hub
-from can_hub import CANHub, _heartbeat_source, close_adapter, open_adapter, pick_free_node_id
+from can_hub import (
+    CANHub,
+    HubBusLoad,
+    _heartbeat_source,
+    close_adapter,
+    frame_bits,
+    open_adapter,
+    pick_free_node_id,
+    presence_check,
+)
 
 _wire_numbers = itertools.count(1)
 _TIMEOUT = 2.0
@@ -347,3 +356,135 @@ class TestPickFreeNodeId:
     def test_any_node_id_on_a_quiet_bus(self, channel):
         pick = pick_free_node_id(f"virtual:{channel}", rng=random.Random(0))
         assert 0 <= pick <= 127
+
+
+class TestFrameBits:
+    def test_extended_frame_with_eight_bytes(self):
+        assert frame_bits(can.Message(arbitration_id=0x1, is_extended_id=True, data=bytes(8))) == 131
+
+    def test_base_frame_with_eight_bytes(self):
+        assert frame_bits(can.Message(arbitration_id=0x1, is_extended_id=False, data=bytes(8))) == 111
+
+    def test_remote_frame_carries_no_data(self):
+        msg = can.Message(arbitration_id=0x1, is_extended_id=True, is_remote_frame=True, dlc=8)
+        assert frame_bits(msg) == 67
+
+
+class TestForwardedBits:
+    def test_both_directions_are_counted(self, hub, other_node):
+        a = _component(hub)
+        try:
+            other_node.send(_frame(0x800, data=bytes(8)))
+            assert _recv_matching(a, 0x800) is not None
+            a.send(_frame(0x801, data=bytes(8)))
+            assert _recv_matching(other_node, 0x801) is not None
+            deadline = time.monotonic() + _TIMEOUT
+            while hub.bits_on_bus < 262 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert hub.bits_from_bus == 131 and hub.bits_to_bus == 131
+            assert hub.bits_on_bus == 262
+        finally:
+            a.shutdown()
+
+
+class FakeCountingHub:
+    bitrate = 500_000
+
+    def __init__(self):
+        self.bits_on_bus = 0
+
+
+class TestHubBusLoad:
+    @pytest.fixture
+    def clock(self):
+        class Clock:
+            now = 0.0
+
+            def __call__(self):
+                return self.now
+        return Clock()
+
+    def test_share_of_the_bitrate_over_the_interval(self, clock):
+        hub = FakeCountingHub()
+        load = HubBusLoad(hub, clock=clock)
+        load.sample()
+        hub.bits_on_bus, clock.now = 250_000, 1.0
+        assert load.sample() == 50.0
+
+    def test_first_sample_has_nothing_to_compare(self, clock):
+        hub = FakeCountingHub()
+        hub.bits_on_bus = 10_000_000
+        assert HubBusLoad(hub, clock=clock).sample() == 0.0
+
+    def test_capped_at_one_hundred(self, clock):
+        # Frame lengths without stuffing are an estimate; never report more
+        # than the bus can carry.
+        hub = FakeCountingHub()
+        load = HubBusLoad(hub, clock=clock)
+        load.sample()
+        hub.bits_on_bus, clock.now = 900_000, 1.0
+        assert load.sample() == 100.0
+
+    def test_always_alive(self, clock):
+        # Adapter failures are the hub's health check's to report.
+        assert HubBusLoad(FakeCountingHub(), clock=clock).is_alive
+
+    async def test_start_and_stop(self):
+        load = HubBusLoad(FakeCountingHub(), interval=0.01)
+        await load.start()
+        await load.stop()
+        assert load.utilization == 0.0
+
+
+class TestPresenceCheck:
+    def test_only_for_gs_usb(self):
+        # Other drivers fail their reads when the adapter goes away.
+        assert presence_check(StubAdapter()) is None
+
+    def test_looks_for_the_device_that_was_opened(self):
+        pytest.importorskip("usb.core")  # pyusb is a Windows-only requirement
+
+        device = type("Device", (), dict(idVendor=0x1D50, idProduct=0x606F, bus=1, address=7,
+                                         backend="the-backend"))()
+        bus = type("Bus", (), {"gs_usb": type("GsUsb", (), {"gs_usb": device})()})()
+        check = presence_check(bus)
+        with patch("usb.core.find", return_value=object()) as find:
+            assert check() is True
+        find.assert_called_once_with(backend="the-backend", idVendor=0x1D50, idProduct=0x606F,
+                                     bus=1, address=7)
+        with patch("usb.core.find", return_value=None):
+            assert check() is False
+
+
+class TestHealth:
+    def test_unplugged_adapter_is_fatal(self):
+        h = _start_with(StubAdapter())
+        try:
+            h._still_present = lambda: False
+            assert "unplugged" in h.health()
+            assert h.error == h.health()
+        finally:
+            h.stop()
+
+    def test_healthy_while_present(self):
+        h = _start_with(StubAdapter())
+        try:
+            h._still_present = lambda: True
+            assert h.health() is None
+        finally:
+            h.stop()
+
+    def test_a_failing_check_is_not_an_unplug(self):
+        h = _start_with(StubAdapter())
+        try:
+            def broken():
+                raise OSError("libusb hiccup")
+            h._still_present = broken
+            assert h.health() is None
+        finally:
+            h.stop()
+
+    def test_link_diagnostics(self, hub):
+        link = hub.link_diagnostics()
+        assert link["bitrate"] == 500_000
+        assert {"adapter_frames_in", "adapter_frames_out", "adapter_send_failures"} <= set(link)

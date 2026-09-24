@@ -69,6 +69,9 @@ class FakeHub:
     def stop(self):
         self.stopped = True
 
+    def health(self):
+        return self.error
+
 
 @pytest.fixture
 def hubs(monkeypatch):

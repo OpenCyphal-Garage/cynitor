@@ -27,8 +27,8 @@ TelemetryManager (pub-sub router)
 ✅ **CORS Support** - Ready for web dashboard integration  
 ✅ **Clean Shutdown** - Graceful WebSocket disconnect and logger queue flush  
 ✅ **Allocator Guard** - Reuses external allocator if present, otherwise starts local allocator and re-checks every 10s
-✅ **CAN Health Monitoring** - Detects CAN bus faults (BUS-OFF, ERROR-PASSIVE, interface disappearance) and auto-disconnects
-✅ **Bus Load Monitoring** - Real-time CAN bus utilization via `canbusload` subprocess, streamed to clients via WebSocket  
+✅ **CAN Health Monitoring** - Detects CAN bus faults (BUS-OFF, ERROR-PASSIVE, interface disappearance on SocketCAN; a failing or unplugged adapter otherwise) and auto-disconnects
+✅ **Bus Load Monitoring** - Real-time CAN bus utilization via `canbusload` subprocess on SocketCAN, or counted from the forwarded frames for other adapters, streamed to clients via WebSocket  
 ✅ **Register Access** - Read and write Cyphal node registers via REST API  
 ✅ **Offline Node Detection** - Tracks node disappearance with `last_seen` timestamps and stale state handling  
 ✅ **Node History** - Lifecycle event tracking (health changes, mode changes, service calls) with 30-day retention  

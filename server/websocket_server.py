@@ -396,11 +396,14 @@ class WebSocketServer:
 
         info = self.session.scanner.get_transport_info()
         iface = self.session.can_interface
-        # iproute2 only knows SocketCAN devices; an adapter behind the hub has none.
-        link = (
-            await asyncio.to_thread(get_can_link_diagnostics, socketcan_device(iface))
-            if iface and is_socketcan(iface) else {}
-        )
+        # iproute2 only knows SocketCAN devices; an adapter behind the hub
+        # reports what the hub knows about it instead.
+        if self.session.hub is not None:
+            link = self.session.hub.link_diagnostics()
+        elif iface and is_socketcan(iface):
+            link = await asyncio.to_thread(get_can_link_diagnostics, socketcan_device(iface))
+        else:
+            link = {}
         bus_load = self.session.bus_load
         return web.json_response({
             "connected": True,

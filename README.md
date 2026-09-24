@@ -44,7 +44,7 @@ and want to reload without restarting the backend.
 These extend functionality but are not required to run the dashboard — the code degrades gracefully when each is absent.
 
 - `pip install yakut` — needed for `yakut accommodate` (automatic node-ID assignment). Without it the backend logs a warning and starts with no auto-assigned ID.
-- **Linux:** `sudo apt install can-utils` — provides `canbusload` for the bus-utilization sparkline. Without it utilization stays at 0%; everything else works.
+- **Linux:** `sudo apt install can-utils` — provides `canbusload` for the bus-utilization sparkline on SocketCAN interfaces. Without it utilization stays at 0%; everything else works. Other adapters (see [Platforms](#platforms)) need nothing: Cynitor measures their load itself.
 - **Windows / macOS:** install the `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) — see [Platforms](#platforms) for the transport-spec syntax.
 - `pip install -r server/requirements-dev.txt` — only if you want to run the backend test suite (adds `pytest` and `pytest-asyncio` on top of the runtime requirements).
 
@@ -135,7 +135,7 @@ Most such adapters can be opened by only one program at a time. Cynitor opens th
 
 The node-ID Cynitor uses for itself is picked the way `yakut accommodate` does it (listen to heartbeats, choose a free one), without needing yakut.
 
-The bus-load monitor self-disables when `canbusload` is not on PATH (utilization stays at 0%); the rest of the stack — REST/WebSocket server, DSDL Inspector, recordings, log panel, telemetry — works the same on all three OSes. Install whichever `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) and pass its transport string.
+For these adapters Cynitor measures bus load itself, from the frames passing through it, counted the way `canbusload` counts them (no stuffing bits). It also notices a CANable being unplugged and disconnects, as it does when SocketCAN reports the interface gone; other adapters' drivers report that themselves. What it cannot see off SocketCAN are the controller's error counters and error-passive/bus-off state. The rest of the stack — REST/WebSocket server, DSDL Inspector, recordings, log panel, telemetry — works the same on all three OSes. Install whichever `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) and pass its transport string.
 
 ## Deploying to a Server
 

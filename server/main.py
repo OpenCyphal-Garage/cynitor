@@ -22,7 +22,7 @@ from can_config import (
     validate_bitrate,
 )
 from can_discovery import AdapterCatalog, discover_adapters
-from can_hub import CANHub, pick_free_node_id
+from can_hub import CANHub, HubBusLoad, pick_free_node_id
 from log_store import InMemoryLogStore, APILogHandler
 from startup_setup import ensure_libusb_on_path, prepare_runtime, resolve_project_root
 from version import __version__
@@ -307,12 +307,14 @@ class CANSession:
                     asyncio.create_task(_register_loop(self.scanner, self.registered_nodes, self)),
                 ]
 
-                # canbusload reads a SocketCAN device; there is nothing for it
-                # to read behind a hub.
+                # canbusload reads a SocketCAN device; behind the hub, the
+                # hub counts the traffic itself.
+                logger.info("Initializing bus load monitor...")
                 if hub is None:
-                    logger.info("Initializing BusLoadMonitor...")
                     self.bus_load = BusLoadMonitor(socketcan_device(can_iface))
-                    await self.bus_load.start()
+                else:
+                    self.bus_load = HubBusLoad(hub)
+                await self.bus_load.start()
 
                 self.can_interface = can_iface
                 self.can_bitrate = bitrate
@@ -617,11 +619,12 @@ def _check_can_health(iface: str) -> Optional[str]:
 async def _session_health_error(session: 'CANSession') -> Optional[str]:
     """Why the session's CAN link has become unusable, or None if it is fine.
 
-    An adapter behind the hub reports through the hub; SocketCAN is checked
-    through the kernel, by device name rather than spec.
+    An adapter behind the hub reports through the hub, which also notices a
+    CANable being unplugged; SocketCAN is checked through the kernel, by
+    device name rather than spec.
     """
     if session.hub is not None:
-        return session.hub.error
+        return await asyncio.to_thread(session.hub.health)
     error = await asyncio.to_thread(_check_can_health, socketcan_device(session.can_interface))
     if not error and session.bus_load and not session.bus_load.is_alive:
         error = "CAN bus monitor process exited unexpectedly"

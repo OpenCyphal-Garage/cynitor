@@ -18,6 +18,7 @@ processes on one SocketCAN interface would see each other.
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 import logging
 import random
@@ -63,6 +64,39 @@ def open_adapter(spec: str, bitrate: int) -> can.BusABC:
     return can.ThreadSafeBus(interface=interface, channel=channel, bitrate=bitrate, **kwargs)
 
 
+def frame_bits(msg: can.Message) -> int:
+    """On-wire length of a classic CAN frame, without stuffing bits.
+
+    SOF through interframe space: 47 bits of overhead for a base frame and 67
+    for an extended one, plus the data field. Leaving stuffing out is what
+    canbusload does by default, so both paths report load the same way.
+    """
+    data_bits = 0 if msg.is_remote_frame else 8 * len(msg.data)
+    return (67 if msg.is_extended_id else 47) + data_bits
+
+
+def presence_check(bus: can.BusABC) -> Optional[Callable[[], bool]]:
+    """A cheap "is the adapter still plugged in?" test, for drivers that hide it.
+
+    python-can's gs_usb reads swallow USB errors, so an unplugged CANable
+    looks exactly like a quiet bus. Enumerating USB devices for the one we
+    opened needs no I/O to the device itself. Other drivers fail their reads
+    when the adapter goes away, which the hub already treats as fatal, so
+    they get no check.
+    """
+    device = getattr(getattr(bus, "gs_usb", None), "gs_usb", None)
+    if device is None:
+        return None
+    import usb.core
+
+    # A replugged adapter comes back at a new address, so this stays False
+    # for the device this bus opened.
+    identity = dict(idVendor=device.idVendor, idProduct=device.idProduct,
+                    bus=device.bus, address=device.address)
+    backend = device.backend
+    return lambda: usb.core.find(backend=backend, **identity) is not None
+
+
 def close_adapter(bus: can.BusABC) -> None:
     """Shut ``bus`` down and release its USB device right away.
 
@@ -96,7 +130,12 @@ class CANHub:
         self.frames_from_bus = 0
         self.frames_to_bus = 0
         self.send_failures = 0
+        # Bits on the wire, for bus load. One counter per pump thread, so
+        # that neither increment can overwrite the other's.
+        self.bits_from_bus = 0
+        self.bits_to_bus = 0
         self._open_bus = open_bus
+        self._still_present: Optional[Callable[[], bool]] = None
         self._adapter: Optional[can.BusABC] = None
         self._local: Optional[can.BusABC] = None
         self._stop = threading.Event()
@@ -120,6 +159,7 @@ class CANHub:
             close_adapter(self._adapter)
             self._adapter = None
             raise
+        self._still_present = presence_check(self._adapter)
         self._threads = [
             threading.Thread(target=self._pump_from_bus, name=f"{self.channel}-rx", daemon=True),
             threading.Thread(target=self._pump_to_bus, name=f"{self.channel}-tx", daemon=True),
@@ -141,6 +181,32 @@ class CANHub:
                 except Exception as exc:
                     logger.debug("CAN hub: error closing %s: %s", bus, exc)
         self._local = self._adapter = None
+
+    @property
+    def bits_on_bus(self) -> int:
+        """Bits of every frame forwarded either way so far."""
+        return self.bits_from_bus + self.bits_to_bus
+
+    def health(self) -> Optional[str]:
+        """Why the adapter has become unusable, or None. Cheap enough to call every few seconds."""
+        if self.error is None and self._still_present is not None and not self._stop.is_set():
+            try:
+                present = self._still_present()
+            except Exception as exc:
+                logger.debug("CAN hub: presence check failed: %s", exc)
+                present = True  # an unanswerable question is not an unplugged adapter
+            if not present:
+                self._fail(f"{self.spec}: adapter disconnected (unplugged?)")
+        return self.error
+
+    def link_diagnostics(self) -> dict:
+        """What the debug view can show about the adapter; the SocketCAN fields have no source here."""
+        return {
+            "bitrate": self.bitrate,
+            "adapter_frames_in": self.frames_from_bus,
+            "adapter_frames_out": self.frames_to_bus,
+            "adapter_send_failures": self.send_failures,
+        }
 
     def _fail(self, message: str) -> None:
         if self._stop.is_set():
@@ -167,6 +233,7 @@ class CANHub:
                 self._fail(f"internal channel {self.channel}: {exc}")
                 return
             self.frames_from_bus += 1
+            self.bits_from_bus += frame_bits(msg)
 
     def _pump_to_bus(self) -> None:
         assert self._adapter is not None and self._local is not None
@@ -189,6 +256,62 @@ class CANHub:
                                    self.spec, self.send_failures, exc)
                 continue
             self.frames_to_bus += 1
+            self.bits_to_bus += frame_bits(msg)
+
+
+class HubBusLoad:
+    """Bus utilization behind the hub, from the frames it forwards.
+
+    Stands in for main.BusLoadMonitor (canbusload), which needs a SocketCAN
+    device: same ``utilization`` / ``is_alive`` / ``start`` / ``stop``. Every
+    ``interval`` it takes the bits forwarded either way as a share of what the
+    bitrate allows. The hub sees all traffic to and from the adapter, so this
+    is the whole bus as the adapter hears it.
+    """
+
+    def __init__(self, hub: CANHub, interval: float = 1.0,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        self._hub = hub
+        self._interval = interval
+        self._clock = clock
+        self._task: Optional[asyncio.Task] = None
+        self._last: Optional[tuple[float, int]] = None
+        self.utilization: float = 0.0
+
+    @property
+    def is_alive(self) -> bool:
+        # A failing adapter is reported by the hub's own health check.
+        return True
+
+    def sample(self) -> float:
+        """Update and return utilization since the previous sample, in percent."""
+        now, bits = self._clock(), self._hub.bits_on_bus
+        if self._last is not None:
+            elapsed = now - self._last[0]
+            if elapsed > 0:
+                load = 100.0 * (bits - self._last[1]) / (elapsed * self._hub.bitrate)
+                self.utilization = round(min(load, 100.0), 1)
+        self._last = (now, bits)
+        return self.utilization
+
+    async def start(self) -> None:
+        self.sample()
+        self._task = asyncio.create_task(self._run())
+
+    async def stop(self) -> None:
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        self._task = None
+        self.utilization = 0.0
+
+    async def _run(self) -> None:
+        while True:
+            await asyncio.sleep(self._interval)
+            self.sample()
 
 
 def _heartbeat_source(msg: can.Message) -> Optional[tuple[int, Optional[int]]]:
