@@ -76,7 +76,7 @@ EventLogger.start()        SQLite persistence
 | `node_identity_map.py` | Bidirectional `unique_id ↔ node_id` mapping with displacement detection, snapshot storage, and SQLite-backed persistence |
 | `data_dir.py` | The data folder: per-user default per OS (`STATE_DIRECTORY` under systemd), `--data-dir` / `CYNITOR_DATA_DIR` override, and the one-time move of databases an earlier version left in the working directory, each with its `-wal`/`-shm` files |
 | `log_store.py` | In-memory deque (max 5000) fed by a `logging.Handler`; exposed via `/api/logs` |
-| `dsdl_manager.py` | DSDL discovery, namespace tree, source/compiled state, custom-type CRUD under `dsdl_messages/custom/`, recompile orchestration |
+| `dsdl_manager.py` | DSDL discovery, namespace tree, source/compiled state, custom-type CRUD in the data folder (`dsdl/custom`, compiled to `dsdl/compiled`), compilation in-process via `pycyphal.dsdl.compile` (no `nnvg`, so it works frozen) |
 | `replay.py` | Recording-replay engine: streams `recording_events` rows back through subscriber queues at controlled speed; mirrors `TelemetryManager`'s broadcast shape so the WS handler picks one source per session (telemetry XOR replay) |
 
 ### CLI flags
@@ -338,7 +338,8 @@ AppImage adds packaging rather than portability.
 - **Hidden imports** — pycyphal and python-can use dynamic imports extensively. The spec enumerates every submodule our code touches.
 - **Bundled data** — `python_compiled_messages/` (pre-compiled DSDL), `dsdl_messages/` (source definitions) and `website/` (the dashboard) are packed into the binary.
 - **pydsdl's vendored parser** — pydsdl reaches `parsimonious` by prepending its own `third_party` directory to `sys.path`. That directory is not a package, so static analysis cannot follow the import; the spec ships the tree as data at the same relative path and aborts if pydsdl ever moves it.
-- **Compiled DSDL is mandatory** — the spec aborts if `python_compiled_messages/` is absent, because `nnvg` is not bundled and the frozen binary cannot regenerate it. Run `python3 server/startup_setup.py --recompile` before building.
+- **Compiled DSDL is mandatory** — the spec aborts if `python_compiled_messages/` is absent: the frozen binary does not recompile the public regulated types. Run `python3 server/startup_setup.py --recompile` before building.
+- **Custom types compile at run time** — through `pycyphal.dsdl.compile`, in-process. The spec therefore bundles nunavut's templates and language modules (`collect_data_files` / `collect_submodules`) and pydsdl's `grammar.parsimonious`.
 - **Project root detection** — `startup_setup.resolve_project_root()` returns `sys._MEIPASS` when frozen. It is the only frozen-aware code: `prepare_runtime()` derives `sys.path`, `PYCYPHAL_PATH` and `CYPHAL_PATH` from it, and runs before anything imports the generated `uavcan.*` packages, so no PyInstaller runtime hook is needed.
 
 ### Versioning and releases

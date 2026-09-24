@@ -1566,7 +1566,7 @@ class WebSocketServer:
             full_name = f"{namespace}.{type_name}.{version}"
             if self.dsdl_manager.is_compiled(full_name):
                 return web.json_response(
-                    {"error": f"Cannot edit '{full_name}': type is already compiled. Recompile or clear python_compiled_messages first."},
+                    {"error": f"Cannot edit '{full_name}': type is already compiled. Delete it and save it again, or save it under a new version."},
                     status=409,
                 )
         try:

@@ -148,16 +148,21 @@ const DsdlView = (() => {
     const count = _statusData.source_types;
     const dot = _statusData.compiled ? 'dsdl-dot-ok' : 'dsdl-dot-warn';
     const label = _statusData.compiled ? 'Compiled' : 'Not compiled';
-    const age = _statusData.last_public_compiled ? ` · ${_formatAge(_statusData.last_public_compiled)}` : '';
+    // Built into the packaged binaries; older servers do not send the field.
+    const canRecompile = _statusData.public_compilable !== false;
+    // A packaged binary unpacks its files at every start, so their age says
+    // nothing about when the types were compiled.
+    const age = !canRecompile ? ' · built in'
+      : _statusData.last_public_compiled ? ` · ${_formatAge(_statusData.last_public_compiled)}` : '';
 
     header.innerHTML = `
       <span class="dsdl-section-title">Public regulated</span>
       <span class="dsdl-section-count">${count}</span>
       <span class="dsdl-section-right">
         <span class="dsdl-tree-status"><span class="dsdl-dot ${dot}"></span>${escapeHtml(label)}${escapeHtml(age)}</span>
-        <button class="dsdl-hdr-btn dsdl-hdr-compile" id="dsdlRecompileBtn" aria-label="Recompile public types" title="Recompile public types">
+        ${canRecompile ? `<button class="dsdl-hdr-btn dsdl-hdr-compile" id="dsdlRecompileBtn" aria-label="Recompile public types" title="Recompile public types">
           <svg width="10" height="10" viewBox="0 0 12 12"><path d="M1 6a5 5 0 019-2M11 6a5 5 0 01-9 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>
-        </button>
+        </button>` : ''}
       </span>`;
 
     document.getElementById('dsdlRecompileBtn')?.addEventListener('click', _recompilePublic);

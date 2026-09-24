@@ -467,14 +467,14 @@ curl -X POST http://localhost:8080/api/dsdl/custom/type \
 ```
 Returns `201` with `{"full_name": "myapp.sensors.Temperature.1.0", "path": "..."}`.
 
-Pass `"overwrite": true` to replace an existing custom type's source. Only allowed while the type is **not compiled** — the server returns `409` if a compiled `.py` already exists in `python_compiled_messages/` for this type.
+Pass `"overwrite": true` to replace an existing custom type's source. Only allowed while the type is **not compiled** — the server returns `409` if the type has already been compiled.
 
 **Delete custom DSDL type:**
 ```bash
 curl -X DELETE http://localhost:8080/api/dsdl/custom/type/myapp.sensors.Temperature.1.0
 ```
 Returns `200` with `{"full_name": "myapp.sensors.Temperature.1.0", "deleted": true}`.
-Returns `404` if the source file is missing, `409` if the type is already compiled (delete the corresponding entry in `python_compiled_messages/` first if you really need to remove it), or `400` on a malformed name.
+Returns `404` if the source file is missing, or `400` on a malformed name. Deleting also removes the type's compiled code.
 
 **Compile DSDL types:**
 ```bash
@@ -494,6 +494,8 @@ curl -X POST http://localhost:8080/api/dsdl/compile \
   -d '{"scope": "all"}'
 ```
 Returns `200` with `{"ok": true}` on success, or `422` with `{"ok": false, "errors": [...]}`.
+
+Compilation runs inside the server. In the packaged binaries the public types are built in: `"public"` is refused and `"all"` compiles the custom types; `GET /api/dsdl/status` reports this as `"public_compilable": false`. Custom types and their compiled code are kept in the data folder (`dsdl/custom`, `dsdl/compiled`).
 
 **Get latest event for a subject:**
 ```bash

@@ -789,7 +789,8 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
 
     session = CANSession(default_bitrate=can_bitrate, data_dir=data_path)
     project_root = resolve_project_root()
-    dsdl_mgr = DsdlManager(project_root)
+    dsdl_mgr = DsdlManager(project_root, data_dir=data_path)
+    dsdl_mgr.make_importable()
 
     # Optional bearer-token auth. When CYNITOR_AUTH_TOKEN is set in the
     # environment, every REST/WS request outside /api/health must present

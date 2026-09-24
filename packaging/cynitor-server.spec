@@ -173,6 +173,18 @@ if not PYDSDL_THIRD_PARTY.is_dir():
     )
 datas.append((str(PYDSDL_THIRD_PARTY), "pydsdl/third_party"))
 
+# Custom DSDL types are compiled in-process (dsdl_manager, through pycyphal and
+# nunavut), since nnvg is not bundled. nunavut reads its code templates and
+# language settings from files under nunavut/lang and loads the language
+# modules by name, neither of which PyInstaller's import analysis can see.
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+
+datas += collect_data_files("nunavut")
+hidden_imports += collect_submodules("nunavut")
+# pydsdl, which parses the sources, reads its grammar from
+# pydsdl/grammar.parsimonious. Only needed since types are compiled at run time.
+datas.append((str(Path(_pydsdl.__file__).resolve().parent / "grammar.parsimonious"), "pydsdl"))
+
 a = Analysis(
     [str(SERVER_DIR / "main.py")],
     pathex=[str(SERVER_DIR)],
