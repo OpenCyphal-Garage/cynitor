@@ -294,13 +294,27 @@ Response:
 {
     "status": "running",
     "can_interface": "vcan0",
+    "can_bitrate": null,
     "available_interfaces": ["vcan0", "can0"],
+    "available_adapters": [
+        {"interface": "vcan0", "label": "vcan0 (SocketCAN)", "needs_bitrate": false},
+        {"interface": "pcan:PCAN_USBBUS1", "label": "PEAK PCAN_USBBUS1", "needs_bitrate": true}
+    ],
     "bus_utilization": 3.0,
     "last_error": null
 }
 ```
 
-`status` is `"running"` when connected to CAN, `"idle"` otherwise. `last_error` contains the error message if CAN was auto-disconnected due to a bus fault.
+`status` is `"running"` when connected to CAN, `"idle"` otherwise. `last_error` contains the error message if CAN was auto-disconnected due to a bus fault. `can_bitrate` is the bitrate Cynitor opened the adapter at, or `null` for SocketCAN, whose bitrate the kernel sets.
+
+`available_interfaces` lists SocketCAN names only, as before. `available_adapters` lists everything the dashboard can offer: SocketCAN interfaces, adapters of vendor drivers python-can can enumerate (PEAK, Kvaser, Vector, IXXAT) and, off Linux, candleLight (`gs_usb`) and known slcan adapters. Pass an entry's `interface` to `POST /api/can/connect`, with a `bitrate` when `needs_bitrate` is true. The list is rescanned at most every 10 seconds, and not at all while connected.
+
+**List CAN adapters:**
+```bash
+curl "http://localhost:8080/api/can/adapters?refresh=1"
+```
+
+Returns `{"adapters": [...]}`, entries as in `available_adapters`. `refresh=1` rescans now instead of serving a list up to 10 seconds old (ignored while connected).
 
 **Connect to a CAN interface:**
 ```bash
@@ -331,7 +345,7 @@ curl -X POST http://localhost:8080/api/can/disconnect
 
 Response:
 ```json
-{"status": "idle", "available_interfaces": ["vcan0", "can0"]}
+{"status": "idle", "available_interfaces": ["vcan0", "can0"], "available_adapters": [...]}
 ```
 
 Returns `409` if not connected.

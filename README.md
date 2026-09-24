@@ -53,6 +53,12 @@ These extend functionality but are not required to run the dashboard — the cod
 Point a browser at `http://localhost:8080` and click **Connect** in the
 sidebar. That is the whole frontend: nothing to install, nothing to build.
 
+Then pick the CAN interface from the list and click the second **Connect**.
+For anything but SocketCAN, also choose the bus bitrate: the list starts
+unselected, because a wrong guess disrupts the bus, and remembers the
+bitrate you last used on each adapter. An adapter that is not listed can be
+typed in under **Other…** (see [Platforms](#platforms)).
+
 #### Editing the frontend
 
 Only if you are changing `website/` and want reloads without restarting the
@@ -107,7 +113,7 @@ Other options:
 
 **Linux** is the primary platform — SocketCAN (`vcan0`, `can0`, `slcan0`, …) is auto-discovered and the bus-load monitor uses `canbusload` from `can-utils`.
 
-**Windows / macOS** are supported with reduced introspection. The interface dropdown will be empty (no SocketCAN equivalent), so connect by naming the adapter as `<python-can interface>:<channel>` — any string that contains `:` is passed to pycyphal as is, without being checked against the dropdown. Unlike SocketCAN, these adapters run at whatever bitrate Cynitor opens them with, so you have to give it, and it has to match the bus. There is no default: a node joining at the wrong speed floods the bus with error frames.
+**Windows / macOS** are supported with reduced introspection. The dashboard lists the adapters it can find — PEAK, Kvaser, Vector and IXXAT through their vendor drivers, CANable/candleLight adapters over USB, and CANable adapters with slcan firmware by their serial port. Anything else can be named as `<python-can interface>:<channel>`, under **Other…** in the dashboard or with `--can`; any string that contains `:` is passed to pycyphal as is, without being checked against the list. Unlike SocketCAN, these adapters run at whatever bitrate Cynitor opens them with, so you have to give it, and it has to match the bus. There is no default: a node joining at the wrong speed floods the bus with error frames.
 
 ```bash
 # PEAK PCAN-USB

@@ -117,6 +117,9 @@ const updateSemaphores = () => {
   // Lock fields when connected
   el('apiBase').disabled = state.dashboardConnected;
   el('interfacesSelect').disabled = state.canConnected || state.canConnecting;
+  el('canSpecInput').disabled = state.canConnecting;
+  el('canBitrateSelect').disabled = state.canConnecting;
+  el('canBitrateCustom').disabled = state.canConnecting;
 
   if (serverInfo) {
     if (state.dashboardConnected && state.wsThroughput > 0) {
@@ -168,7 +171,9 @@ const updateCanConnectButton = () => {
     return;
   }
   button.textContent = state.canConnected ? 'Disconnect' : 'Connect';
-  button.disabled = state.canConnecting || state.canDisconnecting;
+  const incomplete = !state.canConnected && !canFormReady();
+  button.disabled = state.canConnecting || state.canDisconnecting || incomplete;
+  button.title = incomplete && selectedCanTarget().interface ? 'Choose the bus bitrate first' : '';
   updateSemaphores();
 };
 
@@ -355,26 +360,112 @@ const disconnectWs = () => {
 
 // ── REST polling and CAN interface management ──
 
+const OTHER_CAN_INTERFACE = '__other__';
+
+// Mirrors the backend's rule (server/can_config.py): a bare name such as vcan0
+// is SocketCAN, whose bitrate the kernel owns; every other adapter runs at
+// whatever bitrate it is opened with, so one has to be chosen.
+const canSpecNeedsBitrate = (spec) => {
+  const value = spec.trim().replace(/^pythoncan:/i, '');
+  return value.includes(':') && !value.toLowerCase().startsWith('socketcan:');
+};
+
+const formatBitrate = (bitrate) => (bitrate >= 1000000
+  ? `${bitrate / 1000000} Mbit/s`
+  : `${bitrate / 1000} kbit/s`);
+
+// What Connect would open: the interface spec, and whether it needs a bitrate.
+const selectedCanTarget = () => {
+  const selected = el('interfacesSelect').value;
+  if (selected === OTHER_CAN_INTERFACE) {
+    const spec = el('canSpecInput').value.trim();
+    return { interface: spec, needsBitrate: canSpecNeedsBitrate(spec) };
+  }
+  const adapter = state.canAdapters.find((a) => a.interface === selected);
+  return {
+    interface: selected,
+    needsBitrate: adapter ? adapter.needs_bitrate : canSpecNeedsBitrate(selected),
+  };
+};
+
+// The chosen bitrate in bit/s, or null if none is chosen or the custom one is invalid.
+const selectedCanBitrate = () => {
+  const choice = el('canBitrateSelect').value;
+  const bitrate = Number(choice === 'custom' ? el('canBitrateCustom').value : choice);
+  return Number.isInteger(bitrate) && bitrate > 0 && bitrate <= 1000000 ? bitrate : null;
+};
+
+const canFormReady = () => {
+  const target = selectedCanTarget();
+  return !!target.interface && (!target.needsBitrate || selectedCanBitrate() !== null);
+};
+
+// Show the spec field and the bitrate controls the current selection calls
+// for. With restoreBitrate, preselect the bitrate last used on it, or none.
+const updateCanForm = ({ restoreBitrate = false } = {}) => {
+  const idle = !state.canConnected && !state.canDisconnecting;
+  const target = selectedCanTarget();
+  const isOther = el('interfacesSelect').value === OTHER_CAN_INTERFACE;
+  el('canSpecInput').classList.toggle('hidden', !(idle && isOther));
+  el('canBitrateRow').classList.toggle('hidden', !(idle && target.needsBitrate));
+  if (restoreBitrate) {
+    const select = el('canBitrateSelect');
+    const remembered = state.canBitrates[target.interface];
+    const listed = !!remembered && [...select.options].some((o) => o.value === String(remembered));
+    select.value = remembered ? (listed ? String(remembered) : 'custom') : '';
+    el('canBitrateCustom').value = remembered && !listed ? String(remembered) : '';
+  }
+  el('canBitrateCustom').classList.toggle('hidden', el('canBitrateSelect').value !== 'custom');
+  updateCanConnectButton();
+};
+
+// While connected, the list shows only the interface in use, with its bitrate.
+const showConnectedCanInterface = (iface, bitrate) => {
+  const select = el('interfacesSelect');
+  const adapter = state.canAdapters.find((a) => a.interface === iface);
+  select.innerHTML = '';
+  const option = document.createElement('option');
+  option.value = iface;
+  option.textContent = (adapter ? adapter.label : iface) + (bitrate ? ` · ${formatBitrate(bitrate)}` : '');
+  select.appendChild(option);
+  select.value = iface;
+  updateCanForm();
+};
+
 const loadInterfaces = async () => {
   try {
     const data = await requestJson('/api/status');
-    const interfaces = data.available_interfaces || [];
+    // Backends from before adapter discovery send SocketCAN names only.
+    state.canAdapters = data.available_adapters
+      || (data.available_interfaces || []).map((name) => ({ interface: name, label: name, needs_bitrate: false }));
     const select = el('interfacesSelect');
-    const preferredValue = select.value || state.preferredCanInterface;
+    const previousValue = select.value;
+    const preferredValue = previousValue || state.preferredCanInterface;
     select.innerHTML = '';
-    for (const iface of interfaces) {
+    for (const adapter of state.canAdapters) {
       const option = document.createElement('option');
-      option.value = iface;
-      option.textContent = iface;
+      option.value = adapter.interface;
+      option.textContent = adapter.label;
       select.appendChild(option);
     }
+    const other = document.createElement('option');
+    other.value = OTHER_CAN_INTERFACE;
+    other.textContent = 'Other…';
+    select.appendChild(other);
 
-    if (interfaces.includes(preferredValue)) {
+    const offered = state.canAdapters.map((a) => a.interface);
+    if (preferredValue === OTHER_CAN_INTERFACE || offered.includes(preferredValue)) {
       select.value = preferredValue;
-    } else if (interfaces.length > 0) {
-      select.value = interfaces[0];
+    } else if (preferredValue && preferredValue === state.customCanSpec) {
+      // Last connected through "Other…" with this spec.
+      select.value = OTHER_CAN_INTERFACE;
+    } else {
+      // Nothing listed (always so off Linux without a known adapter): the
+      // only way forward is to name one.
+      select.value = offered.length > 0 ? offered[0] : OTHER_CAN_INTERFACE;
     }
     state.preferredCanInterface = select.value;
+    updateCanForm({ restoreBitrate: select.value !== previousValue });
     saveSettings();
     return data;
   } catch (error) {
@@ -406,17 +497,29 @@ const stopInterfacePolling = () => {
 };
 
 const selectInterface = async () => {
-  const selected = el('interfacesSelect').value;
-  if (!selected) {
+  const target = selectedCanTarget();
+  if (!target.interface) {
     return null;
+  }
+  const body = { interface: target.interface };
+  if (target.needsBitrate) {
+    body.bitrate = selectedCanBitrate();
+    if (body.bitrate === null) {
+      showToast('Choose the bus bitrate first', 'error');
+      return null;
+    }
   }
 
   try {
     const data = await requestJson('/api/can/connect', {
       method: 'POST',
-      body: JSON.stringify({ interface: selected }),
+      body: JSON.stringify(body),
     });
-    state.preferredCanInterface = selected;
+    state.preferredCanInterface = el('interfacesSelect').value;
+    if (body.bitrate) {
+      state.canBitrates[target.interface] = body.bitrate;
+    }
+    showConnectedCanInterface(target.interface, body.bitrate);
     saveSettings();
     return data;
   } catch (error) {
@@ -481,15 +584,9 @@ const pollStatus = async () => {
 
   if (backendCanRunning && !state.canConnected) {
     // Another client connected CAN
-    const select = el('interfacesSelect');
-    select.innerHTML = '';
-    const option = document.createElement('option');
-    option.value = data.can_interface;
-    option.textContent = data.can_interface;
-    select.appendChild(option);
-    select.value = data.can_interface;
-    state.preferredCanInterface = data.can_interface;
     state.canConnected = true;
+    showConnectedCanInterface(data.can_interface, data.can_bitrate);
+    state.preferredCanInterface = data.can_interface;
     updateCanConnectButton();
     stopInterfacePolling();
     schedulePostCanStartup(3000);
@@ -628,15 +725,10 @@ const connectDashboard = async () => {
 
   // If backend already has CAN running, sync state
   if (statusData.status === 'running' && statusData.can_interface) {
-    const select = el('interfacesSelect');
-    select.innerHTML = '';
-    const option = document.createElement('option');
-    option.value = statusData.can_interface;
-    option.textContent = statusData.can_interface;
-    select.appendChild(option);
-    select.value = statusData.can_interface;
-    state.preferredCanInterface = statusData.can_interface;
+    state.canAdapters = statusData.available_adapters || [];
     state.canConnected = true;
+    showConnectedCanInterface(statusData.can_interface, statusData.can_bitrate);
+    state.preferredCanInterface = statusData.can_interface;
     updateCanConnectButton();
     stopInterfacePolling();
     schedulePostCanStartup(5000);
@@ -703,7 +795,7 @@ const connectCan = async () => {
   }
 
   state.canConnected = true;
-  updateCanConnectButton();
+  updateCanForm();  // hides the bitrate controls; updates the button too
   renderNodesTable();
   renderSelectedNodeContent();
   saveSettings();

@@ -106,6 +106,7 @@ class WebSocketServer:
         dsdl_manager: Optional[Any] = None,
         auth_token: Optional[str] = None,
         website_dir: Optional[Path] = None,
+        adapter_catalog: Optional[Any] = None,
     ) -> None:
         self.session = session
         self.host = host
@@ -121,6 +122,9 @@ class WebSocketServer:
         # (WebSocket). When None, the server runs open — same behaviour as
         # before this option was added.
         self.auth_token = auth_token or None
+        # can_discovery.AdapterCatalog: the adapters the dashboard may offer
+        # besides SocketCAN. None lists none (and scans nothing), as in tests.
+        self.adapter_catalog = adapter_catalog
 
         # Client management
         self.clients: Set[web.WebSocketResponse] = set()
@@ -210,6 +214,7 @@ class WebSocketServer:
         self.app.router.add_get('/api/services/{service_id}/history', self._get_service_call_history)
         self.app.router.add_get('/api/identity-map', self._get_identity_map)
         self.app.router.add_delete('/api/identity/{unique_id}', self._delete_identity)
+        self.app.router.add_get('/api/can/adapters', self._get_adapters)
         self.app.router.add_post('/api/can/connect', self._can_connect)
         self.app.router.add_post('/api/can/disconnect', self._can_disconnect)
         self.app.router.add_get('/api/can/transport', self._get_transport_diagnostics)
@@ -294,6 +299,16 @@ class WebSocketServer:
     # CAN connect / disconnect
     # ------------------------------------------------------------------
 
+    async def _list_adapters(self, refresh: bool = False) -> list[dict]:
+        if self.adapter_catalog is None:
+            return []
+        # While connected, the last list is served as is: probing a USB
+        # adapter the session holds tells nothing new and may disturb it.
+        adapters = await asyncio.to_thread(
+            self.adapter_catalog.get, refresh, not self.session.is_running,
+        )
+        return [adapter.as_dict() for adapter in adapters]
+
     async def _get_status(self, request: web.Request) -> web.Response:
         from main import discover_can_interfaces
         bus_load = self.session.bus_load
@@ -301,10 +316,17 @@ class WebSocketServer:
         return web.json_response({
             "status": "running" if self.session.is_running else "idle",
             "can_interface": self.session.can_interface,
+            # None for SocketCAN, whose bitrate the kernel sets.
+            "can_bitrate": self.session.can_bitrate,
             "available_interfaces": available,
+            "available_adapters": await self._list_adapters(),
             "bus_utilization": bus_load.utilization if bus_load else None,
             "last_error": self.session.last_error,
         })
+
+    async def _get_adapters(self, request: web.Request) -> web.Response:
+        refresh = request.query.get("refresh", "").lower() in ("1", "true", "yes")
+        return web.json_response({"adapters": await self._list_adapters(refresh=refresh)})
 
     async def _can_connect(self, request: web.Request) -> web.Response:
         from main import discover_can_interfaces
@@ -356,6 +378,7 @@ class WebSocketServer:
         return web.json_response({
             "status": "idle",
             "available_interfaces": available,
+            "available_adapters": await self._list_adapters(refresh=True),
         })
 
     async def _get_transport_diagnostics(self, request: web.Request) -> web.Response:
@@ -1225,6 +1248,7 @@ class WebSocketServer:
                     "/api": "API information (this endpoint)",
                     "/api/status": "Server status, CAN interface, available interfaces",
                     "/api/health": "Server health check",
+                    "/api/can/adapters": "GET - CAN adapters to connect to (?refresh=1 rescans)",
                     "/api/can/connect": "POST - Connect to a CAN interface",
                     "/api/can/disconnect": "POST - Disconnect from CAN interface",
                     "/api/can/transport": "Transport-layer diagnostics (MTU, frame stats, bus state)",

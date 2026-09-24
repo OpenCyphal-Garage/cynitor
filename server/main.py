@@ -21,6 +21,7 @@ from can_config import (
     socketcan_device,
     validate_bitrate,
 )
+from can_discovery import AdapterCatalog, discover_adapters
 from can_hub import CANHub, pick_free_node_id
 from log_store import InMemoryLogStore, APILogHandler
 from startup_setup import ensure_libusb_on_path, prepare_runtime, resolve_project_root
@@ -82,6 +83,10 @@ def discover_can_interfaces() -> list[str]:
         pass
 
     return sorted(interfaces)
+
+
+# SocketCAN interfaces plus every other adapter found, for the dashboard's list.
+adapter_catalog = AdapterCatalog(lambda: discover_adapters(discover_can_interfaces()))
 
 
 # ---------------------------------------------------------------------------
@@ -759,6 +764,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
         # API-only deployments, and a checkout without website/ is API-only
         # regardless.
         website_dir=(project_root / "website") if serve_frontend else None,
+        adapter_catalog=adapter_catalog,
     )
     await ws_server.start()
 

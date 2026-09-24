@@ -16,6 +16,7 @@ def _make_session(is_running=False, can_interface=None):
     session.is_running = is_running
     session.can_interface = can_interface
     session.default_bitrate = None
+    session.can_bitrate = None
     session.telemetry = None
     session.bus_load = None
     session.last_error = None
@@ -767,3 +768,54 @@ class TestFrameCaptureAPI:
         await server._handle_capture_message(ws, enabled=False)
         mgr.unsubscribe.assert_called_once_with(q)
         assert ws not in server.capture_clients
+
+
+class TestAdapterListing:
+    """available_adapters in /api/status and GET /api/can/adapters."""
+
+    @pytest.fixture
+    def catalog(self):
+        from can_discovery import Adapter
+        c = MagicMock()
+        c.get = MagicMock(return_value=[
+            Adapter("vcan0", "vcan0 (SocketCAN)", False),
+            Adapter("gs_usb:0", "CANable 0", True),
+        ])
+        return c
+
+    @pytest.fixture
+    async def listing_client(self, session, log_store, catalog):
+        srv = WebSocketServer(session=session, host="127.0.0.1", port=0,
+                              log_store=log_store, adapter_catalog=catalog)
+        async with TestClient(TestServer(srv.app)) as c:
+            srv._running = True
+            yield c
+
+    @pytest.mark.asyncio
+    async def test_status_lists_adapters_and_bitrate(self, listing_client, session):
+        session.can_bitrate = None
+        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+            data = await (await listing_client.get("/api/status")).json()
+        assert data["available_interfaces"] == ["vcan0"]  # unchanged for old clients
+        assert data["available_adapters"][1] == {
+            "interface": "gs_usb:0", "label": "CANable 0", "needs_bitrate": True,
+        }
+        assert data["can_bitrate"] is None
+
+    @pytest.mark.asyncio
+    async def test_refresh_query_forces_a_rescan(self, listing_client, catalog):
+        resp = await listing_client.get("/api/can/adapters?refresh=1")
+        assert resp.status == 200
+        assert len((await resp.json())["adapters"]) == 2
+        catalog.get.assert_called_once_with(True, True)
+
+    @pytest.mark.asyncio
+    async def test_no_rescan_while_connected(self, listing_client, catalog, session):
+        # Probing the adapter the session holds could disturb it.
+        session.is_running = True
+        await listing_client.get("/api/can/adapters?refresh=1")
+        catalog.get.assert_called_once_with(True, False)
+
+    @pytest.mark.asyncio
+    async def test_without_a_catalog_nothing_is_listed(self, client):
+        assert (await (await client.get("/api/can/adapters")).json()) == {"adapters": []}
