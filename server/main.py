@@ -746,11 +746,37 @@ def show_token_on_terminal(token: str, stream=None) -> bool:
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _quiet_completion_of_cancelled_futures(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+    """Drop one known-harmless asyncio error; hand everything else to the default handler.
+
+    pycyphal's python-can media (1.27.1) completes each send's future from its
+    transmit thread with call_soon_threadsafe(future.set_result). If the task
+    that was awaiting the send is cancelled meanwhile -- as happens on a
+    disconnect with a send in flight -- the future is already cancelled, and
+    asyncio logs "InvalidStateError: invalid state" with a traceback. Nothing
+    is lost: the send had been abandoned.
+
+    Only that case is dropped: an InvalidStateError from a callback that
+    completes a future (set_result / set_exception) which is cancelled.
+    """
+    callback = getattr(context.get("handle"), "_callback", None)
+    completer = getattr(callback, "func", None)  # functools.partial(future.set_result, ...)
+    future = getattr(completer, "__self__", None)
+    if (isinstance(context.get("exception"), asyncio.InvalidStateError)
+            and getattr(completer, "__name__", None) in ("set_result", "set_exception")
+            and isinstance(future, asyncio.Future) and future.cancelled()):
+        logger.debug("Ignored completion of an already cancelled future: %s", context.get("handle"))
+        return
+    loop.default_exception_handler(context)
+
+
 async def main(can_iface: Optional[str] = None, force_compile: bool = False, bind: str = "127.0.0.1",
                port: int = 8080, serve_frontend: bool = True,
                can_bitrate: Optional[int] = None, data_dir: Optional[str] = None) -> None:
     from websocket_server import WebSocketServer
     from dsdl_manager import DsdlManager
+
+    asyncio.get_running_loop().set_exception_handler(_quiet_completion_of_cancelled_futures)
 
     data_path = resolve_data_dir(data_dir)
     try:

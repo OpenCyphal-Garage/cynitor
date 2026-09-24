@@ -1,5 +1,6 @@
 """Tests for CANSession.rescan_registrations — the post-compile rescan hook."""
 
+import asyncio
 import pytest
 from unittest.mock import MagicMock
 
@@ -215,3 +216,41 @@ class TestSessionHealth:
         s.can_interface = "socketcan:vcan0"
         assert await main._session_health_error(s) is None
         assert checked == ["vcan0"]
+
+
+class TestQuietCompletionOfCancelledFutures:
+    """pycyphal completing a send whose task was cancelled is not an error worth a traceback."""
+
+    async def test_drops_completion_of_a_cancelled_future(self, caplog):
+        import functools
+        import logging
+        import main
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(main._quiet_completion_of_cancelled_futures)
+        try:
+            future = loop.create_future()
+            future.cancel()
+            # What pycyphal's transmit thread schedules after the send finished.
+            loop.call_soon_threadsafe(functools.partial(future.set_result, None))
+            with caplog.at_level(logging.ERROR, logger="asyncio"):
+                await asyncio.sleep(0.05)
+            assert "InvalidStateError" not in caplog.text
+        finally:
+            loop.set_exception_handler(None)
+
+    def test_passes_everything_else_on(self):
+        import functools
+        from unittest.mock import MagicMock
+        import main
+        loop = MagicMock()
+        live = asyncio.Future(loop=MagicMock())  # not cancelled
+        cases = [
+            {"message": "boom", "exception": RuntimeError("boom")},
+            {"message": "x", "exception": asyncio.InvalidStateError(),
+             "handle": MagicMock(_callback=functools.partial(live.set_result, None))},
+            {"message": "x", "exception": asyncio.InvalidStateError(),
+             "handle": MagicMock(_callback=functools.partial(print, None))},
+        ]
+        for context in cases:
+            main._quiet_completion_of_cancelled_futures(loop, context)
+        assert loop.default_exception_handler.call_count == len(cases)
