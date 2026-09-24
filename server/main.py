@@ -13,9 +13,17 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from can_config import is_socketcan, normalize_can_iface, resolve_bitrate, validate_bitrate
+from can_config import (
+    ALLOCATOR_NODE_ID,
+    is_socketcan,
+    normalize_can_iface,
+    resolve_bitrate,
+    socketcan_device,
+    validate_bitrate,
+)
+from can_hub import CANHub, pick_free_node_id
 from log_store import InMemoryLogStore, APILogHandler
-from startup_setup import prepare_runtime, resolve_project_root
+from startup_setup import ensure_libusb_on_path, prepare_runtime, resolve_project_root
 from version import __version__
 
 IS_LINUX = sys.platform.startswith("linux")
@@ -184,6 +192,8 @@ class CANSession:
         self.event_logger = None
         self.frame_capture = None
         self.bus_load: Optional[BusLoadMonitor] = None
+        # Shares a non-SocketCAN adapter among the components; see can_hub.
+        self.hub: Optional[CANHub] = None
         self.registered_nodes: set[int] = set()
         self._tasks: list[asyncio.Task] = []
         self._lock = asyncio.Lock()
@@ -229,12 +239,20 @@ class CANSession:
         # prepare_runtime can take seconds (DSDL compile via nnvg, env setup).
         # Running it outside the lock keeps a concurrent disconnect() responsive
         # instead of blocking it behind a cold-start connect.
-        await asyncio.to_thread(prepare_runtime, can_iface, force_compile, bitrate)
+        hub: Optional[CANHub] = None
+        if is_socketcan(spec):
+            await asyncio.to_thread(prepare_runtime, can_iface, force_compile, bitrate)
+        else:
+            hub = await self._open_hub(spec, bitrate, force_compile)
 
         async with self._lock:
             if self.is_running:
+                if hub is not None:
+                    await asyncio.to_thread(hub.stop)
                 raise RuntimeError("Already connected")
             self.last_error = None
+            # From here on _teardown owns the hub, including on failure below.
+            self.hub = hub
 
             try:
                 from scanner_node import ScannerNode
@@ -284,9 +302,12 @@ class CANSession:
                     asyncio.create_task(_register_loop(self.scanner, self.registered_nodes, self)),
                 ]
 
-                logger.info("Initializing BusLoadMonitor...")
-                self.bus_load = BusLoadMonitor(can_iface)
-                await self.bus_load.start()
+                # canbusload reads a SocketCAN device; there is nothing for it
+                # to read behind a hub.
+                if hub is None:
+                    logger.info("Initializing BusLoadMonitor...")
+                    self.bus_load = BusLoadMonitor(socketcan_device(can_iface))
+                    await self.bus_load.start()
 
                 self.can_interface = can_iface
                 self.can_bitrate = bitrate
@@ -297,6 +318,34 @@ class CANSession:
                 except Exception as cleanup_err:
                     logger.error("Cleanup error during failed connect: %s", cleanup_err)
                 raise
+
+    async def _open_hub(self, spec: str, bitrate: int, force_compile: bool) -> CANHub:
+        """Open a non-SocketCAN adapter once and point every component at the hub's channel.
+
+        Most such adapters admit a single open handle, and the allocator probe,
+        the allocator and the scanner each open the bus; see can_hub.
+        """
+        ensure_libusb_on_path()  # before gs_usb is opened, not just before yakut
+        hub = CANHub(spec, bitrate)
+        await asyncio.to_thread(hub.start)
+        try:
+            # `yakut accommodate` would run in a child process, which cannot
+            # see the hub's in-process channel, so pick the node-ID here.
+            if "UAVCAN__NODE__ID" not in os.environ:
+                node_id = await asyncio.to_thread(
+                    pick_free_node_id, hub.local_spec, frozenset({ALLOCATOR_NODE_ID}),
+                )
+                if node_id is None:
+                    logger.warning("Every node-ID is in use; the scanner will run anonymously")
+                else:
+                    os.environ["UAVCAN__NODE__ID"] = str(node_id)
+            await asyncio.to_thread(
+                prepare_runtime, hub.local_spec, force_compile, bitrate, False,
+            )
+        except BaseException:
+            await asyncio.to_thread(hub.stop)
+            raise
+        return hub
 
     async def disconnect(self) -> None:
         """Stop all CAN components (reverse order of connect)."""
@@ -394,6 +443,10 @@ class CANSession:
         if self.scanner:
             self.scanner.close()
             self.scanner = None
+        # Last: everything above talks to the adapter through it.
+        if self.hub:
+            await asyncio.to_thread(self.hub.stop)
+            self.hub = None
         self.registered_nodes.clear()
         self.can_interface = None
         self.can_bitrate = None
@@ -556,6 +609,20 @@ def _check_can_health(iface: str) -> Optional[str]:
     return None
 
 
+async def _session_health_error(session: 'CANSession') -> Optional[str]:
+    """Why the session's CAN link has become unusable, or None if it is fine.
+
+    An adapter behind the hub reports through the hub; SocketCAN is checked
+    through the kernel, by device name rather than spec.
+    """
+    if session.hub is not None:
+        return session.hub.error
+    error = await asyncio.to_thread(_check_can_health, socketcan_device(session.can_interface))
+    if not error and session.bus_load and not session.bus_load.is_alive:
+        error = "CAN bus monitor process exited unexpectedly"
+    return error
+
+
 async def _register_loop(scanner, registered_nodes: set[int], session: 'CANSession' = None) -> None:
     health_check_counter = 0
     try:
@@ -566,9 +633,7 @@ async def _register_loop(scanner, registered_nodes: set[int], session: 'CANSessi
             if session and session.can_interface and health_check_counter >= 3:
                 health_check_counter = 0
 
-                error = await asyncio.to_thread(_check_can_health, session.can_interface)
-                if not error and session.bus_load and not session.bus_load.is_alive:
-                    error = "CAN bus monitor process exited unexpectedly"
+                error = await _session_health_error(session)
 
                 if error:
                     session.schedule_fatal_disconnect(error)

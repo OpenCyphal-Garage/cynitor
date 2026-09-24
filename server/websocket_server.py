@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional, Set, Any
 from aiohttp import web, WSCloseCode
 
-from can_config import is_explicit_spec, resolve_bitrate
+from can_config import is_explicit_spec, is_socketcan, resolve_bitrate, socketcan_device
 
 
 def _csv_escape(value: Any) -> str:
@@ -373,7 +373,11 @@ class WebSocketServer:
 
         info = self.session.scanner.get_transport_info()
         iface = self.session.can_interface
-        link = await asyncio.to_thread(get_can_link_diagnostics, iface) if iface else {}
+        # iproute2 only knows SocketCAN devices; an adapter behind the hub has none.
+        link = (
+            await asyncio.to_thread(get_can_link_diagnostics, socketcan_device(iface))
+            if iface and is_socketcan(iface) else {}
+        )
         bus_load = self.session.bus_load
         return web.json_response({
             "connected": True,

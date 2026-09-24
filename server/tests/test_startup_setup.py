@@ -94,18 +94,18 @@ class TestLibusbOnPath:
 
     def test_prepends_dll_directory_on_windows(self, monkeypatch, fake_libusb):
         monkeypatch.setattr(sys, "platform", "win32")
-        startup_setup._ensure_libusb_on_path()
+        startup_setup.ensure_libusb_on_path()
         first = os.environ["PATH"].split(os.pathsep)[0]
         assert first == str(fake_libusb.parent.resolve())
 
     def test_no_op_off_windows(self, monkeypatch, fake_libusb):
         monkeypatch.setattr(sys, "platform", "linux")
-        startup_setup._ensure_libusb_on_path()
+        startup_setup.ensure_libusb_on_path()
         assert os.environ["PATH"] == "existing"
 
     def test_no_op_without_the_package(self, monkeypatch):
         monkeypatch.setattr(sys, "platform", "win32")
         monkeypatch.setitem(sys.modules, "libusb_package", None)  # import raises ImportError
         monkeypatch.setenv("PATH", "existing")
-        startup_setup._ensure_libusb_on_path()
+        startup_setup.ensure_libusb_on_path()
         assert os.environ["PATH"] == "existing"

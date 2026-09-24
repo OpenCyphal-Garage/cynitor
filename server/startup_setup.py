@@ -106,7 +106,7 @@ def resolve_project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def _ensure_libusb_on_path() -> None:
+def ensure_libusb_on_path() -> None:
     """Let pyusb find libusb on Windows, where it is not a system library.
 
     python-can's gs_usb interface (candleLight adapters such as the CANable)
@@ -127,8 +127,12 @@ def _ensure_libusb_on_path() -> None:
 
 
 def prepare_runtime(can_iface: str = "can0", force_compile: bool = False,
-                    bitrate: int | None = None) -> None:
+                    bitrate: int | None = None, auto_node_id: bool = True) -> None:
     """Prepare environment variables, sys.path, and optional DSDL compilation for runtime.
+
+    `auto_node_id` runs `yakut accommodate` when UAVCAN__NODE__ID is unset. It
+    has to be off when `can_iface` is a CAN hub's in-process channel, which a
+    child process cannot see.
 
     `bitrate` is required for every interface except SocketCAN, whose bitrate
     is set with `ip link`; ValueError is raised before anything changes if it
@@ -187,9 +191,9 @@ def prepare_runtime(can_iface: str = "can0", force_compile: bool = False,
         os.environ.pop(BITRATE_ENV, None)
     else:
         os.environ[BITRATE_ENV] = bitrate_env_value(bitrate)
-    _ensure_libusb_on_path()
+    ensure_libusb_on_path()
 
-    if "UAVCAN__NODE__ID" not in os.environ:
+    if auto_node_id and "UAVCAN__NODE__ID" not in os.environ:
         node_id = _auto_node_id()
         if node_id is not None:
             os.environ["UAVCAN__NODE__ID"] = node_id

@@ -23,6 +23,7 @@ server_modules = [
     "event_logger",
     "allocator",
     "can_config",
+    "can_hub",
     "startup_setup",
     "log_store",
     "replay",

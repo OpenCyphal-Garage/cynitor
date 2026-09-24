@@ -18,7 +18,7 @@ from pycyphal.transport.can import CANTransport
 from pycyphal.transport.can.media.pythoncan import PythonCANMedia
 from pycyphal.application.plug_and_play import CentralizedAllocator
 
-from can_config import media_bitrate, normalize_can_iface
+from can_config import ALLOCATOR_NODE_ID, media_bitrate, normalize_can_iface
 
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ def _get_local_ip() -> str:
 
 class AllocatorApp:
     REGISTER_FILE = "allocator_2app.db"
-    NODE_ID = 1
+    NODE_ID = ALLOCATOR_NODE_ID
 
     def __init__(self, iface_name: Optional[str] = None) -> None:
         node_info = uavcan.node.GetInfo_1_0.Response(

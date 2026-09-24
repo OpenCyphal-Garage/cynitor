@@ -679,6 +679,33 @@ class TestTransportDiagnostics:
         assert data["bus_utilization"] == 12.5
         scanner.get_transport_info.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_transport_behind_hub_skips_iproute2(self, client, session):
+        # An adapter such as gs_usb:0 has no kernel device for `ip link` to read.
+        session.is_running = True
+        session.can_interface = "gs_usb:0"
+        session.bus_load = None
+        scanner = MagicMock()
+        scanner.get_transport_info = MagicMock(return_value={"protocol": None, "statistics": None})
+        session.scanner = scanner
+        with patch("main.get_can_link_diagnostics") as diagnostics:
+            resp = await client.get("/api/can/transport")
+        assert resp.status == 200
+        assert (await resp.json())["link"] == {}
+        diagnostics.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_transport_reads_socketcan_device_not_spec(self, client, session):
+        session.is_running = True
+        session.can_interface = "socketcan:vcan0"
+        session.bus_load = None
+        scanner = MagicMock()
+        scanner.get_transport_info = MagicMock(return_value={"protocol": None, "statistics": None})
+        session.scanner = scanner
+        with patch("main.get_can_link_diagnostics", return_value={}) as diagnostics:
+            await client.get("/api/can/transport")
+        diagnostics.assert_called_once_with("vcan0")
+
 
 class TestFrameCaptureAPI:
     """GET /api/can/capture snapshot + 'capture' WS message handling."""

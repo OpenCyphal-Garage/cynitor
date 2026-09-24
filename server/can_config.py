@@ -18,6 +18,10 @@ MAX_CLASSIC_CAN_BITRATE = 1_000_000
 
 BITRATE_ENV = "UAVCAN__CAN__BITRATE"
 
+# The local allocator's node-ID. Here rather than in allocator.py, which needs
+# compiled DSDL to import, so that the node-ID picker can steer clear of it.
+ALLOCATOR_NODE_ID = 1
+
 # PythonCANMedia insists on a bitrate even for SocketCAN, which ignores it.
 _SOCKETCAN_IGNORED_BITRATE = 500_000
 
@@ -51,6 +55,14 @@ def is_explicit_spec(iface: str) -> bool:
 def is_socketcan(iface: str) -> bool:
     """Whether ``iface`` opens SocketCAN, where the kernel owns the bitrate."""
     return normalize_can_iface(iface).startswith("socketcan:")
+
+
+def socketcan_device(iface: str) -> str:
+    """The kernel device name behind a SocketCAN ``iface`` (``socketcan:can0`` -> ``can0``)."""
+    spec = normalize_can_iface(iface)
+    if not spec.startswith("socketcan:"):
+        raise ValueError(f"{iface!r} is not a SocketCAN interface")
+    return spec[len("socketcan:"):]
 
 
 def validate_bitrate(bitrate: object) -> int:

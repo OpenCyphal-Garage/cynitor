@@ -125,7 +125,9 @@ curl -X POST http://localhost:8080/api/can/connect \
 
 On Windows, `pip install -r requirements.txt` also installs what candleLight adapters (`gs_usb`) need, including the libusb DLL. The older `pythoncan:pcan:PCAN_USBBUS1` spelling is still accepted.
 
-**Known limitation:** Cynitor currently opens the interface more than once. SocketCAN allows that; adapters that only one program can open at a time — candleLight (`gs_usb`) and slcan COM ports — refuse the second open, so they do not work yet.
+Most such adapters can be opened by only one program at a time. Cynitor opens the adapter once and shares it between its own parts internally, so it works with them — but nothing else can use the adapter while Cynitor is connected. Stop other CAN tools first.
+
+The node-ID Cynitor uses for itself is picked the way `yakut accommodate` does it (listen to heartbeats, choose a free one), without needing yakut.
 
 The bus-load monitor self-disables when `canbusload` is not on PATH (utilization stays at 0%); the rest of the stack — REST/WebSocket server, DSDL Inspector, recordings, log panel, telemetry — works the same on all three OSes. Install whichever `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) and pass its transport string.
 
