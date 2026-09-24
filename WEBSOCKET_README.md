@@ -103,6 +103,8 @@ When a `website/` directory is present next to the server (a source checkout, or
 
 These are registered after the API routes, so `/api/*` and `/ws` always win over the catch-all static mount.
 
+They are sent with `Cache-Control: no-cache`, so a browser checks for a newer version before reusing a cached file (an unchanged file costs a `304`). After an upgrade the dashboard is never a stale mix of old and new files. API responses are unaffected.
+
 Start the server with `--no-frontend` to omit them entirely, for deployments where something other than the dashboard consumes the API. Those three routes then return `404` and everything else is unchanged.
 
 `config.js` is how a browser-served dashboard learns its API address. The checked-in `website/config.js` is an empty placeholder, which is what a separate static file server on port 5500 delivers, leaving the address field at its built-in default. Served from the backend, the generated version wins and points the page at the origin it was fetched from, so no per-client configuration is needed.

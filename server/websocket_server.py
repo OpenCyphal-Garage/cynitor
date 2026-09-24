@@ -136,7 +136,9 @@ class WebSocketServer:
 
         # App and runner. Auth middleware runs first so unauthorized requests
         # never reach the CORS layer or the handlers.
-        self.app = web.Application(middlewares=[self._auth_middleware, self._cors_middleware])
+        self.app = web.Application(middlewares=[
+            self._auth_middleware, self._cors_middleware, self._dashboard_cache_middleware,
+        ])
         self.runner: Optional[web.AppRunner] = None
         self._running = False
 
@@ -177,6 +179,21 @@ class WebSocketServer:
             return header[7:].strip() or None
         qs = request.query.get("token")
         return qs.strip() if qs else None
+
+    @web.middleware
+    async def _dashboard_cache_middleware(self, request: web.Request, handler: Any) -> web.StreamResponse:
+        """Make browsers check the dashboard's files for changes before reusing them.
+
+        Without a caching header, browsers reuse a file for as long as their
+        own heuristics allow, so after an upgrade a page could keep running
+        old JavaScript against the new API. no-cache still allows caching:
+        each use is revalidated, and an unchanged file costs a 304 thanks to
+        the ETag and Last-Modified headers aiohttp sends for files.
+        """
+        response = await handler(request)
+        if not self._is_protected_path(request.path):
+            response.headers.setdefault("Cache-Control", "no-cache")
+        return response
 
     @web.middleware
     async def _cors_middleware(self, request: web.Request, handler: Any) -> web.StreamResponse:
