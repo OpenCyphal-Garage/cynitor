@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from aiohttp import web, WSCloseCode
 
 from can_config import is_explicit_spec, is_socketcan, resolve_bitrate, resolve_data_bitrate, socketcan_device
+from version import __version__
 
 
 def _csv_escape(value: Any) -> str:
@@ -317,7 +318,7 @@ class WebSocketServer:
         placeholder so the development flow keeps the built-in default.
         """
         origin = f"{request.scheme}://{request.host}"
-        body = f"window.__CYNITOR = {json.dumps({'apiBase': origin})};\n"
+        body = f"window.__CYNITOR = {json.dumps({'apiBase': origin, 'version': __version__})};\n"
         return web.Response(text=body, content_type="application/javascript")
 
     async def start(self) -> None:

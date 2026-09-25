@@ -17,8 +17,8 @@
           <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
         </svg>
         <span id="brandName">Cynitor</span>
-        <span class="theme-label" id="themeLabel">Light</span>
-        <button class="theme-toggle" id="themeToggle" aria-label="Toggle light/dark theme"></button>
+        <span class="theme-label" id="themeLabel">Dark mode</span>
+        <button class="theme-toggle" id="themeToggle" role="switch" aria-checked="false" aria-label="Dark mode"></button>
       </div>
 
       <div class="sidebar-section">
@@ -46,7 +46,9 @@
         <div class="sidebar-connect">
           <div class="sparkline-wrap">
             <select id="interfacesSelect"></select>
-            <canvas id="busLoadSparkline" class="bus-load-sparkline hidden"></canvas>
+            <canvas id="busLoadSparkline" class="bus-load-sparkline hidden" role="img"
+                    aria-label="Bus load over the last minute"
+                    title="Bus load over the last minute; the numbers mark its peaks"></canvas>
             <div id="busFullEaster" class="bus-full-easter hidden">
               <img src="./images/easter_bus_2.gif" alt="" />
               <span>Bus occupancy:<br/>standing room only</span>
@@ -132,7 +134,7 @@
 
       <div class="sidebar-footer">
         <div class="footer-left">
-          <span class="version-tag">v0.3.2</span>
+          <span class="version-tag" id="versionTag"></span>
           <a class="sidebar-built-by" href="https://cordicor.com" target="_blank" rel="noopener">
             <img src="./images/cordicor_minimal.svg" alt="Cordicor" class="cordicor-logo" />
             <span class="built-by-label">Built by</span>

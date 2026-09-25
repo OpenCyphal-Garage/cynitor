@@ -111,7 +111,7 @@ When a `website/` directory is present next to the server (a source checkout, or
 | Route | Serves |
 |-------|--------|
 | `GET /` | `website/index.html` |
-| `GET /config.js` | Generated: `window.__CYNITOR = {"apiBase": "<this request's origin>"}` |
+| `GET /config.js` | Generated: `window.__CYNITOR = {"apiBase": "<this request's origin>", "version": "<server version>"}` |
 | `GET /<path>` | Any other file under `website/` |
 
 These are registered after the API routes, so `/api/*` and `/ws` always win over the catch-all static mount.
@@ -120,7 +120,7 @@ They are sent with `Cache-Control: no-cache`, so a browser checks for a newer ve
 
 Start the server with `--no-frontend` to omit them entirely, for deployments where something other than the dashboard consumes the API. Those three routes then return `404` and everything else is unchanged.
 
-`config.js` is how a browser-served dashboard learns its API address. The checked-in `website/config.js` is an empty placeholder, which is what a separate static file server on port 5500 delivers, leaving the address field at its built-in default. Served from the backend, the generated version wins and points the page at the origin it was fetched from, so no per-client configuration is needed.
+`config.js` is how a browser-served dashboard learns its API address. The checked-in `website/config.js` is an empty placeholder, which is what a separate static file server on port 5500 delivers, leaving the address field at its built-in default. Served from the backend, the generated version wins and points the page at the origin it was fetched from, so no per-client configuration is needed. It also names the server's version, which the sidebar footer shows; with the placeholder the footer shows none.
 
 ### 3. Runtime Environment
 

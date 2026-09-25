@@ -104,6 +104,13 @@ class TestServesDashboard:
         assert str(client.server.port) in body
 
     @pytest.mark.asyncio
+    async def test_config_js_names_the_version(self, client):
+        # The dashboard's footer shows it; it lives only in version.py.
+        from version import __version__
+        body = await (await client.get("/config.js")).text()
+        assert f'"version": "{__version__}"' in body
+
+    @pytest.mark.asyncio
     async def test_generated_config_overrides_the_placeholder(self, client):
         resp = await client.get("/config.js")
         assert "placeholder" not in await resp.text()

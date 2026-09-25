@@ -701,7 +701,7 @@ const loadSettings = () => {
   }
   if (settings.theme === 'dark') {
     document.documentElement.setAttribute('data-theme', 'dark');
-    el('themeLabel').textContent = 'Dark';
+    el('themeToggle').setAttribute('aria-checked', 'true');
   }
   if (typeof settings.canInterface === 'string') {
     state.preferredCanInterface = settings.canInterface;

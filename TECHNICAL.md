@@ -34,7 +34,7 @@ One process serves everything: the REST API, the WebSocket stream, and the dashb
 
 The pipeline is unidirectional from bus to browser. The backend is event-pushed; the frontend pulls structural data (`/api/nodes`, `/api/status`) on a poll interval and consumes the live event stream over WebSocket.
 
-During frontend development the dashboard is often served separately on `:5500` so it can be reloaded without restarting the backend. That is the only case where two ports are involved, and it is why `website/config.js` exists: served from the backend it is replaced by a generated version naming the API origin, while the static-server copy is an empty placeholder that leaves the built-in default in place.
+During frontend development the dashboard is often served separately on `:5500` so it can be reloaded without restarting the backend. That is the only case where two ports are involved, and it is why `website/config.js` exists: served from the backend it is replaced by a generated version naming the API origin and the server's version (shown in the sidebar footer), while the static-server copy is an empty placeholder that leaves the built-in default in place.
 
 ## Backend
 

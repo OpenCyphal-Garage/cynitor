@@ -167,7 +167,7 @@ const bind = () => {
     } else {
       html.setAttribute('data-theme', 'dark');
     }
-    el('themeLabel').textContent = isDark ? 'Light' : 'Dark';
+    el('themeToggle').setAttribute('aria-checked', String(!isDark));
     saveSettings();
   });
   el('apiBase').addEventListener('change', saveSettings);
@@ -224,6 +224,8 @@ const bind = () => {
 
 loadSettings();
 bind();
+// The server serving the page names its version; a plain static server does not.
+el('versionTag').textContent = serverConfig().version ? `v${serverConfig().version}` : '';
 if (state.activeView !== 'nodes') {
   const saved = state.activeView;
   state.activeView = 'nodes';
