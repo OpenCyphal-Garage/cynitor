@@ -180,7 +180,7 @@ chmod +x cynitor-server-*-x86_64.AppImage && ./cynitor-server-*-x86_64.AppImage
 ```
 
 On Windows, run the `.exe` from a terminal, e.g.
-`.\cynitor-server-0.7.2-windows-x86_64.exe`. It includes what candleLight
+`.\cynitor-server-0.8.0-windows-x86_64.exe`. It includes what candleLight
 adapters (CANable) need; other adapters need their vendor's driver
 installed (PEAK, Kvaser, Vector, IXXAT). Windows may warn about an
 unrecognised app the first time, as the executable is not code-signed.
