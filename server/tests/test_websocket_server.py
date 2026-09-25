@@ -22,6 +22,9 @@ def _make_session(is_running=False, can_interface=None):
     session.bus_load = None
     session.last_error = None
     session.dropped_events.return_value = None
+    session.default_data_bitrate = None
+    session.can_data_bitrate = None
+    session.can_fd = False
     session.replay = None
     session.event_logger = None
     session.connect = AsyncMock()
@@ -180,7 +183,7 @@ class TestCANConnectSpecsAndBitrate:
         with patch("main.discover_can_interfaces", return_value=["vcan0"]):
             resp = await client.post("/api/can/connect", json={"interface": "vcan0"})
         assert resp.status == 200
-        session.connect.assert_awaited_once_with("vcan0", bitrate=None)
+        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None)
 
     @pytest.mark.asyncio
     async def test_explicit_spec_skips_discovery(self, client, session):
@@ -192,7 +195,7 @@ class TestCANConnectSpecsAndBitrate:
             )
         assert resp.status == 200
         discover.assert_not_called()
-        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=250000)
+        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=250000, data_bitrate=None)
 
     @pytest.mark.asyncio
     async def test_adapter_without_bitrate_is_refused(self, client, session):
@@ -207,7 +210,34 @@ class TestCANConnectSpecsAndBitrate:
         session.default_bitrate = 250_000
         resp = await client.post("/api/can/connect", json={"interface": "gs_usb:0"})
         assert resp.status == 200
-        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=None)
+        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=None, data_bitrate=None)
+
+    @pytest.mark.asyncio
+    async def test_data_bitrate_opens_can_fd(self, client, session):
+        resp = await client.post("/api/can/connect", json={
+            "interface": "pcan:PCAN_USBBUS1", "bitrate": 500000, "data_bitrate": 2000000,
+        })
+        assert resp.status == 200
+        session.connect.assert_awaited_once_with("pcan:PCAN_USBBUS1", bitrate=500000, data_bitrate=2000000)
+        assert (await resp.json())["can_fd"] is False  # what the (mock) session reports
+
+    @pytest.mark.asyncio
+    async def test_data_bitrate_refused_for_adapter_without_can_fd(self, client, session):
+        resp = await client.post("/api/can/connect", json={
+            "interface": "gs_usb:0", "bitrate": 500000, "data_bitrate": 2000000,
+        })
+        assert resp.status == 400
+        assert "cannot run CAN FD" in (await resp.json())["error"]
+        session.connect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("data_bitrate", [0, 50_000_000, "2000000"])
+    async def test_rejects_invalid_data_bitrate(self, client, session, data_bitrate):
+        resp = await client.post("/api/can/connect", json={
+            "interface": "kvaser:0", "bitrate": 500000, "data_bitrate": data_bitrate,
+        })
+        assert resp.status == 400
+        session.connect.assert_not_awaited()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("bitrate", [0, 5_000_000, "500000", True])
@@ -888,9 +918,10 @@ class TestAdapterListing:
             data = await (await listing_client.get("/api/status")).json()
         assert data["available_interfaces"] == ["vcan0"]  # unchanged for old clients
         assert data["available_adapters"][1] == {
-            "interface": "gs_usb:0", "label": "CANable 0", "needs_bitrate": True,
+            "interface": "gs_usb:0", "label": "CANable 0", "needs_bitrate": True, "supports_fd": False,
         }
         assert data["can_bitrate"] is None
+        assert data["can_data_bitrate"] is None and data["can_fd"] is False
 
     @pytest.mark.asyncio
     async def test_status_reports_dropped_events(self, listing_client, session):

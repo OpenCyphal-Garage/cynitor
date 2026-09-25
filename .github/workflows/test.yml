@@ -88,6 +88,9 @@ jobs:
       - name: Run a CAN session through the hub
         run: python tests/integration/hub_session.py
 
+      - name: Run a CAN FD session through the hub
+        run: python tests/integration/hub_session.py --fd
+
   e2e:
     name: Frontend end-to-end
     runs-on: ubuntu-latest

@@ -18,12 +18,15 @@ Checks, in order:
   5. an adapter that disappears ends the session with an error;
   6. the databases are written to the session's data folder.
 
+With --fd the device and Cynitor run Cyphal/CAN FD (500 kbit/s, 2 Mbit/s data
+phase), and Cynitor's own frames on the wire must be CAN FD frames.
+
 Prerequisites (from the repository root):
     pip install -r server/requirements.txt
     python server/startup_setup.py --recompile     # compiled DSDL
 
 Usage:
-    python tests/integration/hub_session.py
+    python tests/integration/hub_session.py [--fd]
 
 Exits non-zero on the first failed check. Runs in a temporary directory, so
 the databases a session writes do not land in the checkout.
@@ -41,6 +44,8 @@ sys.path[:0] = [str(ROOT / "server"), str(ROOT / "python_compiled_messages")]
 
 WIRE = "integration-wire"
 BITRATE = 500_000
+FD = "--fd" in sys.argv[1:]
+DATA_BITRATE = 2_000_000 if FD else None
 DEVICE_NODE_ID = 50
 TIMEOUT = 30.0
 
@@ -61,6 +66,16 @@ async def wait_for(predicate, timeout: float = TIMEOUT) -> bool:
     return predicate()
 
 
+async def first_frame_from(tap, node_id: int, timeout: float = 10.0):
+    """The next frame on the wire sent by ``node_id``, or None."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        msg = await asyncio.to_thread(tap.recv, 0.2)  # blocking; keep the loop running
+        if msg is not None and msg.is_extended_id and msg.arbitration_id & 0x7F == node_id:
+            return msg
+    return None
+
+
 async def run() -> None:
     try:
         import uavcan.node  # noqa: F401  (compiled DSDL)
@@ -68,6 +83,7 @@ async def run() -> None:
         print("Compiled DSDL not found. Run: python server/startup_setup.py --recompile")
         sys.exit(2)
 
+    import can
     import pycyphal.application
     import pycyphal.presentation
     import uavcan.node
@@ -79,7 +95,11 @@ async def run() -> None:
     from main import CANSession
 
     def on_wire(node_id):
-        return CANTransport(PythonCANMedia(f"virtual:{WIRE}", BITRATE), local_node_id=node_id)
+        if FD:
+            media = PythonCANMedia(f"virtual:{WIRE}", (BITRATE, DATA_BITRATE), 64)
+        else:
+            media = PythonCANMedia(f"virtual:{WIRE}", BITRATE)
+        return CANTransport(media, local_node_id=node_id)
 
     device = pycyphal.application.make_node(
         uavcan.node.GetInfo_1_0.Response(name="integration.device"),
@@ -93,12 +113,17 @@ async def run() -> None:
     data = Path.cwd() / "data"
     data.mkdir()
     session = CANSession(data_dir=data)
+    tap = can.Bus(interface="virtual", channel=WIRE)  # what an analyzer on the bus would see
     try:
-        await session.connect(f"virtual:{WIRE}", bitrate=BITRATE)
+        await session.connect(f"virtual:{WIRE}", bitrate=BITRATE, data_bitrate=DATA_BITRATE)
         check(session.is_running and session.hub is not None, "connected through the CAN hub")
         own_id = os.environ.get("UAVCAN__NODE__ID")
         check(own_id is not None and int(own_id) not in (1, DEVICE_NODE_ID),
               f"picked its own node-ID ({own_id}), clear of the allocator and the device")
+        check(session.can_fd == FD, f"session runs {'CAN FD' if FD else 'Classic CAN'}")
+        own_frame = await first_frame_from(tap, int(own_id))
+        check(own_frame is not None and own_frame.is_fd == FD,
+              f"Cynitor's own frames on the wire are {'CAN FD' if FD else 'Classic CAN'}")
 
         seen = await wait_for(lambda: session.scanner.all_nodes[DEVICE_NODE_ID].has_responded_to_getInfo)
         check(seen, f"scanner sees node {DEVICE_NODE_ID} and its GetInfo")
@@ -124,6 +149,7 @@ async def run() -> None:
     finally:
         if session.is_running:
             await session.disconnect()
+        tap.shutdown()
         allocatee.close()
         anonymous.close()
         device.close()

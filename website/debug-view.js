@@ -146,6 +146,10 @@ const DebugView = (() => {
       ...(link.adapter_send_failures != null ? [
         statRow('Adapter send failures', link.adapter_send_failures, link.adapter_send_failures > 0 ? 'warn' : null),
       ] : []),
+      // Error frames the adapter's driver reports; not every driver does.
+      ...(link.adapter_error_frames != null ? [
+        statRow('Adapter error frames', link.adapter_error_frames, link.adapter_error_frames > 0 ? 'warn' : null),
+      ] : []),
     ]);
 
     target.innerHTML = protoCard + statsCard + busCard;

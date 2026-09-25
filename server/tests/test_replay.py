@@ -303,6 +303,9 @@ def _make_session_for_rest(replay_db, is_running: bool = False):
     s.bus_load = None
     s.last_error = None
     s.dropped_events.return_value = None
+    s.default_data_bitrate = None
+    s.can_data_bitrate = None
+    s.can_fd = False
     s.replay = None
     # event_logger is a real object so the /api/nodes synthesis path works
     el = MagicMock()

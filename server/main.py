@@ -15,11 +15,15 @@ from typing import Optional
 
 from can_config import (
     ALLOCATOR_NODE_ID,
+    FD_MTU,
     is_socketcan,
+    media_mtu,
     normalize_can_iface,
     resolve_bitrate,
+    resolve_data_bitrate,
     socketcan_device,
     validate_bitrate,
+    validate_data_bitrate,
 )
 from can_discovery import AdapterCatalog, discover_adapters
 from can_hub import CANHub, HubBusLoad, pick_free_node_id
@@ -95,20 +99,28 @@ adapter_catalog = AdapterCatalog(lambda: discover_adapters(discover_can_interfac
 # CAN bus load monitor
 # ---------------------------------------------------------------------------
 
-def _get_can_bitrate(iface: str) -> int:
-    """Get the bitrate of a physical CAN interface. Returns 500000 as default."""
+def _get_can_bitrates(iface: str) -> tuple[int, Optional[int]]:
+    """Bitrate and CAN FD data bitrate of a SocketCAN interface.
+
+    The bitrate defaults to 500000 where there is none (vcan); the data
+    bitrate is None unless the interface is set up for CAN FD.
+    """
+    bitrate, dbitrate = 500000, None
     try:
         result = subprocess.run(
             ["ip", "-details", "link", "show", iface],
             check=False, capture_output=True, text=True,
         )
         if result.returncode == 0:
-            match = re.search(r"bitrate\s+(\d+)", result.stdout)
+            match = re.search(r"\bbitrate\s+(\d+)", result.stdout)
             if match:
-                return int(match.group(1))
+                bitrate = int(match.group(1))
+            match = re.search(r"\bdbitrate\s+(\d+)", result.stdout)
+            if match:
+                dbitrate = int(match.group(1))
     except Exception:
         pass
-    return 500000
+    return bitrate, dbitrate
 
 
 class BusLoadMonitor:
@@ -122,7 +134,7 @@ class BusLoadMonitor:
 
     def __init__(self, iface: str) -> None:
         self._iface = iface
-        self._bitrate = _get_can_bitrate(iface)
+        self._bitrate, self._dbitrate = _get_can_bitrates(iface)
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._task: Optional[asyncio.Task] = None
         self._disabled = shutil.which("canbusload") is None
@@ -132,13 +144,17 @@ class BusLoadMonitor:
         if self._disabled:
             logger.info("BusLoadMonitor disabled: 'canbusload' not on PATH (install can-utils on Linux for bus-load metrics)")
             return
+        # canbusload counts CAN FD frames' data phase at ",<dbitrate>". Releases
+        # before mid-2021 (Ubuntu 22.04 ships 2020.11) accept the suffix but
+        # count Classic CAN frames only, so CAN FD load reads low with them.
+        rates = f"{self._bitrate},{self._dbitrate}" if self._dbitrate else str(self._bitrate)
         self._proc = await asyncio.create_subprocess_exec(
-            "canbusload", f"{self._iface}@{self._bitrate}", "-b",
+            "canbusload", f"{self._iface}@{rates}", "-b",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
         self._task = asyncio.create_task(self._read_loop())
-        logger.info("BusLoadMonitor started on %s@%d", self._iface, self._bitrate)
+        logger.info("BusLoadMonitor started on %s@%s", self._iface, rates)
 
     async def stop(self) -> None:
         if self._task and not self._task.done():
@@ -187,14 +203,20 @@ class BusLoadMonitor:
 class CANSession:
     """Manages the lifecycle of all CAN-dependent components."""
 
-    def __init__(self, default_bitrate: Optional[int] = None, data_dir: Path = Path(".")) -> None:
+    def __init__(self, default_bitrate: Optional[int] = None, data_dir: Path = Path("."),
+                 default_data_bitrate: Optional[int] = None) -> None:
         # Where the databases live; main() passes the resolved data folder.
         self.data_dir = Path(data_dir)
         # --bitrate, used when connect() is not given one. There is no built-in
         # default: a guessed bitrate can disrupt the bus.
         self.default_bitrate = None if default_bitrate is None else validate_bitrate(default_bitrate)
+        # --data-bitrate, likewise; None means Classic CAN.
+        self.default_data_bitrate = (None if default_data_bitrate is None
+                                     else validate_data_bitrate(default_data_bitrate))
         self.can_interface: Optional[str] = None
         self.can_bitrate: Optional[int] = None
+        self.can_data_bitrate: Optional[int] = None
+        self.can_fd = False
         self.scanner = None
         self.telemetry = None
         self.allocator_manager = None
@@ -219,14 +241,20 @@ class CANSession:
         return self.scanner is not None
 
     async def connect(self, can_iface: str, force_compile: bool = False,
-                      bitrate: Optional[int] = None) -> None:
+                      bitrate: Optional[int] = None, data_bitrate: Optional[int] = None) -> None:
         """Start all CAN components.
 
         `bitrate` is ignored by SocketCAN (set it with `ip link`) and required
         for every other interface; None means `default_bitrate`. ValueError is
         raised before anything is opened if it is missing or invalid.
+
+        `data_bitrate` opens a non-SocketCAN adapter as CAN FD; None means
+        `default_data_bitrate`, and if that is None too, Classic CAN. SocketCAN
+        ignores it and runs CAN FD when the interface is set up for it.
         """
         bitrate = resolve_bitrate(can_iface, self.default_bitrate if bitrate is None else bitrate)
+        data_bitrate = resolve_data_bitrate(
+            can_iface, self.default_data_bitrate if data_bitrate is None else data_bitrate)
         # Fast-fail before the slow prepare_runtime step. The double-check inside
         # the lock guards against concurrent connect() calls that both passed
         # this check before prepare_runtime returned.
@@ -242,6 +270,8 @@ class CANSession:
                 bitrate = None
             else:
                 logger.info("Connecting to %s (bitrate is set by SocketCAN, not by Cynitor)", spec)
+        elif data_bitrate is not None:
+            logger.info("Connecting to %s at %d bit/s, CAN FD data phase %d bit/s", spec, bitrate, data_bitrate)
         else:
             logger.info("Connecting to %s at %d bit/s", spec, bitrate)
 
@@ -252,7 +282,7 @@ class CANSession:
         if is_socketcan(spec):
             await asyncio.to_thread(prepare_runtime, can_iface, force_compile, bitrate)
         else:
-            hub = await self._open_hub(spec, bitrate, force_compile)
+            hub = await self._open_hub(spec, bitrate, force_compile, data_bitrate)
 
         async with self._lock:
             if self.is_running:
@@ -325,6 +355,8 @@ class CANSession:
 
                 self.can_interface = can_iface
                 self.can_bitrate = bitrate
+                self.can_data_bitrate = data_bitrate
+                self.can_fd = media_mtu() == FD_MTU
                 logger.info("CAN session started on %s", can_iface)
             except Exception:
                 try:
@@ -333,14 +365,15 @@ class CANSession:
                     logger.error("Cleanup error during failed connect: %s", cleanup_err)
                 raise
 
-    async def _open_hub(self, spec: str, bitrate: int, force_compile: bool) -> CANHub:
+    async def _open_hub(self, spec: str, bitrate: int, force_compile: bool,
+                        data_bitrate: Optional[int] = None) -> CANHub:
         """Open a non-SocketCAN adapter once and point every component at the hub's channel.
 
         Most such adapters admit a single open handle, and the allocator probe,
         the allocator and the scanner each open the bus; see can_hub.
         """
         ensure_libusb_on_path()  # before gs_usb is opened, not just before yakut
-        hub = CANHub(spec, bitrate)
+        hub = CANHub(spec, bitrate, data_bitrate)
         await asyncio.to_thread(hub.start)
         try:
             # `yakut accommodate` would run in a child process, which cannot
@@ -354,7 +387,7 @@ class CANSession:
                 else:
                     os.environ["UAVCAN__NODE__ID"] = str(node_id)
             await asyncio.to_thread(
-                prepare_runtime, hub.local_spec, force_compile, bitrate, False,
+                prepare_runtime, hub.local_spec, force_compile, bitrate, False, data_bitrate,
             )
         except BaseException:
             await asyncio.to_thread(hub.stop)
@@ -480,6 +513,8 @@ class CANSession:
         self.registered_nodes.clear()
         self.can_interface = None
         self.can_bitrate = None
+        self.can_data_bitrate = None
+        self.can_fd = False
 
         logger.info("CAN session stopped")
 
@@ -809,7 +844,8 @@ def _quiet_completion_of_cancelled_futures(loop: asyncio.AbstractEventLoop, cont
 
 async def main(can_iface: Optional[str] = None, force_compile: bool = False, bind: str = "127.0.0.1",
                port: int = 8080, serve_frontend: bool = True,
-               can_bitrate: Optional[int] = None, data_dir: Optional[str] = None) -> None:
+               can_bitrate: Optional[int] = None, data_dir: Optional[str] = None,
+               can_data_bitrate: Optional[int] = None) -> None:
     from websocket_server import WebSocketServer
     from dsdl_manager import DsdlManager
 
@@ -824,7 +860,8 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     if moved:
         logger.info("Moved %s from %s into the data folder", ", ".join(moved), Path.cwd())
 
-    session = CANSession(default_bitrate=can_bitrate, data_dir=data_path)
+    session = CANSession(default_bitrate=can_bitrate, data_dir=data_path,
+                         default_data_bitrate=can_data_bitrate)
     project_root = resolve_project_root()
     dsdl_mgr = DsdlManager(project_root, data_dir=data_path)
     dsdl_mgr.make_importable()
@@ -877,6 +914,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("Startup options:")
     logger.info("  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0, gs_usb:0, pcan:PCAN_USBBUS1)")
     logger.info("  --bitrate <n>    bus speed in bit/s; required with --can for any adapter except SocketCAN")
+    logger.info("  --data-bitrate <n>  CAN FD data-phase speed; opens PCAN/Kvaser/Vector/IXXAT as CAN FD")
     logger.info("  --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)")
     logger.info("  --port <n>       listen on <n> instead of 8080")
     logger.info("  --data-dir <dir> keep history, recordings and node-IDs in <dir>")
@@ -1020,6 +1058,21 @@ if __name__ == "__main__":
              "adapter Cynitor opens itself (PCAN, gs_usb, slcan, Kvaser, ...). Ignored "
              "for SocketCAN, whose bitrate is set with `ip link`.",
     )
+
+    def _data_bitrate_arg(text: str) -> int:
+        try:
+            return validate_data_bitrate(int(text))
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(str(exc)) from None
+
+    parser.add_argument(
+        "--data-bitrate",
+        type=_data_bitrate_arg,
+        default=None,
+        help="CAN FD data-phase bitrate in bit/s; opens the adapter as CAN FD (PCAN, "
+             "Kvaser, Vector, IXXAT). Leave out for Classic CAN. Ignored for SocketCAN, "
+             "which runs CAN FD when the interface is set up for it.",
+    )
     parser.add_argument(
         "--recompile",
         action="store_true",
@@ -1058,6 +1111,10 @@ if __name__ == "__main__":
             resolve_bitrate(args.can, args.bitrate)
         except ValueError as exc:
             parser.error(f"{exc}. Pass it with --bitrate.")
+        try:
+            resolve_data_bitrate(args.can, args.data_bitrate)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     signal.signal(signal.SIGTERM, _shutdown_on_sigterm)
     _exit_when_parent_dies()
@@ -1071,6 +1128,7 @@ if __name__ == "__main__":
             serve_frontend=not args.no_frontend,
             can_bitrate=args.bitrate,
             data_dir=args.data_dir,
+            can_data_bitrate=args.data_bitrate,
         ))
     except KeyboardInterrupt:
         logger.info("Interrupted by user")

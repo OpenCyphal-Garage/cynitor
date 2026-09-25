@@ -69,10 +69,10 @@ EventLogger.start()        SQLite persistence
 | `websocket_server.py` | aiohttp HTTP+WS server, REST endpoints, per-client WebSocket filtering, periodic metrics broadcast, node history and service call history endpoints; also serves `website/` so one binary hosts both the API and the dashboard; refuses API and event-stream requests from browser pages of other sites (`_browser_request_allowed`) |
 | `event_logger.py` | SQLite persistence with batch writes, `asyncio.to_thread` for non-blocking I/O, configurable retention, node lifecycle history (30-day), service call history with response bodies |
 | `allocator.py` | Node-ID allocator detection / fallback (CentralizedAllocator), 10s re-check |
-| `can_config.py` | Interface-spec and bitrate rules: bare names mean SocketCAN, `--bitrate` is required for anything else, `UAVCAN__CAN__BITRATE` is published as `"<n> <n>"` |
+| `can_config.py` | Interface-spec and bitrate rules: bare names mean SocketCAN, `--bitrate` is required for anything else, `UAVCAN__CAN__BITRATE` is published as `"<n> <n>"` (`"<n> <data>"` for CAN FD); which adapters can run CAN FD, and whether a SocketCAN interface is set up for it |
 | `can_discovery.py` | Lists the adapters the dashboard offers besides SocketCAN: python-can vendor detection (PEAK, Kvaser, Vector, IXXAT), and off Linux a gs_usb USB scan and slcan serial ports by USB ID; cached for 10 s in `AdapterCatalog` |
-| `can_hub.py` | Opens a non-SocketCAN adapter once and bridges it to an in-process python-can `virtual` channel that the allocator probe, allocator and scanner all open instead; also picks Cynitor's node-ID from heartbeats on that channel; for those adapters it also measures bus load (`HubBusLoad`, from forwarded frame lengths, standing in for canbusload) and, for gs_usb, whose reads hide USB errors, checks every few seconds that the device is still enumerated |
-| `startup_setup.py` | DSDL compilation via `nnvg`, sets `UAVCAN__CAN__IFACE` / `UAVCAN__CAN__MTU`, calls `yakut accommodate` for node ID |
+| `can_hub.py` | Opens a non-SocketCAN adapter once and bridges it to an in-process python-can `virtual` channel that the allocator probe, allocator and scanner all open instead; also picks Cynitor's node-ID from heartbeats on that channel; for those adapters it also opens CAN FD adapters with pycyphal's parameters, measures bus load (`HubBusLoad`, from forwarded frames' time on the wire, counted as canbusload counts: worst-case stuffing, CAN FD data phase at the data rate), counts error frames, and, for gs_usb, whose reads hide USB errors, checks every few seconds that the device is still enumerated |
+| `startup_setup.py` | DSDL compilation via `nnvg`, sets `UAVCAN__CAN__IFACE` / `UAVCAN__CAN__MTU` (64 for CAN FD, else 8), calls `yakut accommodate` for node ID |
 | `node_identity_map.py` | Bidirectional `unique_id ↔ node_id` mapping with displacement detection, snapshot storage, and SQLite-backed persistence |
 | `data_dir.py` | The data folder: per-user default per OS (`STATE_DIRECTORY` under systemd), `--data-dir` / `CYNITOR_DATA_DIR` override, and the one-time move of databases an earlier version left in the working directory, each with its `-wal`/`-shm` files |
 | `log_store.py` | In-memory deque (max 5000) fed by a `logging.Handler`; exposed via `/api/logs` |
@@ -86,6 +86,9 @@ EventLogger.start()        SQLite persistence
                   (gs_usb:0, pcan:PCAN_USBBUS1, slcan:COM5@115200, ...). Required for direct mode.
 --bitrate <n>     Bus speed in bit/s. Required with --can for non-SocketCAN adapters; no default. Every component that
                   opens the bus reads it from UAVCAN__CAN__BITRATE, which prepare_runtime sets.
+--data-bitrate <n>  CAN FD data-phase bitrate; opens a non-SocketCAN adapter as CAN FD (can_config.FD_INTERFACES).
+                  prepare_runtime then publishes UAVCAN__CAN__MTU=64 and "<bitrate> <data-bitrate>". SocketCAN
+                  ignores it: its MTU follows the interface (72 in sysfs means CAN FD).
 --recompile       Force `nnvg` to regenerate Python from DSDL even if outputs exist.
 --bind <host>     Host/IP to bind the HTTP server to (default 127.0.0.1; use 0.0.0.0 to expose on the network).
 --port <n>        TCP port to listen on (default 8080).
@@ -101,7 +104,7 @@ By default the dashboard is served from the same port as the API, so a deploymen
 ### Tests
 
 - `server/tests/` — backend unit tests (pytest); they mock the Cyphal stack. CI runs them on Linux (Python 3.10–3.12) and on Windows Server 2022 and 2025.
-- `tests/integration/hub_session.py` — a whole CAN session through the CAN hub on a python-can `virtual` bus, with the real Cyphal stack and a simulated device and plug-and-play node; needs compiled DSDL. CI runs it on Linux and both Windows images.
+- `tests/integration/hub_session.py` — a whole CAN session through the CAN hub on a python-can `virtual` bus, with the real Cyphal stack and a simulated device and plug-and-play node; needs compiled DSDL. With `--fd` the device and Cynitor run Cyphal/CAN FD, and Cynitor's own frames on the wire must be CAN FD frames. CI runs both on Linux and both Windows images.
 - `tests/e2e/` — Playwright checks of the static dashboard.
 - `packaging/smoke-test.ps1` — checks the built Windows executable: bundled modules and libusb, a session through the hub, the dashboard and token, and that killing the PyInstaller bootloader stops the server.
 

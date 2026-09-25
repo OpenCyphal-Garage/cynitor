@@ -28,7 +28,7 @@ TelemetryManager (pub-sub router)
 ✅ **Clean Shutdown** - Graceful WebSocket disconnect and logger queue flush  
 ✅ **Allocator Guard** - Reuses external allocator if present, otherwise starts local allocator and re-checks every 10s
 ✅ **CAN Health Monitoring** - Detects CAN bus faults (BUS-OFF, ERROR-PASSIVE, interface disappearance on SocketCAN; a failing or unplugged adapter otherwise) and auto-disconnects
-✅ **Bus Load Monitoring** - Real-time CAN bus utilization via `canbusload` subprocess on SocketCAN, or counted from the forwarded frames for other adapters, streamed to clients via WebSocket  
+✅ **Bus Load Monitoring** - Real-time CAN bus utilization via `canbusload` subprocess on SocketCAN, or counted from the forwarded frames for other adapters (Classic CAN and CAN FD alike), streamed to clients via WebSocket  
 ✅ **Register Access** - Read and write Cyphal node registers via REST API  
 ✅ **Offline Node Detection** - Tracks node disappearance with `last_seen` timestamps and stale state handling  
 ✅ **Node History** - Lifecycle event tracking (health changes, mode changes, service calls) with 30-day retention  
@@ -156,6 +156,7 @@ Mode:        selection  (waiting for the UI or POST /api/can/connect)
 Startup options:
   --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0, gs_usb:0, pcan:PCAN_USBBUS1)
   --bitrate <n>    bus speed in bit/s; required with --can for any adapter except SocketCAN
+  --data-bitrate <n>  CAN FD data-phase speed; opens PCAN/Kvaser/Vector/IXXAT as CAN FD
   --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)
   --port <n>       listen on <n> instead of 8080
   --data-dir <dir> keep history, recordings and node-IDs in <dir>
@@ -292,7 +293,8 @@ Raw frame batch (sent only to clients that opted into capture; batched ~every
     ]
 }
 ```
-`dir` is `tx`/`rx` (TX = forced-loopback of our own frames). For Cyphal frames,
+`dir` is `tx`/`rx` (TX = forced-loopback of our own frames). `dlc` is the data
+length in bytes (0–64), not the DLC code. For Cyphal frames,
 `kind` is `msg`/`req`/`resp` and `port` is the subject- or service-ID; non-Cyphal
 ("foreign") frames carry only the raw fields with `cyphal: false`.
 
@@ -316,10 +318,12 @@ Response:
     "status": "running",
     "can_interface": "vcan0",
     "can_bitrate": null,
+    "can_data_bitrate": null,
+    "can_fd": false,
     "available_interfaces": ["vcan0", "can0"],
     "available_adapters": [
-        {"interface": "vcan0", "label": "vcan0 (SocketCAN)", "needs_bitrate": false},
-        {"interface": "pcan:PCAN_USBBUS1", "label": "PEAK PCAN_USBBUS1", "needs_bitrate": true}
+        {"interface": "vcan0", "label": "vcan0 (SocketCAN)", "needs_bitrate": false, "supports_fd": false},
+        {"interface": "pcan:PCAN_USBBUS1", "label": "PEAK PCAN_USBBUS1", "needs_bitrate": true, "supports_fd": true}
     ],
     "bus_utilization": 3.0,
     "dropped": {"scanner": 0, "logger": 0, "clients": 12},
@@ -329,9 +333,9 @@ Response:
 
 `dropped` counts decoded messages discarded since the CAN connection opened because a queue was full: `scanner` before reaching anything, `logger` missing from the 24 h history and from recordings, `clients` missing from some dashboard's live view (each open dashboard has its own 100-event queue). `null` when not connected to CAN. The dashboard shows the total next to the CAN message rate.
 
-`status` is `"running"` when connected to CAN, `"idle"` otherwise. `last_error` contains the error message if CAN was auto-disconnected due to a bus fault. `can_bitrate` is the bitrate Cynitor opened the adapter at, or `null` for SocketCAN, whose bitrate the kernel sets.
+`status` is `"running"` when connected to CAN, `"idle"` otherwise. `last_error` contains the error message if CAN was auto-disconnected due to a bus fault. `can_bitrate` is the bitrate Cynitor opened the adapter at, or `null` for SocketCAN, whose bitrate the kernel sets. `can_data_bitrate` is the CAN FD data-phase bitrate it opened the adapter with, or `null` (Classic CAN, or SocketCAN). `can_fd` says whether the session runs Cyphal/CAN FD; for SocketCAN that follows the interface's own setup.
 
-`available_interfaces` lists SocketCAN names only, as before. `available_adapters` lists everything the dashboard can offer: SocketCAN interfaces, adapters of vendor drivers python-can can enumerate (PEAK, Kvaser, Vector, IXXAT) and, off Linux, candleLight (`gs_usb`) and known slcan adapters. Pass an entry's `interface` to `POST /api/can/connect`, with a `bitrate` when `needs_bitrate` is true. The list is rescanned at most every 10 seconds, and not at all while connected.
+`available_interfaces` lists SocketCAN names only, as before. `available_adapters` lists everything the dashboard can offer: SocketCAN interfaces, adapters of vendor drivers python-can can enumerate (PEAK, Kvaser, Vector, IXXAT) and, off Linux, candleLight (`gs_usb`) and known slcan adapters. Pass an entry's `interface` to `POST /api/can/connect`, with a `bitrate` when `needs_bitrate` is true. `supports_fd` says whether a session on it can run CAN FD: for an adapter Cynitor opens itself (`needs_bitrate` true), that it can be opened as CAN FD when given a `data_bitrate`; for SocketCAN, that the interface is set up for CAN FD, which Cynitor then uses without being asked. The list is rescanned at most every 10 seconds, and not at all while connected.
 
 **List CAN adapters:**
 ```bash
@@ -349,10 +353,18 @@ curl -X POST http://localhost:8080/api/can/connect \
 
 Response (success):
 ```json
-{"status": "running", "can_interface": "vcan0"}
+{"status": "running", "can_interface": "vcan0", "can_fd": false}
 ```
 
 `interface` is either a SocketCAN name, which must be one of `available_interfaces`, or a python-can spec such as `gs_usb:0` or `pcan:PCAN_USBBUS1`, which is opened without that check. `bitrate` (integer, 1–1000000 bit/s) is the bus speed, required for every adapter except SocketCAN, which ignores it. It may be left out only if the server was started with `--bitrate`, which then applies.
+
+`data_bitrate` (integer, 1–12000000 bit/s, optional) opens the adapter as CAN FD with that data-phase bitrate; left out, the session is Classic CAN unless the server was started with `--data-bitrate`. Only adapters whose `supports_fd` is true take it (PEAK, Kvaser, Vector, IXXAT); SocketCAN ignores it and runs CAN FD when the interface is set up for it. `can_fd` in the response says which it became.
+
+```bash
+curl -X POST http://localhost:8080/api/can/connect \
+  -H 'Content-Type: application/json' \
+  -d '{"interface":"pcan:PCAN_USBBUS1","bitrate":500000,"data_bitrate":2000000}'
+```
 
 ```bash
 curl -X POST http://localhost:8080/api/can/connect \
@@ -360,7 +372,7 @@ curl -X POST http://localhost:8080/api/can/connect \
   -d '{"interface":"gs_usb:0","bitrate":250000}'
 ```
 
-Returns `409` if already connected, `400` if a SocketCAN name is unknown or `bitrate` is missing or invalid.
+Returns `409` if already connected, `400` if a SocketCAN name is unknown, `bitrate` is missing or invalid, or `data_bitrate` is invalid or given for an adapter that cannot run CAN FD.
 
 **Disconnect from CAN:**
 ```bash
@@ -410,7 +422,11 @@ Response (connected):
 single-frame payload limit: 7 = Classic CAN, up to 63 = CAN FD). `link` is
 best-effort controller state parsed from `ip -details -statistics link show`;
 fields are `null` on virtual interfaces (vcan) or where the controller does not
-report them. The Debugging view polls this endpoint at ~1 Hz while active.
+report them. For an adapter Cynitor opens itself, `link` holds what the CAN hub
+counts instead: `bitrate`, `dbitrate` (the CAN FD data bitrate, or `null`),
+`adapter_frames_in`, `adapter_frames_out`, `adapter_send_failures` and
+`adapter_error_frames` (error frames, if the adapter's driver reports them).
+The Debugging view polls this endpoint at ~1 Hz while active.
 
 **Raw frame-capture snapshot (Debugging view frame monitor):**
 ```bash

@@ -71,6 +71,16 @@
             <input id="canBitrateCustom" type="number" class="hidden" min="1" max="1000000" step="1"
                    placeholder="bit/s" aria-label="Custom CAN bitrate" />
           </div>
+          <div id="canDataBitrateRow" class="can-bitrate-row hidden">
+            <select id="canDataBitrateSelect" aria-label="CAN FD data bitrate">
+              <option value="">Classic CAN</option>
+              <option value="1000000">CAN FD · 1 Mbit/s data</option>
+              <option value="2000000">CAN FD · 2 Mbit/s data</option>
+              <option value="4000000">CAN FD · 4 Mbit/s data</option>
+              <option value="5000000">CAN FD · 5 Mbit/s data</option>
+              <option value="8000000">CAN FD · 8 Mbit/s data</option>
+            </select>
+          </div>
           <button id="connectCanBtn" class="sidebar-action btn-primary">Connect</button>
         </div>
       </div>

@@ -26,6 +26,7 @@ const state = {
   // Last bitrate used per interface spec, so the list preselects it next
   // time. Never a guess: an adapter not connected before starts unselected.
   canBitrates: {},
+  canDataBitrates: {},   // CAN FD data bitrate last used per adapter; absent = Classic CAN
   customCanSpec: '',
   favouriteNodeIds: new Set(),
   hiddenNodeIds: new Set(),
@@ -569,6 +570,7 @@ const _writeSettingsNow = () => {
     apiBase: el('apiBase').value.trim(),
     canInterface: interfacesSelect ? interfacesSelect.value : '',
     canBitrates: state.canBitrates,
+    canDataBitrates: state.canDataBitrates,
     customCanSpec: state.customCanSpec,
     dashboardConnected: state.dashboardConnected,
     selectedDetailTab: state.selectedDetailTab,
@@ -706,6 +708,9 @@ const loadSettings = () => {
   }
   if (settings.canBitrates && typeof settings.canBitrates === 'object') {
     state.canBitrates = settings.canBitrates;
+  }
+  if (settings.canDataBitrates && typeof settings.canDataBitrates === 'object') {
+    state.canDataBitrates = settings.canDataBitrates;
   }
   if (typeof settings.customCanSpec === 'string') {
     state.customCanSpec = settings.customCanSpec;

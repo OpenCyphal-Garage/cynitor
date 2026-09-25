@@ -11,7 +11,7 @@ from typing import Optional, Set, Any
 from urllib.parse import urlsplit
 from aiohttp import web, WSCloseCode
 
-from can_config import is_explicit_spec, is_socketcan, resolve_bitrate, socketcan_device
+from can_config import is_explicit_spec, is_socketcan, resolve_bitrate, resolve_data_bitrate, socketcan_device
 
 
 def _csv_escape(value: Any) -> str:
@@ -368,6 +368,10 @@ class WebSocketServer:
             "can_interface": self.session.can_interface,
             # None for SocketCAN, whose bitrate the kernel sets.
             "can_bitrate": self.session.can_bitrate,
+            # The CAN FD data bitrate Cynitor opened the adapter with, or None.
+            "can_data_bitrate": self.session.can_data_bitrate,
+            # Whether the session runs CAN FD (for SocketCAN, as the interface is set up).
+            "can_fd": self.session.can_fd,
             "available_interfaces": available,
             "available_adapters": await self._list_adapters(),
             "bus_utilization": bus_load.utilization if bus_load else None,
@@ -393,8 +397,11 @@ class WebSocketServer:
         # Required for every adapter except SocketCAN; the server's --bitrate,
         # if it was started with one, stands in when the request has none.
         bitrate = payload.get("bitrate")
+        # Optional; opens the adapter as CAN FD. --data-bitrate stands in likewise.
+        data_bitrate = payload.get("data_bitrate")
         try:
             resolve_bitrate(iface, self.session.default_bitrate if bitrate is None else bitrate)
+            resolve_data_bitrate(iface, self.session.default_data_bitrate if data_bitrate is None else data_bitrate)
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=400)
 
@@ -413,8 +420,9 @@ class WebSocketServer:
                 )
 
         try:
-            await self.session.connect(iface, bitrate=bitrate)
-            return web.json_response({"status": "running", "can_interface": iface})
+            await self.session.connect(iface, bitrate=bitrate, data_bitrate=data_bitrate)
+            return web.json_response({"status": "running", "can_interface": iface,
+                                      "can_fd": self.session.can_fd})
         except Exception as e:
             logger.error(f"Failed to connect CAN: {e}", exc_info=True)
             return web.json_response({"error": str(e)}, status=500)

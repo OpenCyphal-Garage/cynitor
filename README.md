@@ -103,6 +103,7 @@ Other options:
 | Flag | Effect |
 |------|--------|
 | `--bitrate <n>` | Bus speed in bit/s. Required with `--can` for every adapter Cynitor opens itself (PCAN, gs_usb, slcan, …); there is no default, because a wrong guess disrupts the bus. Ignored for SocketCAN, whose bitrate is set with `ip link` |
+| `--data-bitrate <n>` | CAN FD data-phase speed in bit/s. Opens the adapter as CAN FD (PEAK, Kvaser, Vector, IXXAT); leave it out for Classic CAN. Ignored for SocketCAN, which runs CAN FD when the interface is set up for it (see [CAN FD](#can-fd)) |
 | `--bind <host>` | Listen on `<host>` (default `127.0.0.1`; `0.0.0.0` to expose on the network) |
 | `--port <n>` | Listen on `<n>` instead of 8080 |
 | `--data-dir <dir>` | Keep history, recordings and the allocator's node-ID table in `<dir>` instead of the default data folder (see [Where data is kept](#where-data-is-kept)) |
@@ -148,6 +149,8 @@ python3 main.py --can pcan:PCAN_USBBUS1 --bitrate 500000
 python3 main.py --can gs_usb:0 --bitrate 500000
 # CANable / slcan firmware
 python3 main.py --can slcan:COM5@115200 --bitrate 500000
+# PEAK PCAN-USB FD, CAN FD with a 2 Mbit/s data phase
+python3 main.py --can pcan:PCAN_USBBUS1 --bitrate 500000 --data-bitrate 2000000
 
 # Or connect a running backend
 curl -X POST http://localhost:8080/api/can/connect \
@@ -161,7 +164,26 @@ Most such adapters can be opened by only one program at a time. Cynitor opens th
 
 The node-ID Cynitor uses for itself is picked the way `yakut accommodate` does it (listen to heartbeats, choose a free one), without needing yakut.
 
-For these adapters Cynitor measures bus load itself, from the frames passing through it, counted the way `canbusload` counts them (no stuffing bits). It also notices a CANable being unplugged and disconnects, as it does when SocketCAN reports the interface gone; other adapters' drivers report that themselves. What it cannot see off SocketCAN are the controller's error counters and error-passive/bus-off state. The rest of the stack — REST/WebSocket server, DSDL Inspector, recordings, log panel, telemetry — works the same on all three OSes. Install whichever `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) and pass its transport string.
+For these adapters Cynitor measures bus load itself, from the frames passing through it, counted the way `canbusload` counts them by default (worst-case bit stuffing; for CAN FD, the data phase at the data rate). Error frames are counted too, when the adapter's driver reports them; they show in the Debugging view. It also notices a CANable being unplugged and disconnects, as it does when SocketCAN reports the interface gone; other adapters' drivers report that themselves. What it cannot see off SocketCAN are the controller's error counters and error-passive/bus-off state. The rest of the stack — REST/WebSocket server, DSDL Inspector, recordings, log panel, telemetry — works the same on all three OSes. Install whichever `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) and pass its transport string.
+
+### CAN FD
+
+Cyphal/CAN FD works on both paths:
+
+- **SocketCAN** (Linux): Cynitor follows the interface. Set it up for CAN FD before connecting and Cynitor uses it, with nothing to pass. The interface has to be down for the change:
+
+  ```bash
+  sudo ip link set can0 down
+  sudo ip link set can0 type can bitrate 500000 dbitrate 2000000 fd on
+  sudo ip link set can0 up
+  # a virtual interface only needs the CAN FD frame size:
+  sudo ip link set vcan0 down && sudo ip link set vcan0 mtu 72 && sudo ip link set vcan0 up
+  ```
+
+  Bus load then needs a `canbusload` from mid-2021 or later; older ones, such as Ubuntu 22.04's (2020.11), count Classic CAN frames only, so CAN FD load reads low.
+- **Adapters Cynitor opens itself**: give the data-phase bitrate with `--data-bitrate`, or pick it under the bitrate in the dashboard. PEAK, Kvaser, Vector and IXXAT can do this. candleLight (`gs_usb`) and slcan adapters cannot through python-can; on Linux, use them as SocketCAN for CAN FD.
+
+Every node on a CAN FD bus must be set up for CAN FD: Cynitor sends its own frames as CAN FD frames there, which a Classic-only controller answers with error frames.
 
 ## Deploying to a Server
 

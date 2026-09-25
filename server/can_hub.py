@@ -41,18 +41,21 @@ _MODE_INITIALIZATION = 1
 _MAX_NODE_ID = 127
 
 
-def open_adapter(spec: str, bitrate: int) -> can.BusABC:
+def open_adapter(spec: str, bitrate: int, data_bitrate: Optional[int] = None) -> can.BusABC:
     """Open ``spec`` (pycyphal's ``<interface>:<channel>`` form) as a python-can bus.
 
     Mirrors how pycyphal reads the same spec, so that ``--can`` means the same
     thing on both paths: ``slcan:COM5@115200`` carries the serial baud rate,
     gs_usb wants its device index as an integer, and numbered channels
     (``kvaser:0``) are integers while named ones (``pcan:PCAN_USBBUS1``) are not.
+
+    With ``data_bitrate`` the adapter is opened as CAN FD, again as pycyphal
+    would: PCAN takes a full bit timing, the others the two rates.
     """
     interface, sep, channel = spec.partition(":")
     if not sep or not interface:
         raise ValueError(f"Expected <interface>:<channel>, got {spec!r}")
-    kwargs: dict = {}
+    kwargs: dict = {"bitrate": bitrate}
     if interface == "slcan" and "@" in channel:
         channel, _, baud = channel.rpartition("@")
         kwargs["tty_baudrate"] = int(baud)
@@ -61,18 +64,32 @@ def open_adapter(spec: str, bitrate: int) -> can.BusABC:
         kwargs["index"] = int(channel)
     elif channel.isdigit():
         channel = int(channel)
-    return can.ThreadSafeBus(interface=interface, channel=channel, bitrate=bitrate, **kwargs)
+    if data_bitrate is not None:
+        if interface == "pcan":
+            kwargs = {"timing": can.BitTimingFd.from_sample_point(
+                f_clock=80_000_000, nom_bitrate=bitrate, nom_sample_point=80,
+                data_bitrate=data_bitrate, data_sample_point=80,
+            )}
+        else:
+            kwargs["data_bitrate"] = data_bitrate
+        kwargs["fd"] = True
+    return can.ThreadSafeBus(interface=interface, channel=channel, **kwargs)
 
 
-def frame_bits(msg: can.Message) -> int:
-    """On-wire length of a classic CAN frame, without stuffing bits.
+def frame_bits(msg: can.Message) -> tuple[int, int]:
+    """On-wire length of a frame: (bits at the nominal rate, bits at the data rate).
 
-    SOF through interframe space: 47 bits of overhead for a base frame and 67
-    for an extended one, plus the data field. Leaving stuffing out is what
-    canbusload does by default, so both paths report load the same way.
+    Counted the way canbusload counts by default: worst-case bit stuffing,
+    SOF through interframe space. A CAN FD frame with bit rate switching
+    sends its data phase at the data rate; everything else is nominal.
     """
-    data_bits = 0 if msg.is_remote_frame else 8 * len(msg.data)
-    return (67 if msg.is_extended_id else 47) + data_bits
+    length = 0 if msg.is_remote_frame else len(msg.data)
+    if not msg.is_fd:
+        return (80 if msg.is_extended_id else 55) + 10 * length, 0
+    crc = 21 if length >= 16 else 17
+    total = (1 + (29 if msg.is_extended_id else 11) + crc + 5 + 12 + 8 * length) * 5 // 4
+    data = (1 + 1 + 4 + crc + 8 * length) * 5 // 4 if msg.bitrate_switch else 0
+    return total - data, data
 
 
 def presence_check(bus: can.BusABC) -> Optional[Callable[[], bool]]:
@@ -121,19 +138,21 @@ class CANHub:
     adapter's transmit queue -- so it is counted in ``send_failures`` instead.
     """
 
-    def __init__(self, spec: str, bitrate: int,
-                 open_bus: Callable[[str, int], can.BusABC] = open_adapter) -> None:
+    def __init__(self, spec: str, bitrate: int, data_bitrate: Optional[int] = None,
+                 open_bus: Callable[[str, int, Optional[int]], can.BusABC] = open_adapter) -> None:
         self.spec = spec
         self.bitrate = bitrate
+        self.data_bitrate = data_bitrate  # None: Classic CAN
         self.channel = f"cynitor-hub-{next(_channel_numbers)}"
         self.error: Optional[str] = None
         self.frames_from_bus = 0
         self.frames_to_bus = 0
         self.send_failures = 0
-        # Bits on the wire, for bus load. One counter per pump thread, so
-        # that neither increment can overwrite the other's.
-        self.bits_from_bus = 0
-        self.bits_to_bus = 0
+        self.error_frames = 0  # reported by the adapter's driver, if it reports them
+        # Seconds the forwarded frames occupied the wire, for bus load. One
+        # counter per pump thread, so that neither can overwrite the other's.
+        self.busy_from_bus = 0.0
+        self.busy_to_bus = 0.0
         self._open_bus = open_bus
         self._still_present: Optional[Callable[[], bool]] = None
         self._adapter: Optional[can.BusABC] = None
@@ -148,7 +167,7 @@ class CANHub:
 
     def start(self) -> None:
         """Open the adapter and start forwarding. Blocking; raises if the adapter cannot be opened."""
-        self._adapter = self._open_bus(self.spec, self.bitrate)
+        self._adapter = self._open_bus(self.spec, self.bitrate, self.data_bitrate)
         try:
             # preserve_timestamps passes the adapter's receive time through
             # instead of stamping frames with the moment they were forwarded.
@@ -166,7 +185,8 @@ class CANHub:
         ]
         for thread in self._threads:
             thread.start()
-        logger.info("CAN hub: %s at %d bit/s shared as %s", self.spec, self.bitrate, self.local_spec)
+        rate = f"{self.bitrate} bit/s" + (f", CAN FD data {self.data_bitrate} bit/s" if self.data_bitrate else "")
+        logger.info("CAN hub: %s at %s shared as %s", self.spec, rate, self.local_spec)
 
     def stop(self) -> None:
         """Stop forwarding and close both buses. Idempotent."""
@@ -183,9 +203,13 @@ class CANHub:
         self._local = self._adapter = None
 
     @property
-    def bits_on_bus(self) -> int:
-        """Bits of every frame forwarded either way so far."""
-        return self.bits_from_bus + self.bits_to_bus
+    def busy_seconds(self) -> float:
+        """Time on the wire of every frame forwarded either way so far."""
+        return self.busy_from_bus + self.busy_to_bus
+
+    def _wire_seconds(self, msg: can.Message) -> float:
+        nominal, data = frame_bits(msg)
+        return nominal / self.bitrate + data / (self.data_bitrate or self.bitrate)
 
     def health(self) -> Optional[str]:
         """Why the adapter has become unusable, or None. Cheap enough to call every few seconds."""
@@ -203,9 +227,11 @@ class CANHub:
         """What the debug view can show about the adapter; the SocketCAN fields have no source here."""
         return {
             "bitrate": self.bitrate,
+            "dbitrate": self.data_bitrate,  # named as SocketCAN's link diagnostics name it
             "adapter_frames_in": self.frames_from_bus,
             "adapter_frames_out": self.frames_to_bus,
             "adapter_send_failures": self.send_failures,
+            "adapter_error_frames": self.error_frames,
         }
 
     def _fail(self, message: str) -> None:
@@ -223,9 +249,15 @@ class CANHub:
             except Exception as exc:
                 self._fail(f"{self.spec}: receive failed: {exc}")
                 return
+            if msg is None:
+                continue
+            # Counted, not forwarded: the Cyphal stack has no use for them.
+            if msg.is_error_frame:
+                self.error_frames += 1
+                continue
             # is_rx is False for adapters that echo what they sent (gs_usb
             # does). Forwarding the echo would hand each node its own frames.
-            if msg is None or msg.is_error_frame or not msg.is_rx:
+            if not msg.is_rx:
                 continue
             try:
                 self._local.send(msg)
@@ -233,7 +265,7 @@ class CANHub:
                 self._fail(f"internal channel {self.channel}: {exc}")
                 return
             self.frames_from_bus += 1
-            self.bits_from_bus += frame_bits(msg)
+            self.busy_from_bus += self._wire_seconds(msg)
 
     def _pump_to_bus(self) -> None:
         assert self._adapter is not None and self._local is not None
@@ -256,7 +288,7 @@ class CANHub:
                                    self.spec, self.send_failures, exc)
                 continue
             self.frames_to_bus += 1
-            self.bits_to_bus += frame_bits(msg)
+            self.busy_to_bus += self._wire_seconds(msg)
 
 
 class HubBusLoad:
@@ -264,9 +296,9 @@ class HubBusLoad:
 
     Stands in for main.BusLoadMonitor (canbusload), which needs a SocketCAN
     device: same ``utilization`` / ``is_alive`` / ``start`` / ``stop``. Every
-    ``interval`` it takes the bits forwarded either way as a share of what the
-    bitrate allows. The hub sees all traffic to and from the adapter, so this
-    is the whole bus as the adapter hears it.
+    ``interval`` it takes the time the forwarded frames occupied the wire as
+    a share of the interval. The hub sees all traffic to and from the
+    adapter, so this is the whole bus as the adapter hears it.
     """
 
     def __init__(self, hub: CANHub, interval: float = 1.0,
@@ -275,7 +307,7 @@ class HubBusLoad:
         self._interval = interval
         self._clock = clock
         self._task: Optional[asyncio.Task] = None
-        self._last: Optional[tuple[float, int]] = None
+        self._last: Optional[tuple[float, float]] = None
         self.utilization: float = 0.0
 
     @property
@@ -285,13 +317,13 @@ class HubBusLoad:
 
     def sample(self) -> float:
         """Update and return utilization since the previous sample, in percent."""
-        now, bits = self._clock(), self._hub.bits_on_bus
+        now, busy = self._clock(), self._hub.busy_seconds
         if self._last is not None:
             elapsed = now - self._last[0]
             if elapsed > 0:
-                load = 100.0 * (bits - self._last[1]) / (elapsed * self._hub.bitrate)
+                load = 100.0 * (busy - self._last[1]) / elapsed
                 self.utilization = round(min(load, 100.0), 1)
-        self._last = (now, bits)
+        self._last = (now, busy)
         return self.utilization
 
     async def start(self) -> None:
