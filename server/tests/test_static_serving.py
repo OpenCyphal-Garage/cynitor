@@ -38,6 +38,8 @@ def website(tmp_path):
     (d / "index.html").write_text("<title>Cynitor</title>")
     (d / "state.js").write_text("// app code")
     (d / "config.js").write_text("// placeholder\n")
+    (d / "vendor").mkdir()
+    (d / "vendor" / "lib.min.js").write_text("// vendored library")
     return d
 
 
@@ -72,6 +74,19 @@ class TestServesDashboard:
         resp = await client.get("/state.js")
         assert resp.status == 200
         assert "app code" in await resp.text()
+
+    @pytest.mark.asyncio
+    async def test_serves_vendored_libraries(self, client):
+        # D3 and Tabulator ship in website/vendor/ so the page works offline.
+        resp = await client.get("/vendor/lib.min.js")
+        assert resp.status == 200
+        assert "vendored library" in await resp.text()
+
+    @pytest.mark.asyncio
+    async def test_dashboard_files_are_not_origin_restricted(self, client):
+        # Only the API and event stream are guarded; the page's files are public.
+        resp = await client.get("/state.js", headers={"Origin": "https://elsewhere.example"})
+        assert resp.status == 200
 
     @pytest.mark.asyncio
     async def test_config_js_reports_request_origin(self, client):

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Cynitor</title>
-  <link rel="stylesheet" href="https://unpkg.com/tabulator-tables@6.4.0/dist/css/tabulator_midnight.min.css" />
+  <link rel="stylesheet" href="./vendor/tabulator_midnight.min.css" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
@@ -273,8 +273,8 @@
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
-  <script src="https://unpkg.com/tabulator-tables@6.4.0/dist/js/tabulator.min.js"></script>
+  <script src="./vendor/d3.min.js"></script>
+  <script src="./vendor/tabulator.min.js"></script>
   <!-- Must precede state.js: sets window.__CYNITOR when the backend is
        serving this page, which is how the dashboard learns its API origin. -->
   <script src="./config.js"></script>

@@ -8,6 +8,7 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Optional, Set, Any
+from urllib.parse import urlsplit
 from aiohttp import web, WSCloseCode
 
 from can_config import is_explicit_spec, is_socketcan, resolve_bitrate, socketcan_device
@@ -96,6 +97,8 @@ class WebSocketServer:
     # Paths the auth middleware always lets through. /api/health is the only
     # truly open endpoint (used by load balancers and uptime checks).
     _AUTH_OPEN_PATHS = frozenset({"/api/health"})
+
+    _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
     def __init__(
         self,
@@ -195,8 +198,35 @@ class WebSocketServer:
             response.headers.setdefault("Cache-Control", "no-cache")
         return response
 
+    def _browser_request_allowed(self, request: web.Request) -> bool:
+        """Whether a request may come from the browser page that sent it.
+
+        The API commands nodes on the bus, and a page on any website can send
+        requests to localhost through its visitor's browser. Browsers name the
+        sending page in the Origin header; allowed are the dashboard this server
+        serves (same origin) and pages served from this machine, such as the
+        frontend dev server on :5500. Tools like curl send no Origin.
+
+        A site can also re-point its own name at 127.0.0.1 (DNS rebinding) so
+        that its requests look same-origin. A server listening on loopback only
+        is never legitimately called by another name, so there the Host header
+        must name loopback too.
+        """
+        host = (urlsplit(f"//{request.host}").hostname or "").lower()
+        if self.host in self._LOOPBACK_HOSTS and host not in self._LOOPBACK_HOSTS:
+            return False
+        origin = request.headers.get("Origin")
+        if origin is None:
+            return True
+        parts = urlsplit(origin)  # "null" (sandboxed frames, file://) has no host
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            return False
+        return parts.netloc.lower() == request.host.lower() or parts.hostname in self._LOOPBACK_HOSTS
+
     @web.middleware
     async def _cors_middleware(self, request: web.Request, handler: Any) -> web.StreamResponse:
+        if self._is_protected_path(request.path) and not self._browser_request_allowed(request):
+            return web.json_response({"error": "cross-origin request refused"}, status=403)
         if request.method == "OPTIONS":
             response = web.Response()
         else:
@@ -204,9 +234,12 @@ class WebSocketServer:
                 response = await handler(request)
             except web.HTTPException as ex:
                 response = ex
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Headers"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+        origin = request.headers.get("Origin")
+        if origin is not None and self._is_protected_path(request.path):
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Headers"] = "*"
+            response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+            response.headers.add("Vary", "Origin")
         return response
 
     def _setup_routes(self) -> None:

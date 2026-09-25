@@ -203,6 +203,11 @@ the page it was served from, so nothing needs configuring per client.
 to anyone who can reach the port, and that API commands nodes on the bus. The
 server logs a warning if you bind to `0.0.0.0` with no token.
 
+Whatever the binding, web pages from other sites cannot use the API through a
+visitor's browser: requests they send are refused (see the browser origin
+policy in [WEBSOCKET_README.md](WEBSOCKET_README.md)). The dashboard needs no
+internet access either; its libraries are served by Cynitor itself.
+
 The dashboard's own files are served without a token, since a browser has to
 load the page before it can ask for one. Only the API and the event stream are
 protected.

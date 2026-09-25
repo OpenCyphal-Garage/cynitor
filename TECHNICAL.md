@@ -66,7 +66,7 @@ EventLogger.start()        SQLite persistence
 | `scanner_node.py` | CAN network discovery: heartbeat + port list subscriptions, dynamic per-subject subscribers, per-service clients, service schema introspection with STANDARD_SERVICES fallback |
 | `node_info.py` | Per-node lifecycle state: appearance, last-heartbeat timestamp, disappearance threshold (>1.1s), port lists, GetInfo response |
 | `telemetry_manager.py` | Event router: maintains `latest_by_subject` and `latest_by_node` caches, broadcasts to subscriber queues |
-| `websocket_server.py` | aiohttp HTTP+WS server, REST endpoints, per-client WebSocket filtering, periodic metrics broadcast, node history and service call history endpoints; also serves `website/` so one binary hosts both the API and the dashboard |
+| `websocket_server.py` | aiohttp HTTP+WS server, REST endpoints, per-client WebSocket filtering, periodic metrics broadcast, node history and service call history endpoints; also serves `website/` so one binary hosts both the API and the dashboard; refuses API and event-stream requests from browser pages of other sites (`_browser_request_allowed`) |
 | `event_logger.py` | SQLite persistence with batch writes, `asyncio.to_thread` for non-blocking I/O, configurable retention, node lifecycle history (30-day), service call history with response bodies |
 | `allocator.py` | Node-ID allocator detection / fallback (CentralizedAllocator), 10s re-check |
 | `can_config.py` | Interface-spec and bitrate rules: bare names mean SocketCAN, `--bitrate` is required for anything else, `UAVCAN__CAN__BITRATE` is published as `"<n> <n>"` |
@@ -118,7 +118,7 @@ dsdl_messages/
 
 ## Frontend
 
-All frontend code lives in `website/`. Plain HTML/CSS/JS. No build step. D3 (CDN) for plots and force graph; Tabulator (CDN) for data tables. Concern-focused script files load in order:
+All frontend code lives in `website/`. Plain HTML/CSS/JS. No build step. D3 for plots and force graph and Tabulator for data tables, both vendored in `website/vendor/` so the dashboard works without internet access. Concern-focused script files load in order:
 
 | File | Role |
 |------|------|
@@ -278,6 +278,7 @@ cynitor/
     connection.js           WS + polling + lifecycle
     app.js                  Boot, bindings, heartbeat, view switching
     config.js               Empty placeholder; the backend serves its own
+    vendor/                 D3 and Tabulator, copied unmodified from npm (see its README)
     styles.css              Theme and layout
   dsdl_messages/
     public_regulated_data_types/   git submodule (uavcan/, reg/)
@@ -406,5 +407,5 @@ cd tests/e2e && python3 test_landing_page.py
 - `aria-label` on every icon-only button.
 - Sanitize all dynamic HTML with `escapeHtml()` before insertion.
 - Mutations go through the global `state` object; no per-component state.
-- No new external dependencies beyond D3 and Tabulator (both via CDN).
+- No new external dependencies beyond D3 and Tabulator (both vendored in `website/vendor/`, no CDN).
 - All `.md` files in this repo are written in English.

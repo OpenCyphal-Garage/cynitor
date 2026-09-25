@@ -185,7 +185,8 @@ The compare view provides independent graphs for multi-series comparison.
 
 ### CORS/browser issues
 
-- Backend already enables CORS; verify you are calling the correct backend URL.
+- Verify you are calling the correct backend URL.
+- The backend answers browser pages only from its own address and from `localhost` / `127.0.0.1` (any port); anything else gets `403 cross-origin request refused`. Serve this frontend from the same machine, or open the dashboard the backend serves itself (see `WEBSOCKET_README.md`, "Browser origin policy").
 
 ### Port conflict on 5500
 

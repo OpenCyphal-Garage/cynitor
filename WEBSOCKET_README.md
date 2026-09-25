@@ -24,7 +24,7 @@ TelemetryManager (pub-sub router)
 ✅ **REST API** - Query latest events via HTTP  
 ✅ **Log API** - Retrieve recent application logs with log-level filtering  
 ✅ **Optional Persistence** - SQLite logging for historical replay  
-✅ **CORS Support** - Ready for web dashboard integration  
+✅ **Browser Origin Policy** - The API accepts browser requests only from its own dashboard and from pages served on this machine  
 ✅ **Clean Shutdown** - Graceful WebSocket disconnect and logger queue flush  
 ✅ **Allocator Guard** - Reuses external allocator if present, otherwise starts local allocator and re-checks every 10s
 ✅ **CAN Health Monitoring** - Detects CAN bus faults (BUS-OFF, ERROR-PASSIVE, interface disappearance on SocketCAN; a failing or unplugged adapter otherwise) and auto-disconnects
@@ -46,7 +46,7 @@ pip install -r requirements.txt
 Key dependencies:
 - `pycyphal` - UAVCAN protocol library
 - `aiohttp` - Async HTTP/WebSocket server
-- CORS is handled via built-in middleware (no extra dependency)
+- CORS and the origin policy are handled by built-in middleware (no extra dependency)
 
 ### 2. Run the System
 
@@ -89,6 +89,19 @@ Protected requests must present the token as:
 Unauthenticated requests get `HTTP 401 {"error": "missing or invalid token"}`. With the variable unset the server runs open — same behaviour as before this option existed. The frontend prompts the user to paste the token on the first 401 and stores it in `localStorage` under `cynitor.auth.token`.
 
 When a terminal is attached, the server prints the token once at startup so it can be copied into the dashboard. It is written straight to stderr rather than logged: the log buffer is served through `/api/logs` and rendered in the dashboard's log panel, and a service manager captures stdout into the system journal, so logging it would scatter copies. Runs without a terminal, which is every supervised run, print nothing.
+
+#### Browser origin policy
+
+The API commands nodes on the bus, and any website a user visits could otherwise send requests to `localhost:8080` through their browser. So requests to `/ws`, `/api` and `/api/...` are refused with `HTTP 403 {"error": "cross-origin request refused"}` when their `Origin` header names any page other than:
+
+- the dashboard this server serves itself (the `Origin` matches the `Host` it was reached at), or
+- a page served from this machine (`localhost`, `127.0.0.1` or `[::1]`, any port), such as the frontend dev server on `:5500`.
+
+Requests without an `Origin` header (curl, scripts, other non-browser clients) are not affected. `Origin: null`, which sandboxed frames and `file://` pages send, is refused. Allowed browser origins get `Access-Control-Allow-Origin` echoed back; nobody gets `*`.
+
+While the server listens on loopback only (the default `--bind 127.0.0.1`), the `Host` header must also name loopback. This stops DNS rebinding, where a site re-points its own name at `127.0.0.1` so its requests look same-origin. Behind a reverse proxy, the proxy must pass the browser's original `Host` on (nginx: `proxy_set_header Host $host;`) and the server must not be bound to loopback only; set a token.
+
+This works alongside the token, not instead of it: set `CYNITOR_AUTH_TOKEN` whenever the server is reachable from other machines.
 
 
 ### Serving the dashboard
