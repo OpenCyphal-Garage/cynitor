@@ -63,7 +63,7 @@ EventLogger.start()        SQLite persistence
 | File | Role |
 |------|------|
 | `main.py` | Entry point, lifecycle orchestration, two startup modes (direct vs selection) |
-| `scanner_node.py` | CAN network discovery: heartbeat + port list subscriptions, dynamic per-subject subscribers, per-service clients, service schema introspection with STANDARD_SERVICES fallback |
+| `scanner_node.py` | CAN network discovery: heartbeat + port list subscriptions, a permanent `uavcan.diagnostic.Record` subscription (fixed subject 8184, which no register names), dynamic per-subject subscribers (one decoded type per subject; a publisher advertising another is a `type_conflict`), per-service clients, service schema introspection with STANDARD_SERVICES fallback (including ExecuteCommand), restart vs. node-ID conflict detection from heartbeat uptimes |
 | `node_info.py` | Per-node lifecycle state: appearance, last-heartbeat timestamp, disappearance threshold (>1.1s), port lists, GetInfo response |
 | `telemetry_manager.py` | Event router: maintains `latest_by_subject` and `latest_by_node` caches, broadcasts to subscriber queues |
 | `websocket_server.py` | aiohttp HTTP+WS server, REST endpoints, per-client WebSocket filtering, periodic metrics broadcast, node history and service call history endpoints; also serves `website/` so one binary hosts both the API and the dashboard; refuses API and event-stream requests from browser pages of other sites (`_browser_request_allowed`) |

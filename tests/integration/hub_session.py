@@ -12,7 +12,9 @@ On the simulated bus:
 
 Checks, in order:
   1. the session connects through the hub, and Cynitor picks itself a node-ID;
-  2. the scanner sees node 50 and its GetInfo name;
+  2. the scanner sees node 50 and its GetInfo name, and decodes the
+     uavcan.diagnostic.Record it publishes on the fixed subject-ID (no
+     register names it, as with most firmware);
   3. Cynitor's allocator gives the anonymous node a node-ID;
   4. bus load is measured by the hub, not canbusload;
   5. an adapter that disappears ends the session with an error;
@@ -129,6 +131,28 @@ async def run() -> None:
         check(seen, f"scanner sees node {DEVICE_NODE_ID} and its GetInfo")
         name = session.scanner.all_nodes[DEVICE_NODE_ID].info_response.name.tobytes().decode()
         check(name == "integration.device", f"GetInfo name is {name!r}")
+
+        import uavcan.diagnostic
+        record = uavcan.diagnostic.Record_1_1(
+            severity=uavcan.diagnostic.Severity_1_0(uavcan.diagnostic.Severity_1_0.WARNING),
+            text="integration diagnostic",
+        )
+        diagnostics = device.make_publisher(uavcan.diagnostic.Record_1_1)
+
+        async def diagnostic_arrived():
+            deadline = time.monotonic() + TIMEOUT
+            while time.monotonic() < deadline:
+                await diagnostics.publish(record)
+                event = session.telemetry.latest_by_subject.get(8184)
+                if event:
+                    return {a["attribute"]: a["value"] for a in event["attributes"]}
+                await asyncio.sleep(0.5)
+            return None
+
+        attributes = await diagnostic_arrived()
+        check(attributes is not None and attributes.get("severity") == 4
+              and attributes.get("text") == "integration diagnostic",
+              f"diagnostic record decoded from its fixed subject: {attributes}")
 
         allocated = await wait_for(lambda: allocatee.get_result() is not None)
         check(allocated, f"anonymous node was allocated node-ID {allocatee.get_result()}")

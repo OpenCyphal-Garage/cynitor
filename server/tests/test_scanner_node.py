@@ -7,6 +7,7 @@ type name from the sibling ".type" register.
 
 import asyncio
 import datetime
+import json
 import time
 import types
 from decimal import Decimal
@@ -293,3 +294,168 @@ class TestQueueDrops:
             await node._queue_event(i, "T_1_0", [], publisher_node_id=1)
         assert node.dropped_events == 3
         assert [node.message_queue.get_nowait()["subject_id"] for _ in range(2)] == [3, 4]
+
+
+def make_event_node():
+    node = ScannerNode.__new__(ScannerNode)
+    node._prev_uptime = {}
+    node._uptime_before_drop = {}
+    node._node_id_conflict_reported = {}
+    node.events = []
+    node._emit_node_event = lambda node_id, event_type, detail=None: node.events.append((event_type, detail))
+    return node
+
+
+def heartbeats(node, *uptimes, node_id=42):
+    for uptime in uptimes:  # what heartbeat_callback does with each one
+        node._check_uptime(node_id, uptime)
+        node._prev_uptime[node_id] = uptime
+
+
+class TestRestartOrNodeIdConflict:
+    def test_restart_is_reported_once_the_count_goes_on(self):
+        node = make_event_node()
+        heartbeats(node, 1000, 0)
+        assert node.events == []  # judged on the next heartbeat
+        heartbeats(node, 1)
+        assert node.events == [("restart_suspected", {"old_uptime": 1000, "new_uptime": 0})]
+
+    def test_two_nodes_on_one_node_id_are_a_conflict_not_restarts(self):
+        node = make_event_node()
+        heartbeats(node, 1000, 50, 1001, 51, 1002, 52, 1003)
+        assert [e[0] for e in node.events] == ["node_id_conflict"]  # reported once a minute
+        assert node.events[0][1] == {"uptimes": [50, 1001]}
+
+    def test_conflict_is_reported_again_after_a_while(self):
+        node = make_event_node()
+        heartbeats(node, 1000, 50, 1001)
+        node._node_id_conflict_reported[42] -= ScannerNode.NODE_ID_CONFLICT_REPORT_S
+        heartbeats(node, 51, 1002)
+        assert [e[0] for e in node.events] == ["node_id_conflict", "node_id_conflict"]
+
+    def test_early_uptime_drop_is_not_judged(self):
+        node = make_event_node()
+        heartbeats(node, 3, 0, 1)  # uptime too small to tell anything
+        assert node.events == []
+
+
+class TestSubjectTypes:
+    @pytest.fixture
+    def node(self):
+        node = make_event_node()
+        node.active_publishers = {}
+        node.subject_types = {}
+        node.subscribed = []
+
+        def subscribe(subject_id, data_type_class, message_type):
+            node.subscribed.append((subject_id, message_type))
+            node.subject_types[subject_id] = message_type
+
+        node._subscribe = subscribe
+        module = types.SimpleNamespace(T_1_0=object(), T_1_1=object(), U_1_0=object(), T_2_0=object())
+        with patch("scanner_node.importlib.import_module", return_value=module):
+            yield node
+
+    async def test_first_publisher_sets_the_type(self, node):
+        await node.add_subscriptions(10, {1620: "ns.T_1_0"})
+        assert node.subscribed == [(1620, "ns.T_1_0")] and node.events == []
+
+    async def test_another_minor_version_is_no_conflict(self, node):
+        await node.add_subscriptions(10, {1620: "ns.T_1_0"})
+        await node.add_subscriptions(11, {1620: "ns.T_1_1"})
+        assert node.subscribed == [(1620, "ns.T_1_0")] and node.events == []
+        assert node.active_publishers[1620] == {10, 11}
+
+    @pytest.mark.parametrize("other", ["ns.U_1_0", "ns.T_2_0"])
+    async def test_another_type_or_major_version_is_reported(self, node, other):
+        await node.add_subscriptions(10, {1620: "ns.T_1_0"})
+        await node.add_subscriptions(11, {1620: other})
+        assert node.subscribed == [(1620, "ns.T_1_0")]  # still decoded as the first
+        assert node.events == [("type_conflict", {"subject_id": 1620, "type": other, "decoded_as": "ns.T_1_0"})]
+
+
+class TestDiagnosticSubscriptionIsPermanent:
+    def test_cleanup_keeps_it_but_drops_others(self):
+        node = make_event_node()
+        diagnostic, other = MagicMock(), MagicMock()
+        node.publishers_subscribers = {8184: diagnostic, 1620: other}
+        node.subject_types = {8184: "uavcan.diagnostic.Record_1_1", 1620: "ns.T_1_0"}
+        node.active_publishers = {8184: {42}, 1620: {42}}
+        node._snapshot_node_for_identity = lambda node_id: None
+        node._prev_ports, node._prev_health, node._prev_mode = {}, {}, {}
+        node.service_clients, node.service_metadata, node.node_service_types = {}, {}, {}
+        node.cleanup_subscriptions(42)
+        diagnostic.close.assert_not_called()
+        other.close.assert_called_once()
+        assert 8184 in node.publishers_subscribers and 1620 not in node.subject_types
+
+
+class TestServiceCallFields:
+    """Composite request fields: every sub-field given is set, by name."""
+
+    @pytest.fixture
+    def service(self):
+        from pydsdl import CompositeType
+
+        class Point:
+            _MODEL_ = types.SimpleNamespace(fields=[types.SimpleNamespace(name="x"), types.SimpleNamespace(name="y")])
+
+        class Request:
+            _MODEL_ = types.SimpleNamespace(attributes=[
+                types.SimpleNamespace(name="point", data_type=MagicMock(spec=CompositeType)),
+            ])
+
+        client = MagicMock()
+        client.dtype = types.SimpleNamespace(Request=Request)
+        client.call = AsyncMock(return_value=(object(), None))
+        node = ScannerNode.__new__(ScannerNode)
+        node.service_clients = {(42, 100): client}
+        module = types.SimpleNamespace(Point_1_0=Point)
+        with patch("scanner_node.importlib.import_module", return_value=module), \
+             patch("scanner_node.to_builtin", return_value={"status": 0}):
+            yield node, client
+
+    async def call(self, node, value):
+        return await node.make_service_call(42, 100, "Svc_1_0", {"point": {"type": "ns.Point.1.0", "value": value}})
+
+    async def test_all_named_fields_are_set(self, service):
+        node, client = service
+        await self.call(node, {"x": 1, "y": 2})
+        sent = client.call.await_args.args[0]
+        assert (sent.point.x, sent.point.y) == (1, 2)
+
+    async def test_single_value_sets_the_first_field(self, service):
+        node, client = service
+        await self.call(node, 5)
+        sent = client.call.await_args.args[0]
+        assert sent.point.x == 5 and not hasattr(sent.point, "y")
+
+    async def test_unknown_field_is_refused(self, service):
+        node, client = service
+        with pytest.raises(ValueError, match="'z'"):
+            await self.call(node, {"z": 1})
+        client.call.assert_not_awaited()
+
+    async def test_response_is_json(self, service):
+        node, _ = service
+        assert json.loads(await self.call(node, {"x": 1})) == {"status": 0}
+
+
+class TestExecuteCommand:
+    def test_callable_on_a_node_that_serves_it_without_registers(self):
+        from node_info import NodeInfo
+        node = ScannerNode.__new__(ScannerNode)
+        info = NodeInfo(node_id=42)
+        info.has_appeared = True
+        info.server_ServiceIDs = [435]
+        node.all_nodes = {42: info}
+        node.node_service_types, node.service_metadata = {}, {}
+        request = types.SimpleNamespace(_MODEL_=types.SimpleNamespace(attributes=[
+            types.SimpleNamespace(name="command", data_type="saturated uint16"),
+            types.SimpleNamespace(name="parameter", data_type="saturated uint8[<=255]"),
+        ]))
+        module = types.SimpleNamespace(ExecuteCommand_1_3=types.SimpleNamespace(Request=request))
+        with patch("scanner_node.importlib.import_module", return_value=module):
+            [service] = node.get_service_schema(42)
+        assert service["callable"] and service["full_type"] == "uavcan.node.ExecuteCommand_1_3"
+        assert [f["name"] for f in service["request_fields"]] == ["command", "parameter"]

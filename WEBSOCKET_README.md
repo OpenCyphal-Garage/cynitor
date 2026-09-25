@@ -762,8 +762,20 @@ Response (success):
 {
     "status": "ok",
     "latency_ms": 23,
-    "response": "GetInfo_1_0.Response(...)"
+    "response": "{\n  \"protocol_version\": {\n    \"major\": 1,\n    \"minor\": 0\n  },\n  ...\n}"
 }
+```
+
+`response` is the node's answer as JSON text (pycyphal's `to_builtin` form: numbers, strings, and objects for composite fields), so it reads well and a script can `json.loads` it.
+
+Request attributes are keyed by field name: `{"value": <v>}` for a plain field, and for a composite field `{"type": "<its type>", "value": {"<sub-field>": <v>, ...}}` with each sub-field to set; a single `value` there sets the composite's first field, as single-field wrappers such as `uavcan.primitive.String.1.0` need.
+
+`uavcan.node.ExecuteCommand` (service 435) is callable on every node that advertises it, registers or not. Restarting a node, for example (65535 is `COMMAND_RESTART`; the dashboard offers Restart and Factory reset as buttons):
+
+```bash
+curl -X POST http://localhost:8080/api/services/37/435/call \
+  -H 'Content-Type: application/json' \
+  -d '{"attributes": {"command": {"value": 65535}}}'
 ```
 
 Response (timeout, HTTP `504`):
@@ -864,11 +876,13 @@ Response:
             "node_id": 37,
             "timestamp_unix": 1741949445.123,
             "event_type": "health_change",
-            "detail": {"old_health": 0, "new_health": 2}
+            "detail": {"old": "NOMINAL", "new": "CAUTION"}
         }
     ]
 }
 ```
+
+Event types: `first_seen`, `reappeared`, `disappeared`, `restart_suspected` (the uptime dropped, then counted on), `health_change`, `mode_change`, `port_change`, `service_call`, `got_node_id`, `lost_node_id`, `node_id_migration`, `node_id_conflict` (heartbeats on this node-ID alternate between two uptimes: two nodes share it; reported at most once a minute) and `type_conflict` (the node publishes a subject with another type than the one it is decoded as, which an earlier publisher advertised).
 
 Returns `400` for invalid node_id or limit, `503` if the event logger is not available.
 
@@ -922,7 +936,7 @@ Response:
             "service_type": "uavcan.node.GetInfo_1_0",
             "status": "ok",
             "latency_ms": 23,
-            "response": "GetInfo_1_0.Response(...)",
+            "response": "{\n  \"protocol_version\": {\n    \"major\": 1,\n    \"minor\": 0\n  },\n  ...\n}",
             "node_name": "org.example.my_node",
             "node_unique_id": [215, 79, 139, ...]
         }
