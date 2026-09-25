@@ -209,7 +209,8 @@ Telemetry events (filtered per client):
     "subject_id": 7509,
     "timestamp": "2026-03-13T10:30:45",
     "timestamp_unix": 1741949445.123,
-    "rate": 10,
+    "rate": 1.0,
+    "subject_rate": 5.0,
     "message_type": "Heartbeat_1_0",
     "publisher_node_id": 42,
     "payload_bytes": 7,
@@ -221,6 +222,10 @@ Telemetry events (filtered per client):
     ]
 }
 ```
+
+`rate` is this publisher's message rate on the subject, in Hz (one decimal, over the last 10 s). `subject_rate` is the subject's total over all its publishers: with five nodes publishing Heartbeat at 1 Hz, each event carries `rate` 1.0 and `subject_rate` 5.0. Events recorded before `subject_rate` existed lack it, and there `rate` was the subject total.
+
+`timestamp_unix` is when the transfer was received as stamped by the transport (for SocketCAN, the kernel's receive timestamp), not when the backend got round to processing it.
 
 `payload_bytes` is the size, in bytes, of the received transfer's serialized payload (sum of `transfer.fragmented_payload` fragment lengths). It is `null` if the transport did not expose the fragmented payload (best-effort field).
 

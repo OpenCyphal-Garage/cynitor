@@ -5,11 +5,16 @@ so the numeric port-ID comes from the register's natural16 value and the DSDL
 type name from the sibling ".type" register.
 """
 
+import asyncio
+import datetime
+import time
 import types
-from unittest.mock import MagicMock, patch
+from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from node_info import NodeInfo
 from scanner_node import ScannerNode  # uavcan.* is stubbed in conftest.py
 
 
@@ -122,14 +127,16 @@ class TestResolvePortRegister:
 
 class TestReadRegister:
     @pytest.mark.asyncio
-    async def test_returns_none_when_node_does_not_answer(self):
+    async def test_raises_when_node_does_not_answer(self):
+        # A lost response is not a missing register: registration must fail
+        # and be retried, not carry on without the port.
         class SilentClient:
             async def call(self, _request):
                 return None
 
         node = ScannerNode.__new__(ScannerNode)
-        result = await node._read_register(SilentClient(), "uavcan.pub.x.id", 42)
-        assert result is None
+        with pytest.raises(TimeoutError):
+            await node._read_register(SilentClient(), "uavcan.pub.x.id", 42)
 
     @pytest.mark.asyncio
     async def test_returns_parsed_union_field(self):
@@ -186,3 +193,89 @@ class TestTypeNameCase:
         module = types.SimpleNamespace(Foo_1_0=object(), FOO_1_0=object())
         with patch("scanner_node.importlib.import_module", return_value=module):
             assert ScannerNode._canonical_type_name("ns.foo_1_0") == "ns.foo_1_0"
+
+
+class TestUpdateRegListLostResponse:
+    @pytest.mark.asyncio
+    async def test_unanswered_list_request_fails_instead_of_truncating(self):
+        """No answer to register.List must not read as "end of list"."""
+        list_client = MagicMock()
+        list_client.call = AsyncMock(return_value=None)
+        node = ScannerNode.__new__(ScannerNode)
+        node._node = MagicMock()
+        node._node.make_client.return_value = list_client
+        with patch("scanner_node.asyncio.sleep", AsyncMock()):
+            with pytest.raises(TimeoutError):
+                await node.update_reg_list(42)
+        assert list_client.call.await_count == 2  # one retry before giving up
+
+
+def make_rate_node():
+    node = ScannerNode.__new__(ScannerNode)
+    node._rate_timestamps = {}
+    return node
+
+
+class TestRate:
+    def test_rate_is_per_publisher_and_subject_rate_is_total(self):
+        node = make_rate_node()
+        for second in range(5):
+            for node_id in (10, 11, 12):  # three nodes, 1 Hz heartbeat each
+                rate, subject_rate = node._track_rate(7509, node_id, float(second))
+        assert rate == 1.0
+        assert subject_rate == 3.0
+
+    def test_rate_keeps_one_decimal(self):
+        node = make_rate_node()
+        for t in (0.0, 0.4, 0.8, 1.2):  # 2.5 Hz
+            rate, _ = node._track_rate(1, 5, t)
+        assert rate == 2.5
+
+    def test_silent_publisher_drops_out_of_subject_rate(self):
+        node = make_rate_node()
+        for t in range(3):
+            node._track_rate(1, 5, float(t))
+        _, subject_rate = node._track_rate(1, 6, 100.0)
+        assert subject_rate == 0.0
+
+
+class TestTransferTimes:
+    def test_uses_driver_timestamp(self):
+        transfer = MagicMock()
+        transfer.timestamp.system = Decimal("1700000000.25")
+        transfer.timestamp.monotonic = Decimal("12.5")
+        assert ScannerNode._transfer_times(transfer) == (1700000000.25, 12.5)
+
+    def test_falls_back_to_now_without_transfer(self):
+        before = time.time()
+        system, _ = ScannerNode._transfer_times(None)
+        assert system >= before
+
+
+class TestInfoRefresh:
+    def make(self):
+        node = ScannerNode.__new__(ScannerNode)
+        node._info_in_flight = set()
+        node.all_nodes = {42: NodeInfo(node_id=42)}
+        node._refresh_info = AsyncMock()
+        return node
+
+    @pytest.mark.asyncio
+    async def test_only_one_refresh_per_node_at_a_time(self):
+        node = self.make()
+        assert node._schedule_info_refresh(42, was_disappeared=False) is True
+        assert node._schedule_info_refresh(42, was_disappeared=False) is False
+        await asyncio.sleep(0)
+        node._refresh_info.assert_awaited_once_with(42, False)
+
+    def test_unanswered_node_is_retried_sooner_than_a_known_one(self):
+        node = self.make()
+        info = node.all_nodes[42]
+        now = datetime.datetime.now()
+        assert node._info_due(info, now)  # never asked
+        info.last_info_attempt = now - datetime.timedelta(seconds=ScannerNode.INFO_RETRY_S + 1)
+        assert node._info_due(info, now)
+        info.has_responded_to_getInfo = True
+        assert not node._info_due(info, now)
+        info.last_info_attempt = now - datetime.timedelta(seconds=ScannerNode.INFO_REFRESH_S + 1)
+        assert node._info_due(info, now)

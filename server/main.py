@@ -488,35 +488,55 @@ class CANSession:
 # Node registration
 # ---------------------------------------------------------------------------
 
-async def register_nodes(scanner, registered_nodes_set: set[int]) -> None:
-    """Register newly discovered nodes and clean up disappeared ones."""
-    try:
-        for node in scanner.nodes.values():
-            if node.has_disappeared and node.node_id in registered_nodes_set:
-                registered_nodes_set.discard(node.node_id)
-                scanner.cleanup_subscriptions(node.node_id)
-                logger.info(f"Node {node.node_id} was removed from the node registration list")
-                continue
+REGISTRATION_RETRY_S = 10.0
 
-            if not node.has_appeared or not node.has_registered_ports:
-                continue
 
-            if node.node_id in registered_nodes_set or node.has_disappeared:
-                continue
+async def register_nodes(scanner, registered_nodes_set: set[int],
+                         retry_at: Optional[dict[int, float]] = None) -> None:
+    """Register newly discovered nodes and clean up disappeared ones.
 
-            registered_nodes_set.add(node.node_id)
+    A node counts as registered only once its registers were read in full and
+    its subscriptions and clients were created. A failure (typically a lost
+    response) is logged and the node is retried after REGISTRATION_RETRY_S;
+    it does not stop the other nodes from registering.
+    """
+    retry_at = {} if retry_at is None else retry_at
+    loop = asyncio.get_running_loop()
+    for node in scanner.nodes.values():
+        if node.has_disappeared and node.node_id in registered_nodes_set:
+            registered_nodes_set.discard(node.node_id)
+            scanner.cleanup_subscriptions(node.node_id)
+            logger.info(f"Node {node.node_id} was removed from the node registration list")
+            continue
+
+        if not node.has_appeared or not node.has_registered_ports:
+            continue
+
+        if node.node_id in registered_nodes_set or node.has_disappeared:
+            continue
+
+        if loop.time() < retry_at.get(node.node_id, 0.0):
+            continue
+
+        try:
             dsdl_pub_messages, dsdl_srv_messages = await scanner.update_reg_list(node.node_id)
             scanner.node_service_types[node.node_id] = dict(dsdl_srv_messages)
             await scanner.add_subscriptions(node.node_id, dsdl_pub_messages)
             await scanner.add_servers(node.node_id, dsdl_srv_messages)
-            logger.info(
-                f"Node {node.node_id} registered with publishers: {dsdl_pub_messages} "
-                f"and servers: {dsdl_srv_messages}"
-            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            retry_at[node.node_id] = loop.time() + REGISTRATION_RETRY_S
+            logger.warning(f"Registering node {node.node_id} failed, retrying in "
+                           f"{REGISTRATION_RETRY_S:.0f}s: {e}")
+            continue
 
-    except Exception as e:
-        logger.error(f"Error in register_nodes: {str(e)}")
-        raise
+        retry_at.pop(node.node_id, None)
+        registered_nodes_set.add(node.node_id)
+        logger.info(
+            f"Node {node.node_id} registered with publishers: {dsdl_pub_messages} "
+            f"and servers: {dsdl_srv_messages}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -640,6 +660,7 @@ async def _session_health_error(session: 'CANSession') -> Optional[str]:
 
 async def _register_loop(scanner, registered_nodes: set[int], session: 'CANSession' = None) -> None:
     health_check_counter = 0
+    registration_retry_at: dict[int, float] = {}
     try:
         while True:
             await asyncio.sleep(1)
@@ -657,7 +678,7 @@ async def _register_loop(scanner, registered_nodes: set[int], session: 'CANSessi
             try:
                 for node in scanner.all_nodes.values():
                     node.check_disappeared()
-                await register_nodes(scanner, registered_nodes)
+                await register_nodes(scanner, registered_nodes, registration_retry_at)
             except asyncio.CancelledError:
                 raise
             except Exception as e:

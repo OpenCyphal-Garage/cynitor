@@ -221,7 +221,8 @@ Every event flowing from `ScannerNode` through `TelemetryManager` to consumers u
   "subject_id": 7509,
   "timestamp": "2026-03-13T10:30:45",
   "timestamp_unix": 1741949445.123,
-  "rate": 10,
+  "rate": 1.0,
+  "subject_rate": 5.0,
   "message_type": "Heartbeat_1_0",
   "publisher_node_id": 42,
   "attributes": [
@@ -230,6 +231,8 @@ Every event flowing from `ScannerNode` through `TelemetryManager` to consumers u
   ]
 }
 ```
+
+`rate` is per publisher, keyed by `(subject_id, publisher_node_id)`; `subject_rate` sums all publishers of the subject. Node-level views sum `rate` (`getNodeRate`), subject-level views use `subject_rate` (`getSubjectRate`). `timestamp_unix` comes from the transfer's transport timestamp.
 
 Consumers identify a series by `(subject_id, attribute)`. The frontend keeps a per-attribute time-series under `state.subjectHistory["{subject_id}:{attr_name}"]` capped at 3600 samples per key.
 

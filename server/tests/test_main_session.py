@@ -2,7 +2,7 @@
 
 import asyncio
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 
 @pytest.fixture
@@ -254,3 +254,41 @@ class TestQuietCompletionOfCancelledFutures:
         for context in cases:
             main._quiet_completion_of_cancelled_futures(loop, context)
         assert loop.default_exception_handler.call_count == len(cases)
+
+
+class TestRegisterNodesRetry:
+    """A node whose registration fails is retried later, not given up on."""
+
+    def make_scanner(self, update_reg_list):
+        node = MagicMock(node_id=42, has_disappeared=False, has_appeared=True, has_registered_ports=True)
+        scanner = MagicMock()
+        scanner.nodes = {42: node}
+        scanner.node_service_types = {}
+        scanner.update_reg_list = update_reg_list
+        scanner.add_subscriptions = AsyncMock()
+        scanner.add_servers = AsyncMock()
+        return scanner
+
+    @pytest.mark.asyncio
+    async def test_failed_node_is_not_marked_registered(self):
+        from main import register_nodes
+        scanner = self.make_scanner(AsyncMock(side_effect=TimeoutError("no answer")))
+        registered, retry_at = set(), {}
+        await register_nodes(scanner, registered, retry_at)
+        assert registered == set()
+        assert 42 in retry_at
+
+    @pytest.mark.asyncio
+    async def test_retry_waits_then_succeeds(self):
+        from main import register_nodes
+        update = AsyncMock(side_effect=[TimeoutError("no answer"), ({1620: "t.T_1_0"}, {})])
+        scanner = self.make_scanner(update)
+        registered, retry_at = set(), {}
+        await register_nodes(scanner, registered, retry_at)
+        await register_nodes(scanner, registered, retry_at)  # still backing off
+        assert update.await_count == 1
+        retry_at[42] = 0.0  # backoff elapsed
+        await register_nodes(scanner, registered, retry_at)
+        assert registered == {42}
+        assert 42 not in retry_at
+        scanner.add_subscriptions.assert_awaited_once_with(42, {1620: "t.T_1_0"})
