@@ -12,6 +12,7 @@ def _make_session():
     s = MagicMock()
     s.is_running = False
     s.can_interface = None
+    s.can_bitrate = None
     s.telemetry = None
     s.bus_load = None
     s.last_error = None

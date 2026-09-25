@@ -919,6 +919,17 @@ body {
   font-size: 0.8125rem;
 }
 
+/* Bitrate for adapters Cynitor opens itself; a custom value sits beside the list. */
+.can-bitrate-row {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.can-bitrate-row input[type="number"] {
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+}
+
 .sidebar-action {
   width: 100%;
 }

@@ -52,6 +52,25 @@
               <span>Bus occupancy:<br/>standing room only</span>
             </div>
           </div>
+          <input id="canSpecInput" type="text" class="hidden" spellcheck="false" autocomplete="off"
+                 placeholder="e.g. pcan:PCAN_USBBUS1, slcan:COM5" aria-label="CAN interface" />
+          <div id="canBitrateRow" class="can-bitrate-row hidden">
+            <select id="canBitrateSelect" aria-label="CAN bitrate">
+              <option value="">Bitrate…</option>
+              <option value="1000000">1 Mbit/s</option>
+              <option value="800000">800 kbit/s</option>
+              <option value="500000">500 kbit/s</option>
+              <option value="250000">250 kbit/s</option>
+              <option value="125000">125 kbit/s</option>
+              <option value="100000">100 kbit/s</option>
+              <option value="50000">50 kbit/s</option>
+              <option value="20000">20 kbit/s</option>
+              <option value="10000">10 kbit/s</option>
+              <option value="custom">Custom…</option>
+            </select>
+            <input id="canBitrateCustom" type="number" class="hidden" min="1" max="1000000" step="1"
+                   placeholder="bit/s" aria-label="Custom CAN bitrate" />
+          </div>
           <button id="connectCanBtn" class="sidebar-action btn-primary">Connect</button>
         </div>
       </div>

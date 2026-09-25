@@ -298,6 +298,7 @@ def _make_session_for_rest(replay_db, is_running: bool = False):
     s = MagicMock()
     s.is_running = is_running
     s.can_interface = None
+    s.can_bitrate = None
     s.telemetry = None
     s.bus_load = None
     s.last_error = None

@@ -138,6 +138,86 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # The Windows job may create the release first; losing that race is fine.
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
-            || gh release create "$GITHUB_REF_NAME" --generate-notes
+            || gh release create "$GITHUB_REF_NAME" --generate-notes \
+            || gh release view "$GITHUB_REF_NAME" >/dev/null
+          gh release upload "$GITHUB_REF_NAME" packaging/out/* --clobber
+
+  windows:
+    name: Windows executable
+    # The older of the two runner images. The executable does not depend on
+    # the build machine's Windows version, and runs on Windows 10 and 11.
+    runs-on: windows-2022
+    permissions:
+      contents: write  # attach the executable to the Release on a tag build
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Check the tag matches the declared version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          declared=$(grep -m1 '^__version__' server/version.py | cut -d'"' -f2)
+          tagged="${GITHUB_REF_NAME#v}"
+          if [ "$declared" != "$tagged" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match server/version.py ($declared)."
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: server/requirements.txt
+
+      - name: Install build dependencies
+        # On Windows, requirements.txt also brings gs_usb and libusb-package,
+        # whose DLL the spec bundles for candleLight adapters.
+        run: pip install -r server/requirements.txt pyinstaller
+
+      - name: Compile DSDL
+        working-directory: server
+        run: python startup_setup.py --recompile
+
+      - name: Build the executable
+        working-directory: packaging
+        run: python -m PyInstaller cynitor-server.spec --noconfirm
+
+      - name: Smoke-test the executable
+        # Imports and DLLs PyInstaller could not see only fail on connect, so
+        # the test connects: to a gs_usb index no adapter has (libusb must
+        # load for that answer), and through the CAN hub to a virtual bus. It
+        # also checks the dashboard, the token, and that killing the
+        # bootloader does not leave the server holding its port.
+        shell: powershell
+        run: ./packaging/smoke-test.ps1
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          version=$(grep -m1 '^__version__' server/version.py | cut -d'"' -f2)
+          mkdir -p packaging/out
+          cp packaging/dist/cynitor-server.exe "packaging/out/cynitor-server-${version}-windows-x86_64.exe"
+          ls -lh packaging/out/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cynitor-server-windows
+          path: packaging/out/*
+          if-no-files-found: error
+
+      - name: Attach the executable to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The Linux job may create the release first; losing that race is fine.
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --generate-notes \
+            || gh release view "$GITHUB_REF_NAME" >/dev/null
           gh release upload "$GITHUB_REF_NAME" packaging/out/* --clobber

@@ -29,8 +29,21 @@ const bind = () => {
   el('connectCanBtn').addEventListener('click', connectCan);
   el('interfacesSelect').addEventListener('change', () => {
     state.preferredCanInterface = el('interfacesSelect').value;
+    updateCanForm({ restoreBitrate: true });
     saveSettings();
   });
+  el('canSpecInput').addEventListener('input', () => {
+    // Not restoring a remembered bitrate here: that would overwrite the one
+    // just chosen on every keystroke.
+    state.customCanSpec = el('canSpecInput').value.trim();
+    updateCanForm();
+    saveSettings();
+  });
+  el('canBitrateSelect').addEventListener('change', () => {
+    updateCanForm();
+    if (el('canBitrateSelect').value === 'custom') el('canBitrateCustom').focus();
+  });
+  el('canBitrateCustom').addEventListener('input', updateCanConnectButton);
   el('sidebarCollapseBtn').addEventListener('click', () => {
     const sidebar = document.querySelector('.sidebar');
     sidebar.classList.toggle('collapsed');

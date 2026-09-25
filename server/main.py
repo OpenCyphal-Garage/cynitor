@@ -13,11 +13,23 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from can_config import (
+    ALLOCATOR_NODE_ID,
+    is_socketcan,
+    normalize_can_iface,
+    resolve_bitrate,
+    socketcan_device,
+    validate_bitrate,
+)
+from can_discovery import AdapterCatalog, discover_adapters
+from can_hub import CANHub, HubBusLoad, pick_free_node_id
+from data_dir import ALLOCATOR_DB, EVENTS_DB, SCANNER_DB, prepare_data_dir, resolve_data_dir
 from log_store import InMemoryLogStore, APILogHandler
-from startup_setup import prepare_runtime, resolve_project_root
+from startup_setup import ensure_libusb_on_path, prepare_runtime, resolve_project_root
 from version import __version__
 
 IS_LINUX = sys.platform.startswith("linux")
+IS_WINDOWS = sys.platform == "win32"
 
 # Configure logging
 logging.basicConfig(
@@ -73,6 +85,10 @@ def discover_can_interfaces() -> list[str]:
         pass
 
     return sorted(interfaces)
+
+
+# SocketCAN interfaces plus every other adapter found, for the dashboard's list.
+adapter_catalog = AdapterCatalog(lambda: discover_adapters(discover_can_interfaces()))
 
 
 # ---------------------------------------------------------------------------
@@ -171,14 +187,22 @@ class BusLoadMonitor:
 class CANSession:
     """Manages the lifecycle of all CAN-dependent components."""
 
-    def __init__(self) -> None:
+    def __init__(self, default_bitrate: Optional[int] = None, data_dir: Path = Path(".")) -> None:
+        # Where the databases live; main() passes the resolved data folder.
+        self.data_dir = Path(data_dir)
+        # --bitrate, used when connect() is not given one. There is no built-in
+        # default: a guessed bitrate can disrupt the bus.
+        self.default_bitrate = None if default_bitrate is None else validate_bitrate(default_bitrate)
         self.can_interface: Optional[str] = None
+        self.can_bitrate: Optional[int] = None
         self.scanner = None
         self.telemetry = None
         self.allocator_manager = None
         self.event_logger = None
         self.frame_capture = None
         self.bus_load: Optional[BusLoadMonitor] = None
+        # Shares a non-SocketCAN adapter among the components; see can_hub.
+        self.hub: Optional[CANHub] = None
         self.registered_nodes: set[int] = set()
         self._tasks: list[asyncio.Task] = []
         self._lock = asyncio.Lock()
@@ -194,8 +218,15 @@ class CANSession:
     def is_running(self) -> bool:
         return self.scanner is not None
 
-    async def connect(self, can_iface: str, force_compile: bool = False) -> None:
-        """Start all CAN components."""
+    async def connect(self, can_iface: str, force_compile: bool = False,
+                      bitrate: Optional[int] = None) -> None:
+        """Start all CAN components.
+
+        `bitrate` is ignored by SocketCAN (set it with `ip link`) and required
+        for every other interface; None means `default_bitrate`. ValueError is
+        raised before anything is opened if it is missing or invalid.
+        """
+        bitrate = resolve_bitrate(can_iface, self.default_bitrate if bitrate is None else bitrate)
         # Fast-fail before the slow prepare_runtime step. The double-check inside
         # the lock guards against concurrent connect() calls that both passed
         # this check before prepare_runtime returned.
@@ -204,15 +235,33 @@ class CANSession:
         if self.replay is not None:
             raise RuntimeError("Replay session is active — stop it before connecting CAN")
 
+        spec = normalize_can_iface(can_iface)
+        if is_socketcan(spec):
+            if bitrate is not None:
+                logger.info("Connecting to %s; ignoring bitrate %d, SocketCAN's own setting applies", spec, bitrate)
+                bitrate = None
+            else:
+                logger.info("Connecting to %s (bitrate is set by SocketCAN, not by Cynitor)", spec)
+        else:
+            logger.info("Connecting to %s at %d bit/s", spec, bitrate)
+
         # prepare_runtime can take seconds (DSDL compile via nnvg, env setup).
         # Running it outside the lock keeps a concurrent disconnect() responsive
         # instead of blocking it behind a cold-start connect.
-        await asyncio.to_thread(prepare_runtime, can_iface, force_compile)
+        hub: Optional[CANHub] = None
+        if is_socketcan(spec):
+            await asyncio.to_thread(prepare_runtime, can_iface, force_compile, bitrate)
+        else:
+            hub = await self._open_hub(spec, bitrate, force_compile)
 
         async with self._lock:
             if self.is_running:
+                if hub is not None:
+                    await asyncio.to_thread(hub.stop)
                 raise RuntimeError("Already connected")
             self.last_error = None
+            # From here on _teardown owns the hub, including on failure below.
+            self.hub = hub
 
             try:
                 from scanner_node import ScannerNode
@@ -221,11 +270,14 @@ class CANSession:
                 from event_logger import EventLogger
 
                 logger.info("Initializing allocator manager...")
-                self.allocator_manager = AllocatorManager(check_interval=10.0, check_timeout=3.0)
+                self.allocator_manager = AllocatorManager(
+                    check_interval=10.0, check_timeout=3.0,
+                    register_file=str(self.data_dir / ALLOCATOR_DB),
+                )
                 await self.allocator_manager.start()
 
                 logger.info("Initializing ScannerNode...")
-                self.scanner = ScannerNode()
+                self.scanner = ScannerNode(register_file=str(self.data_dir / SCANNER_DB))
 
                 logger.info("Initializing TelemetryManager...")
                 self.telemetry = TelemetryManager(self.scanner)
@@ -239,7 +291,7 @@ class CANSession:
 
                 logger.info("Initializing EventLogger...")
                 self.event_logger = EventLogger(
-                    db_path="telemetry_events.db",
+                    db_path=self.data_dir / EVENTS_DB,
                     retention_seconds=86400.0,   # keep last 24h of bus traffic
                     max_events=5_000_000,        # safety cap; bounds disk
                 )
@@ -262,11 +314,17 @@ class CANSession:
                     asyncio.create_task(_register_loop(self.scanner, self.registered_nodes, self)),
                 ]
 
-                logger.info("Initializing BusLoadMonitor...")
-                self.bus_load = BusLoadMonitor(can_iface)
+                # canbusload reads a SocketCAN device; behind the hub, the
+                # hub counts the traffic itself.
+                logger.info("Initializing bus load monitor...")
+                if hub is None:
+                    self.bus_load = BusLoadMonitor(socketcan_device(can_iface))
+                else:
+                    self.bus_load = HubBusLoad(hub)
                 await self.bus_load.start()
 
                 self.can_interface = can_iface
+                self.can_bitrate = bitrate
                 logger.info("CAN session started on %s", can_iface)
             except Exception:
                 try:
@@ -274,6 +332,34 @@ class CANSession:
                 except Exception as cleanup_err:
                     logger.error("Cleanup error during failed connect: %s", cleanup_err)
                 raise
+
+    async def _open_hub(self, spec: str, bitrate: int, force_compile: bool) -> CANHub:
+        """Open a non-SocketCAN adapter once and point every component at the hub's channel.
+
+        Most such adapters admit a single open handle, and the allocator probe,
+        the allocator and the scanner each open the bus; see can_hub.
+        """
+        ensure_libusb_on_path()  # before gs_usb is opened, not just before yakut
+        hub = CANHub(spec, bitrate)
+        await asyncio.to_thread(hub.start)
+        try:
+            # `yakut accommodate` would run in a child process, which cannot
+            # see the hub's in-process channel, so pick the node-ID here.
+            if "UAVCAN__NODE__ID" not in os.environ:
+                node_id = await asyncio.to_thread(
+                    pick_free_node_id, hub.local_spec, frozenset({ALLOCATOR_NODE_ID}),
+                )
+                if node_id is None:
+                    logger.warning("Every node-ID is in use; the scanner will run anonymously")
+                else:
+                    os.environ["UAVCAN__NODE__ID"] = str(node_id)
+            await asyncio.to_thread(
+                prepare_runtime, hub.local_spec, force_compile, bitrate, False,
+            )
+        except BaseException:
+            await asyncio.to_thread(hub.stop)
+            raise
+        return hub
 
     async def disconnect(self) -> None:
         """Stop all CAN components (reverse order of connect)."""
@@ -311,7 +397,7 @@ class CANSession:
             # When CAN has never been connected this session it doesn't exist yet,
             # so we create a transient one bound to the same DB.
             from event_logger import EventLogger
-            self.event_logger = EventLogger(db_path="telemetry_events.db",
+            self.event_logger = EventLogger(db_path=self.data_dir / EVENTS_DB,
                                             retention_seconds=86400.0,
                                             max_events=5_000_000)
             await self.event_logger.start()
@@ -371,8 +457,13 @@ class CANSession:
         if self.scanner:
             self.scanner.close()
             self.scanner = None
+        # Last: everything above talks to the adapter through it.
+        if self.hub:
+            await asyncio.to_thread(self.hub.stop)
+            self.hub = None
         self.registered_nodes.clear()
         self.can_interface = None
+        self.can_bitrate = None
 
         logger.info("CAN session stopped")
 
@@ -532,6 +623,21 @@ def _check_can_health(iface: str) -> Optional[str]:
     return None
 
 
+async def _session_health_error(session: 'CANSession') -> Optional[str]:
+    """Why the session's CAN link has become unusable, or None if it is fine.
+
+    An adapter behind the hub reports through the hub, which also notices a
+    CANable being unplugged; SocketCAN is checked through the kernel, by
+    device name rather than spec.
+    """
+    if session.hub is not None:
+        return await asyncio.to_thread(session.hub.health)
+    error = await asyncio.to_thread(_check_can_health, socketcan_device(session.can_interface))
+    if not error and session.bus_load and not session.bus_load.is_alive:
+        error = "CAN bus monitor process exited unexpectedly"
+    return error
+
+
 async def _register_loop(scanner, registered_nodes: set[int], session: 'CANSession' = None) -> None:
     health_check_counter = 0
     try:
@@ -542,9 +648,7 @@ async def _register_loop(scanner, registered_nodes: set[int], session: 'CANSessi
             if session and session.can_interface and health_check_counter >= 3:
                 health_check_counter = 0
 
-                error = await asyncio.to_thread(_check_can_health, session.can_interface)
-                if not error and session.bus_load and not session.bus_load.is_alive:
-                    error = "CAN bus monitor process exited unexpectedly"
+                error = await _session_health_error(session)
 
                 if error:
                     session.schedule_fatal_disconnect(error)
@@ -594,11 +698,20 @@ async def attach_or_fall_back(session, can_iface: str, force_compile: bool = Fal
             available = []
         if available:
             logger.warning("Available CAN interfaces: %s", ", ".join(available))
-        else:
+        elif IS_LINUX:
             logger.warning(
                 "No CAN interfaces found. Create a virtual one with: "
                 "sudo modprobe vcan && sudo ip link add dev vcan0 type vcan "
                 "&& sudo ip link set up vcan0"
+            )
+        else:
+            # Only SocketCAN is discovered so far, so off Linux the list is
+            # always empty and the adapter has to be named explicitly.
+            logger.warning(
+                "CAN adapters are not listed automatically on this OS. Name the "
+                "python-can interface and channel instead, e.g. gs_usb:0 "
+                "(CANable/candleLight), pcan:PCAN_USBBUS1, slcan:COM5@115200 "
+                "or kvaser:0, and set the bus speed with --bitrate."
             )
         logger.warning("Continuing in selection mode — pick an interface in the dashboard.")
         return False
@@ -633,14 +746,51 @@ def show_token_on_terminal(token: str, stream=None) -> bool:
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _quiet_completion_of_cancelled_futures(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+    """Drop one known-harmless asyncio error; hand everything else to the default handler.
+
+    pycyphal's python-can media (1.27.1) completes each send's future from its
+    transmit thread with call_soon_threadsafe(future.set_result). If the task
+    that was awaiting the send is cancelled meanwhile -- as happens on a
+    disconnect with a send in flight -- the future is already cancelled, and
+    asyncio logs "InvalidStateError: invalid state" with a traceback. Nothing
+    is lost: the send had been abandoned.
+
+    Only that case is dropped: an InvalidStateError from a callback that
+    completes a future (set_result / set_exception) which is cancelled.
+    """
+    callback = getattr(context.get("handle"), "_callback", None)
+    completer = getattr(callback, "func", None)  # functools.partial(future.set_result, ...)
+    future = getattr(completer, "__self__", None)
+    if (isinstance(context.get("exception"), asyncio.InvalidStateError)
+            and getattr(completer, "__name__", None) in ("set_result", "set_exception")
+            and isinstance(future, asyncio.Future) and future.cancelled()):
+        logger.debug("Ignored completion of an already cancelled future: %s", context.get("handle"))
+        return
+    loop.default_exception_handler(context)
+
+
 async def main(can_iface: Optional[str] = None, force_compile: bool = False, bind: str = "127.0.0.1",
-               port: int = 8080, serve_frontend: bool = True) -> None:
+               port: int = 8080, serve_frontend: bool = True,
+               can_bitrate: Optional[int] = None, data_dir: Optional[str] = None) -> None:
     from websocket_server import WebSocketServer
     from dsdl_manager import DsdlManager
 
-    session = CANSession()
+    asyncio.get_running_loop().set_exception_handler(_quiet_completion_of_cancelled_futures)
+
+    data_path = resolve_data_dir(data_dir)
+    try:
+        moved = prepare_data_dir(data_path, legacy_dir=Path.cwd())
+    except OSError as exc:
+        logger.error("Cannot use %s as the data folder: %s. Choose another with --data-dir.", data_path, exc)
+        raise SystemExit(1) from None
+    if moved:
+        logger.info("Moved %s from %s into the data folder", ", ".join(moved), Path.cwd())
+
+    session = CANSession(default_bitrate=can_bitrate, data_dir=data_path)
     project_root = resolve_project_root()
-    dsdl_mgr = DsdlManager(project_root)
+    dsdl_mgr = DsdlManager(project_root, data_dir=data_path)
+    dsdl_mgr.make_importable()
 
     # Optional bearer-token auth. When CYNITOR_AUTH_TOKEN is set in the
     # environment, every REST/WS request outside /api/health must present
@@ -660,6 +810,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
         # API-only deployments, and a checkout without website/ is API-only
         # regardless.
         website_dir=(project_root / "website") if serve_frontend else None,
+        adapter_catalog=adapter_catalog,
     )
     await ws_server.start()
 
@@ -668,6 +819,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("=" * 60)
     logger.info("Bound to:    %s:%d", bind, port)
     logger.info("Auth:        %s", "token required (CYNITOR_AUTH_TOKEN set)" if auth_token else "OPEN (no token)")
+    logger.info("Data:        %s", data_path)
     show_token_on_terminal(auth_token)
     if bind == "0.0.0.0" and not auth_token:
         logger.warning("Server is bound to 0.0.0.0 with NO auth — reachable from any network peer. Set CYNITOR_AUTH_TOKEN to require a bearer token.")
@@ -686,9 +838,11 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
         logger.info("Mode:        selection  (waiting for the UI or POST /api/can/connect)")
     logger.info("-" * 60)
     logger.info("Startup options:")
-    logger.info("  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0)")
+    logger.info("  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0, gs_usb:0, pcan:PCAN_USBBUS1)")
+    logger.info("  --bitrate <n>    bus speed in bit/s; required with --can for any adapter except SocketCAN")
     logger.info("  --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)")
     logger.info("  --port <n>       listen on <n> instead of 8080")
+    logger.info("  --data-dir <dir> keep history, recordings and node-IDs in <dir>")
     logger.info("  --recompile      force DSDL recompilation via nnvg")
     logger.info("  --no-frontend    serve only the API and WebSocket, not the dashboard")
     logger.info("  --help           full reference")
@@ -732,9 +886,11 @@ def _exit_when_parent_dies() -> None:
     started it and keeps holding port 8080. The next start would then find a
     stale server answering on the port it wanted.
 
-    Linux only; a no-op elsewhere.
+    Linux and Windows (see _exit_when_windows_parent_dies); a no-op elsewhere.
     """
     if not IS_LINUX:
+        if IS_WINDOWS:
+            _exit_when_windows_parent_dies()
         return
     original_ppid = os.getppid()
     try:
@@ -758,13 +914,74 @@ def _exit_when_parent_dies() -> None:
         raise SystemExit(0)
 
 
+def _exit_when_windows_parent_dies() -> None:
+    """Windows counterpart of the parent-death signal: watch the bootloader.
+
+    Windows has no such signal, and killing the bootloader of the frozen
+    binary leaves this interpreter running and holding its port, as on Linux.
+    A thread waits on the parent's process handle instead, and when it ends,
+    delivers SIGTERM to the main thread, which the handler installed in
+    __main__ turns into the usual orderly shutdown.
+
+    Frozen builds only. There the parent is the bootloader, which waits for us
+    and so is certainly still the process that started us; run from a shell,
+    the parent could be anything, and closing a console ends us anyway.
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        import _thread
+        import ctypes
+        import threading
+        from ctypes import wintypes
+
+        SYNCHRONIZE = 0x00100000
+        INFINITE = 0xFFFFFFFF
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        parent = kernel32.OpenProcess(SYNCHRONIZE, False, os.getppid())
+    except Exception as exc:
+        logger.debug("Parent-death cleanup unavailable: %s", exc)
+        return
+    if not parent:
+        logger.debug("Parent-death cleanup unavailable: OpenProcess failed (%d)", ctypes.get_last_error())
+        return
+
+    def wait_for_parent() -> None:
+        kernel32.WaitForSingleObject(parent, INFINITE)
+        logger.warning("Parent process exited; shutting down")
+        _thread.interrupt_main(signal.SIGTERM)
+
+    threading.Thread(target=wait_for_parent, name="parent-watch", daemon=True).start()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the telemetry server")
     parser.add_argument("--version", action="version", version=f"cynitor-server {__version__}")
     parser.add_argument(
         "--can",
         default=None,
-        help="CAN interface name (if omitted, select from the UI)",
+        help="CAN interface: a SocketCAN name (vcan0, can0) or a python-can spec "
+             "such as gs_usb:0, pcan:PCAN_USBBUS1, slcan:COM5@115200 "
+             "(if omitted, select from the UI)",
+    )
+
+    def _bitrate_arg(text: str) -> int:
+        try:
+            return validate_bitrate(int(text))
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(str(exc)) from None
+
+    parser.add_argument(
+        "--bitrate",
+        type=_bitrate_arg,
+        default=None,
+        help="CAN bitrate in bit/s; must match the bus. Required with --can for every "
+             "adapter Cynitor opens itself (PCAN, gs_usb, slcan, Kvaser, ...). Ignored "
+             "for SocketCAN, whose bitrate is set with `ip link`.",
     )
     parser.add_argument(
         "--recompile",
@@ -783,11 +1000,27 @@ if __name__ == "__main__":
         help="TCP port to listen on (default: 8080)",
     )
     parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="Folder for history, recordings and the allocator's node-ID table "
+             "(default: CYNITOR_DATA_DIR, else the per-user data folder: "
+             "%%LOCALAPPDATA%%\\Cynitor, ~/.local/share/cynitor, or "
+             "~/Library/Application Support/Cynitor). Data found in the current "
+             "directory from earlier versions is moved there once.",
+    )
+    parser.add_argument(
         "--no-frontend",
         action="store_true",
         help="Serve only the REST API and WebSocket; do not serve the dashboard",
     )
     args = parser.parse_args()
+    if args.can:
+        # Refuse up front rather than start and fall back to selection mode:
+        # the fix is on the command line, not in the dashboard.
+        try:
+            resolve_bitrate(args.can, args.bitrate)
+        except ValueError as exc:
+            parser.error(f"{exc}. Pass it with --bitrate.")
 
     signal.signal(signal.SIGTERM, _shutdown_on_sigterm)
     _exit_when_parent_dies()
@@ -799,6 +1032,8 @@ if __name__ == "__main__":
             bind=args.bind,
             port=args.port,
             serve_frontend=not args.no_frontend,
+            can_bitrate=args.bitrate,
+            data_dir=args.data_dir,
         ))
     except KeyboardInterrupt:
         logger.info("Interrupted by user")

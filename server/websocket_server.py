@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Optional, Set, Any
 from aiohttp import web, WSCloseCode
 
+from can_config import is_explicit_spec, is_socketcan, resolve_bitrate, socketcan_device
+
 
 def _csv_escape(value: Any) -> str:
     """Escape a value for inclusion in a CSV cell."""
@@ -104,6 +106,7 @@ class WebSocketServer:
         dsdl_manager: Optional[Any] = None,
         auth_token: Optional[str] = None,
         website_dir: Optional[Path] = None,
+        adapter_catalog: Optional[Any] = None,
     ) -> None:
         self.session = session
         self.host = host
@@ -119,6 +122,9 @@ class WebSocketServer:
         # (WebSocket). When None, the server runs open — same behaviour as
         # before this option was added.
         self.auth_token = auth_token or None
+        # can_discovery.AdapterCatalog: the adapters the dashboard may offer
+        # besides SocketCAN. None lists none (and scans nothing), as in tests.
+        self.adapter_catalog = adapter_catalog
 
         # Client management
         self.clients: Set[web.WebSocketResponse] = set()
@@ -130,7 +136,9 @@ class WebSocketServer:
 
         # App and runner. Auth middleware runs first so unauthorized requests
         # never reach the CORS layer or the handlers.
-        self.app = web.Application(middlewares=[self._auth_middleware, self._cors_middleware])
+        self.app = web.Application(middlewares=[
+            self._auth_middleware, self._cors_middleware, self._dashboard_cache_middleware,
+        ])
         self.runner: Optional[web.AppRunner] = None
         self._running = False
 
@@ -173,6 +181,21 @@ class WebSocketServer:
         return qs.strip() if qs else None
 
     @web.middleware
+    async def _dashboard_cache_middleware(self, request: web.Request, handler: Any) -> web.StreamResponse:
+        """Make browsers check the dashboard's files for changes before reusing them.
+
+        Without a caching header, browsers reuse a file for as long as their
+        own heuristics allow, so after an upgrade a page could keep running
+        old JavaScript against the new API. no-cache still allows caching:
+        each use is revalidated, and an unchanged file costs a 304 thanks to
+        the ETag and Last-Modified headers aiohttp sends for files.
+        """
+        response = await handler(request)
+        if not self._is_protected_path(request.path):
+            response.headers.setdefault("Cache-Control", "no-cache")
+        return response
+
+    @web.middleware
     async def _cors_middleware(self, request: web.Request, handler: Any) -> web.StreamResponse:
         if request.method == "OPTIONS":
             response = web.Response()
@@ -208,6 +231,7 @@ class WebSocketServer:
         self.app.router.add_get('/api/services/{service_id}/history', self._get_service_call_history)
         self.app.router.add_get('/api/identity-map', self._get_identity_map)
         self.app.router.add_delete('/api/identity/{unique_id}', self._delete_identity)
+        self.app.router.add_get('/api/can/adapters', self._get_adapters)
         self.app.router.add_post('/api/can/connect', self._can_connect)
         self.app.router.add_post('/api/can/disconnect', self._can_disconnect)
         self.app.router.add_get('/api/can/transport', self._get_transport_diagnostics)
@@ -292,6 +316,16 @@ class WebSocketServer:
     # CAN connect / disconnect
     # ------------------------------------------------------------------
 
+    async def _list_adapters(self, refresh: bool = False) -> list[dict]:
+        if self.adapter_catalog is None:
+            return []
+        # While connected, the last list is served as is: probing a USB
+        # adapter the session holds tells nothing new and may disturb it.
+        adapters = await asyncio.to_thread(
+            self.adapter_catalog.get, refresh, not self.session.is_running,
+        )
+        return [adapter.as_dict() for adapter in adapters]
+
     async def _get_status(self, request: web.Request) -> web.Response:
         from main import discover_can_interfaces
         bus_load = self.session.bus_load
@@ -299,10 +333,17 @@ class WebSocketServer:
         return web.json_response({
             "status": "running" if self.session.is_running else "idle",
             "can_interface": self.session.can_interface,
+            # None for SocketCAN, whose bitrate the kernel sets.
+            "can_bitrate": self.session.can_bitrate,
             "available_interfaces": available,
+            "available_adapters": await self._list_adapters(),
             "bus_utilization": bus_load.utilization if bus_load else None,
             "last_error": self.session.last_error,
         })
+
+    async def _get_adapters(self, request: web.Request) -> web.Response:
+        refresh = request.query.get("refresh", "").lower() in ("1", "true", "yes")
+        return web.json_response({"adapters": await self._list_adapters(refresh=refresh)})
 
     async def _can_connect(self, request: web.Request) -> web.Response:
         from main import discover_can_interfaces
@@ -315,18 +356,30 @@ class WebSocketServer:
         if not iface:
             return web.json_response({"error": "Field 'interface' required"}, status=400)
 
+        # Required for every adapter except SocketCAN; the server's --bitrate,
+        # if it was started with one, stands in when the request has none.
+        bitrate = payload.get("bitrate")
+        try:
+            resolve_bitrate(iface, self.session.default_bitrate if bitrate is None else bitrate)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+
         if self.session.is_running:
             return web.json_response({"error": "Already connected"}, status=409)
 
-        available = await asyncio.to_thread(discover_can_interfaces)
-        if iface not in available:
-            return web.json_response(
-                {"error": f"Unknown interface: {iface}", "available_interfaces": available},
-                status=400,
-            )
+        # Only bare SocketCAN names can be checked against discovery. A spec
+        # such as "gs_usb:0" names an adapter that discovery does not list yet
+        # (and never does off Linux), so opening it is the only real check.
+        if not is_explicit_spec(iface):
+            available = await asyncio.to_thread(discover_can_interfaces)
+            if iface not in available:
+                return web.json_response(
+                    {"error": f"Unknown interface: {iface}", "available_interfaces": available},
+                    status=400,
+                )
 
         try:
-            await self.session.connect(iface)
+            await self.session.connect(iface, bitrate=bitrate)
             return web.json_response({"status": "running", "can_interface": iface})
         except Exception as e:
             logger.error(f"Failed to connect CAN: {e}", exc_info=True)
@@ -342,6 +395,7 @@ class WebSocketServer:
         return web.json_response({
             "status": "idle",
             "available_interfaces": available,
+            "available_adapters": await self._list_adapters(refresh=True),
         })
 
     async def _get_transport_diagnostics(self, request: web.Request) -> web.Response:
@@ -359,7 +413,14 @@ class WebSocketServer:
 
         info = self.session.scanner.get_transport_info()
         iface = self.session.can_interface
-        link = await asyncio.to_thread(get_can_link_diagnostics, iface) if iface else {}
+        # iproute2 only knows SocketCAN devices; an adapter behind the hub
+        # reports what the hub knows about it instead.
+        if self.session.hub is not None:
+            link = self.session.hub.link_diagnostics()
+        elif iface and is_socketcan(iface):
+            link = await asyncio.to_thread(get_can_link_diagnostics, socketcan_device(iface))
+        else:
+            link = {}
         bus_load = self.session.bus_load
         return web.json_response({
             "connected": True,
@@ -1207,6 +1268,7 @@ class WebSocketServer:
                     "/api": "API information (this endpoint)",
                     "/api/status": "Server status, CAN interface, available interfaces",
                     "/api/health": "Server health check",
+                    "/api/can/adapters": "GET - CAN adapters to connect to (?refresh=1 rescans)",
                     "/api/can/connect": "POST - Connect to a CAN interface",
                     "/api/can/disconnect": "POST - Disconnect from CAN interface",
                     "/api/can/transport": "Transport-layer diagnostics (MTU, frame stats, bus state)",
@@ -1504,7 +1566,7 @@ class WebSocketServer:
             full_name = f"{namespace}.{type_name}.{version}"
             if self.dsdl_manager.is_compiled(full_name):
                 return web.json_response(
-                    {"error": f"Cannot edit '{full_name}': type is already compiled. Recompile or clear python_compiled_messages first."},
+                    {"error": f"Cannot edit '{full_name}': type is already compiled. Delete it and save it again, or save it under a new version."},
                     status=409,
                 )
         try:
