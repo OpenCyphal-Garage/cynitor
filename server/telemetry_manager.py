@@ -30,8 +30,11 @@ class TelemetryManager:
         # Latest telemetry by node_id then subject_id
         self.latest_by_node: dict[int, dict[int, dict[str, Any]]] = defaultdict(dict)
 
-        # Async subscribers (queues)
-        self.subscribers: set[asyncio.Queue] = set()
+        # Async subscribers: queue -> label ("logger", "client", ...)
+        self.subscribers: dict[asyncio.Queue, str] = {}
+
+        # Events discarded because a subscriber's queue was full, by label
+        self.dropped: dict[str, int] = defaultdict(int)
 
         # Manager control
         self._running = False
@@ -62,18 +65,19 @@ class TelemetryManager:
                 pass
         logger.info("TelemetryManager stopped")
 
-    def subscribe(self, max_queue: int = 100) -> asyncio.Queue:
+    def subscribe(self, max_queue: int = 100, label: str = "client") -> asyncio.Queue:
         """
         Create a queue that receives telemetry events.
         
         Args:
             max_queue: Maximum size of the event queue.
+            label: Name under which events this queue misses are counted in ``dropped``.
         
         Returns:
             asyncio.Queue subscribed to telemetry events.
         """
         queue: asyncio.Queue = asyncio.Queue(maxsize=max_queue)
-        self.subscribers.add(queue)
+        self.subscribers[queue] = label
         logger.debug(f"New subscriber added (total: {len(self.subscribers)})")
         return queue
 
@@ -84,7 +88,7 @@ class TelemetryManager:
         Args:
             queue: The queue to unsubscribe.
         """
-        self.subscribers.discard(queue)
+        self.subscribers.pop(queue, None)
         logger.debug(f"Subscriber removed (total: {len(self.subscribers)})")
 
     def get_latest_subject(self, subject_id: int) -> Optional[dict[str, Any]]:
@@ -303,17 +307,18 @@ class TelemetryManager:
         """
         dead_subscribers = []
 
-        for queue in self.subscribers:
+        for queue, label in self.subscribers.items():
             try:
                 if queue.full():
                     queue.get_nowait()
+                    self.dropped[label] += 1
                 queue.put_nowait(event)
             except Exception as e:
                 logger.error(f"Error broadcasting to queue: {e}")
                 dead_subscribers.append(queue)
 
         for queue in dead_subscribers:
-            self.subscribers.discard(queue)
+            self.subscribers.pop(queue, None)
             logger.debug("Removed dead subscriber")
 
     @classmethod

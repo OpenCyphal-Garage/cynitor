@@ -53,6 +53,7 @@ const state = {
   wsThroughput: 0,
   lastWsMessageMs: 0,
   busUtilization: null,
+  droppedEvents: null,   // {scanner, logger, clients} from /api/status, null when not on CAN
   busLoadHistory: [],
   _busFullArmed: true,
   tableSort: { key: 'id', dir: 'asc' },

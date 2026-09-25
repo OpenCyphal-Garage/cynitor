@@ -91,6 +91,7 @@ class ScannerNode:
         self.subject_attributes: dict[int, list[str]] = {}                # Maps subject_id to list of attribute names
         self.publishers_subscribers: dict[int, pycyphal.application.Subscriber] = {}
         self.message_queue: asyncio.Queue = asyncio.Queue(maxsize=self.MESSAGE_QUEUE_SIZE)
+        self.dropped_events = 0  # events discarded because message_queue was full
         self.active_publishers: dict[int, set] = {}                        # Maps subject_id to set of publisher node_ids
         self.services: set[str] = set()
         self.service_metadata = {}  # (node_id, service_id) -> {"namespace": str, "service_name": str}
@@ -1094,6 +1095,7 @@ class ScannerNode:
             self.message_queue.put_nowait(event)
         except asyncio.QueueFull:
             self.message_queue.get_nowait()
+            self.dropped_events += 1
             await self.message_queue.put(event)
 
     async def _publisher_callback(self, msg, transfer: pycyphal.transport.TransferFrom, subject_id: int) -> None:

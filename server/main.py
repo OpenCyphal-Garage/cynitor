@@ -308,7 +308,7 @@ class CANSession:
                 self.scanner.on_node_event = self.event_logger.log_node_event
                 self.scanner.on_node_data_save = self.event_logger.save_node_data
 
-                logger_queue = self.telemetry.subscribe(max_queue=100)
+                logger_queue = self.telemetry.subscribe(max_queue=5000, label="logger")
                 self._tasks = [
                     asyncio.create_task(_event_logger_loop(self.event_logger, logger_queue)),
                     asyncio.create_task(_register_loop(self.scanner, self.registered_nodes, self)),
@@ -365,6 +365,22 @@ class CANSession:
         """Stop all CAN components (reverse order of connect)."""
         async with self._lock:
             await self._teardown()
+
+    def dropped_events(self) -> Optional[dict[str, int]]:
+        """Decoded events discarded because a queue was full, by where they were lost.
+
+        ``scanner``: before reaching anything. ``logger``: missing from history
+        and recordings. ``clients``: missing from a dashboard's live view.
+        None when CAN is not connected.
+        """
+        if not self.is_running or not self.scanner or not self.telemetry:
+            return None
+        return {
+            "scanner": self.scanner.dropped_events,
+            "logger": self.telemetry.dropped["logger"]
+                      + (self.event_logger.dropped_events if self.event_logger else 0),
+            "clients": self.telemetry.dropped["client"],
+        }
 
     def rescan_registrations(self) -> None:
         """Force the register loop to re-attempt every appeared node on its next tick.

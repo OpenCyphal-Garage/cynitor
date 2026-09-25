@@ -309,9 +309,12 @@ Response:
         {"interface": "pcan:PCAN_USBBUS1", "label": "PEAK PCAN_USBBUS1", "needs_bitrate": true}
     ],
     "bus_utilization": 3.0,
+    "dropped": {"scanner": 0, "logger": 0, "clients": 12},
     "last_error": null
 }
 ```
+
+`dropped` counts decoded messages discarded since the CAN connection opened because a queue was full: `scanner` before reaching anything, `logger` missing from the 24 h history and from recordings, `clients` missing from some dashboard's live view (each open dashboard has its own 100-event queue). `null` when not connected to CAN. The dashboard shows the total next to the CAN message rate.
 
 `status` is `"running"` when connected to CAN, `"idle"` otherwise. `last_error` contains the error message if CAN was auto-disconnected due to a bus fault. `can_bitrate` is the bitrate Cynitor opened the adapter at, or `null` for SocketCAN, whose bitrate the kernel sets.
 
@@ -1090,7 +1093,7 @@ Events are automatically logged to `telemetry_events.db`. The `events` table has
 - `attributes` (JSON)
 - `created_at` (database timestamp)
 
-**Retention.** The global `events` table is pruned by **time-based retention** (default 24 hours). A hard event-count cap (`max_events`, default 5,000,000) acts as a safety net only — it bounds disk if rate × retention would otherwise blow past it. Pruning runs every 1000 writes; configure both via `EventLogger(retention_seconds=..., max_events=...)`.
+**Retention.** The global `events` table is pruned by **time-based retention** (default 24 hours). A hard event-count cap (`max_events`, default 5,000,000) acts as a safety net only — it bounds disk if rate × retention would otherwise blow past it. Events are written in transactions of up to 500 (about 20,000 events/s on an SSD). Pruning runs every 1000 writes; configure both via `EventLogger(retention_seconds=..., max_events=...)`.
 
 Per-recording event stores (`recording_events`) are **not** subject to retention — they only grow until the recording is deleted (with `?purge=true`) or stopped. Recording rows survive global retention by definition.
 

@@ -146,3 +146,18 @@ class TestTelemetryLoop:
         await asyncio.sleep(0.1)
         await manager.stop()
         assert not q.empty()
+
+
+class TestDroppedCounts:
+
+    @pytest.mark.asyncio
+    async def test_drops_are_counted_by_subscriber_label(self, manager):
+        client = manager.subscribe(max_queue=1)
+        logger_q = manager.subscribe(max_queue=3, label="logger")
+        for i in range(4):
+            await manager._broadcast({"subject_id": i})
+        assert manager.dropped["client"] == 3
+        assert manager.dropped["logger"] == 1
+        # The newest event is the one kept.
+        assert client.get_nowait()["subject_id"] == 3
+        assert logger_q.qsize() == 3

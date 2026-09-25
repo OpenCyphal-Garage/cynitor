@@ -338,6 +338,7 @@ class WebSocketServer:
             "available_interfaces": available,
             "available_adapters": await self._list_adapters(),
             "bus_utilization": bus_load.utilization if bus_load else None,
+            "dropped": self.session.dropped_events(),
             "last_error": self.session.last_error,
         })
 

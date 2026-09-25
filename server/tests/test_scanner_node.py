@@ -279,3 +279,17 @@ class TestInfoRefresh:
         assert not node._info_due(info, now)
         info.last_info_attempt = now - datetime.timedelta(seconds=ScannerNode.INFO_REFRESH_S + 1)
         assert node._info_due(info, now)
+
+
+class TestQueueDrops:
+    @pytest.mark.asyncio
+    async def test_full_message_queue_counts_dropped_events(self):
+        node = make_rate_node()
+        node.message_queue = asyncio.Queue(maxsize=2)
+        node.dropped_events = 0
+        node.identity_map = MagicMock(get_uid=MagicMock(return_value=None))
+        node._get_node_unique_id_hex = lambda _nid: None
+        for i in range(5):
+            await node._queue_event(i, "T_1_0", [], publisher_node_id=1)
+        assert node.dropped_events == 3
+        assert [node.message_queue.get_nowait()["subject_id"] for _ in range(2)] == [3, 4]

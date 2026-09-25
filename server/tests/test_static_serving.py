@@ -22,6 +22,7 @@ def _make_session():
     s.telemetry = None
     s.bus_load = None
     s.last_error = None
+    s.dropped_events.return_value = None
     s.replay = None
     s.event_logger = None
     s.connect = AsyncMock()

@@ -138,11 +138,23 @@ const updateSemaphores = () => {
       const rate = getTotalMessageRate();
       const util = state.busUtilization;
       const utilStr = util != null ? ` · ${util}% load` : '';
-      canInfo.textContent = `${rate.toFixed(1)} msg/s${utilStr}`;
+      const dropped = state.droppedEvents;
+      const droppedTotal = dropped ? dropped.scanner + dropped.logger + dropped.clients : 0;
+      const dropStr = droppedTotal > 0 ? ` · ${droppedTotal} dropped` : '';
+      canInfo.textContent = `${rate.toFixed(1)} msg/s${utilStr}${dropStr}`;
+      canInfo.title = droppedTotal > 0
+        ? `Messages lost because the backend could not keep up — before decoding: ${dropped.scanner}, `
+          + `from history/recordings: ${dropped.logger}, from dashboard views: ${dropped.clients}`
+        : '';
       canInfo.classList.remove('hidden');
       canInfo.classList.remove('load-ok', 'load-warn', 'load-err', 'load-crit');
       if (util != null) {
         canInfo.classList.add(util > 100 ? 'load-crit' : util >= 80 ? 'load-err' : util >= 50 ? 'load-warn' : 'load-ok');
+      }
+      // Lost data outranks a healthy load reading.
+      if (droppedTotal > 0 && (util == null || util < 50)) {
+        canInfo.classList.remove('load-ok');
+        canInfo.classList.add('load-warn');
       }
     } else {
       canInfo.classList.add('hidden');
@@ -532,6 +544,7 @@ const disconnectAll = ({ persist = true } = {}) => {
   state.dashboardConnected = false;
   state.canConnected = false;
   state.busUtilization = null;
+  state.droppedEvents = null;
   state.busLoadHistory.length = 0;
   drawBusLoadSparkline();
   state.latestBySubject.clear();
@@ -579,6 +592,7 @@ const pollStatus = async () => {
   }
 
   state.busUtilization = data.bus_utilization ?? null;
+  state.droppedEvents = data.dropped ?? null;
 
   const backendCanRunning = data.status === 'running' && !!data.can_interface;
 
@@ -595,6 +609,7 @@ const pollStatus = async () => {
     // CAN disconnected (by another client or due to error)
     state.canConnected = false;
     state.busUtilization = null;
+    state.droppedEvents = null;
     REG_CACHE.clear();
     updateCanConnectButton();
     stopCanStartupDelay();

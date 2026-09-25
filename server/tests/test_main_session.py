@@ -2,7 +2,7 @@
 
 import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 
 @pytest.fixture
@@ -292,3 +292,20 @@ class TestRegisterNodesRetry:
         assert registered == {42}
         assert 42 not in retry_at
         scanner.add_subscriptions.assert_awaited_once_with(42, {1620: "t.T_1_0"})
+
+
+class TestDroppedEvents:
+
+    def test_none_when_not_connected(self):
+        from main import CANSession
+        assert CANSession().dropped_events() is None
+
+    def test_sums_logger_drops_from_both_queues(self):
+        from collections import defaultdict
+        from main import CANSession
+        s = CANSession()
+        s.scanner = MagicMock(dropped_events=1)
+        s.telemetry = MagicMock(dropped=defaultdict(int, {"logger": 2, "client": 7}))
+        s.event_logger = MagicMock(dropped_events=3)
+        with patch.object(CANSession, "is_running", new_callable=PropertyMock, return_value=True):
+            assert s.dropped_events() == {"scanner": 1, "logger": 5, "clients": 7}

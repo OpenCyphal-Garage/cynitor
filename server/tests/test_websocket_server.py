@@ -21,6 +21,7 @@ def _make_session(is_running=False, can_interface=None):
     session.telemetry = None
     session.bus_load = None
     session.last_error = None
+    session.dropped_events.return_value = None
     session.replay = None
     session.event_logger = None
     session.connect = AsyncMock()
@@ -809,6 +810,13 @@ class TestAdapterListing:
             "interface": "gs_usb:0", "label": "CANable 0", "needs_bitrate": True,
         }
         assert data["can_bitrate"] is None
+
+    @pytest.mark.asyncio
+    async def test_status_reports_dropped_events(self, listing_client, session):
+        session.dropped_events.return_value = {"scanner": 0, "logger": 4, "clients": 1}
+        with patch("main.discover_can_interfaces", return_value=[]):
+            data = await (await listing_client.get("/api/status")).json()
+        assert data["dropped"] == {"scanner": 0, "logger": 4, "clients": 1}
 
     @pytest.mark.asyncio
     async def test_refresh_query_forces_a_rescan(self, listing_client, catalog):
