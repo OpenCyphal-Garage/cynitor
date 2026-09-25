@@ -27,8 +27,8 @@ TelemetryManager (pub-sub router)
 ✅ **CORS Support** - Ready for web dashboard integration  
 ✅ **Clean Shutdown** - Graceful WebSocket disconnect and logger queue flush  
 ✅ **Allocator Guard** - Reuses external allocator if present, otherwise starts local allocator and re-checks every 10s
-✅ **CAN Health Monitoring** - Detects CAN bus faults (BUS-OFF, ERROR-PASSIVE, interface disappearance) and auto-disconnects
-✅ **Bus Load Monitoring** - Real-time CAN bus utilization via `canbusload` subprocess, streamed to clients via WebSocket  
+✅ **CAN Health Monitoring** - Detects CAN bus faults (BUS-OFF, ERROR-PASSIVE, interface disappearance on SocketCAN; a failing or unplugged adapter otherwise) and auto-disconnects
+✅ **Bus Load Monitoring** - Real-time CAN bus utilization via `canbusload` subprocess on SocketCAN, or counted from the forwarded frames for other adapters, streamed to clients via WebSocket  
 ✅ **Register Access** - Read and write Cyphal node registers via REST API  
 ✅ **Offline Node Detection** - Tracks node disappearance with `last_seen` timestamps and stale state handling  
 ✅ **Node History** - Lifecycle event tracking (health changes, mode changes, service calls) with 30-day retention  
@@ -103,6 +103,8 @@ When a `website/` directory is present next to the server (a source checkout, or
 
 These are registered after the API routes, so `/api/*` and `/ws` always win over the catch-all static mount.
 
+They are sent with `Cache-Control: no-cache`, so a browser checks for a newer version before reusing a cached file (an unchanged file costs a `304`). After an upgrade the dashboard is never a stale mix of old and new files. API responses are unaffected.
+
 Start the server with `--no-frontend` to omit them entirely, for deployments where something other than the dashboard consumes the API. Those three routes then return `404` and everything else is unchanged.
 
 `config.js` is how a browser-served dashboard learns its API address. The checked-in `website/config.js` is an empty placeholder, which is what a separate static file server on port 5500 delivers, leaving the address field at its built-in default. Served from the backend, the generated version wins and points the page at the origin it was fetched from, so no per-client configuration is needed.
@@ -110,7 +112,8 @@ Start the server with `--no-frontend` to omit them entirely, for deployments whe
 ### 3. Runtime Environment
 
 At startup, Python setup runs automatically and configures:
-- `UAVCAN__CAN__IFACE=socketcan:<selected_iface>`
+- `UAVCAN__CAN__IFACE=socketcan:<selected_iface>`, or the python-can spec as given (e.g. `gs_usb:0`)
+- `UAVCAN__CAN__BITRATE=<n> <n>` for non-SocketCAN adapters (cleared for SocketCAN)
 - `UAVCAN__NODE__ID` (auto-assigned if not already set)
 - `CYPHAL_PATH` and `PYCYPHAL_PATH` (DSDL locations)
 
@@ -138,9 +141,11 @@ Status:      http://localhost:8080/api/status
 Mode:        selection  (waiting for the UI or POST /api/can/connect)
 ------------------------------------------------------------
 Startup options:
-  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0)
+  --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0, gs_usb:0, pcan:PCAN_USBBUS1)
+  --bitrate <n>    bus speed in bit/s; required with --can for any adapter except SocketCAN
   --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)
   --port <n>       listen on <n> instead of 8080
+  --data-dir <dir> keep history, recordings and node-IDs in <dir>
   --recompile      force DSDL recompilation via nnvg
   --help           full reference
 ============================================================
@@ -292,13 +297,27 @@ Response:
 {
     "status": "running",
     "can_interface": "vcan0",
+    "can_bitrate": null,
     "available_interfaces": ["vcan0", "can0"],
+    "available_adapters": [
+        {"interface": "vcan0", "label": "vcan0 (SocketCAN)", "needs_bitrate": false},
+        {"interface": "pcan:PCAN_USBBUS1", "label": "PEAK PCAN_USBBUS1", "needs_bitrate": true}
+    ],
     "bus_utilization": 3.0,
     "last_error": null
 }
 ```
 
-`status` is `"running"` when connected to CAN, `"idle"` otherwise. `last_error` contains the error message if CAN was auto-disconnected due to a bus fault.
+`status` is `"running"` when connected to CAN, `"idle"` otherwise. `last_error` contains the error message if CAN was auto-disconnected due to a bus fault. `can_bitrate` is the bitrate Cynitor opened the adapter at, or `null` for SocketCAN, whose bitrate the kernel sets.
+
+`available_interfaces` lists SocketCAN names only, as before. `available_adapters` lists everything the dashboard can offer: SocketCAN interfaces, adapters of vendor drivers python-can can enumerate (PEAK, Kvaser, Vector, IXXAT) and, off Linux, candleLight (`gs_usb`) and known slcan adapters. Pass an entry's `interface` to `POST /api/can/connect`, with a `bitrate` when `needs_bitrate` is true. The list is rescanned at most every 10 seconds, and not at all while connected.
+
+**List CAN adapters:**
+```bash
+curl "http://localhost:8080/api/can/adapters?refresh=1"
+```
+
+Returns `{"adapters": [...]}`, entries as in `available_adapters`. `refresh=1` rescans now instead of serving a list up to 10 seconds old (ignored while connected).
 
 **Connect to a CAN interface:**
 ```bash
@@ -312,7 +331,15 @@ Response (success):
 {"status": "running", "can_interface": "vcan0"}
 ```
 
-Returns `409` if already connected, `400` if interface is unknown.
+`interface` is either a SocketCAN name, which must be one of `available_interfaces`, or a python-can spec such as `gs_usb:0` or `pcan:PCAN_USBBUS1`, which is opened without that check. `bitrate` (integer, 1–1000000 bit/s) is the bus speed, required for every adapter except SocketCAN, which ignores it. It may be left out only if the server was started with `--bitrate`, which then applies.
+
+```bash
+curl -X POST http://localhost:8080/api/can/connect \
+  -H 'Content-Type: application/json' \
+  -d '{"interface":"gs_usb:0","bitrate":250000}'
+```
+
+Returns `409` if already connected, `400` if a SocketCAN name is unknown or `bitrate` is missing or invalid.
 
 **Disconnect from CAN:**
 ```bash
@@ -321,7 +348,7 @@ curl -X POST http://localhost:8080/api/can/disconnect
 
 Response:
 ```json
-{"status": "idle", "available_interfaces": ["vcan0", "can0"]}
+{"status": "idle", "available_interfaces": ["vcan0", "can0"], "available_adapters": [...]}
 ```
 
 Returns `409` if not connected.
@@ -440,14 +467,14 @@ curl -X POST http://localhost:8080/api/dsdl/custom/type \
 ```
 Returns `201` with `{"full_name": "myapp.sensors.Temperature.1.0", "path": "..."}`.
 
-Pass `"overwrite": true` to replace an existing custom type's source. Only allowed while the type is **not compiled** — the server returns `409` if a compiled `.py` already exists in `python_compiled_messages/` for this type.
+Pass `"overwrite": true` to replace an existing custom type's source. Only allowed while the type is **not compiled** — the server returns `409` if the type has already been compiled.
 
 **Delete custom DSDL type:**
 ```bash
 curl -X DELETE http://localhost:8080/api/dsdl/custom/type/myapp.sensors.Temperature.1.0
 ```
 Returns `200` with `{"full_name": "myapp.sensors.Temperature.1.0", "deleted": true}`.
-Returns `404` if the source file is missing, `409` if the type is already compiled (delete the corresponding entry in `python_compiled_messages/` first if you really need to remove it), or `400` on a malformed name.
+Returns `404` if the source file is missing, or `400` on a malformed name. Deleting also removes the type's compiled code.
 
 **Compile DSDL types:**
 ```bash
@@ -467,6 +494,8 @@ curl -X POST http://localhost:8080/api/dsdl/compile \
   -d '{"scope": "all"}'
 ```
 Returns `200` with `{"ok": true}` on success, or `422` with `{"ok": false, "errors": [...]}`.
+
+Compilation runs inside the server. In the packaged binaries the public types are built in: `"public"` is refused and `"all"` compiles the custom types; `GET /api/dsdl/status` reports this as `"public_compilable": false`. Custom types and their compiled code are kept in the data folder (`dsdl/custom`, `dsdl/compiled`).
 
 **Get latest event for a subject:**
 ```bash

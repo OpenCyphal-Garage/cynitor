@@ -15,12 +15,21 @@ concurrency:
 
 jobs:
   backend:
-    name: Backend (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    # Linux jobs keep their original names, which branch protection may require.
+    name: Backend (Python ${{ matrix.python-version }}${{ matrix.os != 'ubuntu-latest' && format(', {0}', matrix.os) || '' }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python-version: ['3.10', '3.11', '3.12']
+        include:
+          # Windows Server 2022 is built from the Windows 10 code base, 2025
+          # from Windows 11's, so between them they stand in for both.
+          - os: windows-2022
+            python-version: '3.12'
+          - os: windows-2025
+            python-version: '3.12'
 
     steps:
       - uses: actions/checkout@v7
@@ -45,6 +54,39 @@ jobs:
           # (notably ROS2's) from being auto-loaded into the run.
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
         run: python -m pytest tests/ -v -p pytest_asyncio.plugin
+
+  integration:
+    # A whole CAN session through the CAN hub on a virtual bus: the real
+    # Cyphal stack, which the backend unit tests mock. It is the path every
+    # adapter other than SocketCAN takes, so it runs on every OS.
+    name: Integration (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2022, windows-2025]
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The session compiles and imports the regulated DSDL types.
+          submodules: recursive
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: server/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r server/requirements.txt
+
+      - name: Compile DSDL
+        working-directory: server
+        run: python startup_setup.py --recompile
+
+      - name: Run a CAN session through the hub
+        run: python tests/integration/hub_session.py
 
   e2e:
     name: Frontend end-to-end
@@ -87,8 +129,12 @@ jobs:
 
       - name: Upload result summary
         if: always()
+        # A convenience copy of the summary; the test step above decides the
+        # job. An exhausted artifact storage quota must not fail passing tests.
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: e2e-result
           path: tests/e2e/result.md
           if-no-files-found: ignore
+          retention-days: 7

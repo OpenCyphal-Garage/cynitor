@@ -141,6 +141,11 @@ const DebugView = (() => {
       statRow('Bus errors', link.bus_errors, link.bus_errors > 0 ? 'warn' : null),
       statRow('Arbitration lost', link.arbitration_lost),
       statRow('Auto-restart (ms)', link.restart_ms),
+      // Only for adapters Cynitor opens itself (not SocketCAN): sends the
+      // adapter refused, e.g. because nothing on the bus acknowledges.
+      ...(link.adapter_send_failures != null ? [
+        statRow('Adapter send failures', link.adapter_send_failures, link.adapter_send_failures > 0 ? 'warn' : null),
+      ] : []),
     ]);
 
     target.innerHTML = protoCard + statsCard + busCard;

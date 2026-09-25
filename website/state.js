@@ -21,6 +21,12 @@ const state = {
   dashboardConnecting: false,
   canState: CONN.IDLE,
   preferredCanInterface: '',
+  // Adapters the backend offers (GET /api/status available_adapters).
+  canAdapters: [],
+  // Last bitrate used per interface spec, so the list preselects it next
+  // time. Never a guess: an adapter not connected before starts unselected.
+  canBitrates: {},
+  customCanSpec: '',
   favouriteNodeIds: new Set(),
   hiddenNodeIds: new Set(),
   latestNodesPayload: { node_count: 0, nodes: {} },
@@ -118,6 +124,10 @@ Object.defineProperties(state, {
 
 // Tabulator instance. Initialized in nodes-table.js#initNodesTable.
 let nodesTabulator = null;
+// Tabulator's renderer exists only once the table is built; setting data
+// before that throws ("reading 'verticalFillMode'"). A reload that
+// restores the connection fetches nodes before the build finishes.
+let _nodesTableReady = false;
 
 // Pending debounce ids for scheduleTableRefresh / scheduleDetailRefresh.
 // Live here because settings.js#saveSettings reads nodesTabulator above.
@@ -557,6 +567,8 @@ const _writeSettingsNow = () => {
   const persisted = {
     apiBase: el('apiBase').value.trim(),
     canInterface: interfacesSelect ? interfacesSelect.value : '',
+    canBitrates: state.canBitrates,
+    customCanSpec: state.customCanSpec,
     dashboardConnected: state.dashboardConnected,
     selectedDetailTab: state.selectedDetailTab,
     tableSort: state.tableSort,
@@ -690,6 +702,13 @@ const loadSettings = () => {
   }
   if (typeof settings.canInterface === 'string') {
     state.preferredCanInterface = settings.canInterface;
+  }
+  if (settings.canBitrates && typeof settings.canBitrates === 'object') {
+    state.canBitrates = settings.canBitrates;
+  }
+  if (typeof settings.customCanSpec === 'string') {
+    state.customCanSpec = settings.customCanSpec;
+    el('canSpecInput').value = settings.customCanSpec;
   }
   if (settings.dashboardConnected === true) {
     state.pendingReconnect = true;

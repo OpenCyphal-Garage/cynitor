@@ -15,6 +15,9 @@ def _make_session(is_running=False, can_interface=None):
     session = MagicMock()
     session.is_running = is_running
     session.can_interface = can_interface
+    session.default_bitrate = None
+    session.can_bitrate = None
+    session.hub = None
     session.telemetry = None
     session.bus_load = None
     session.last_error = None
@@ -157,6 +160,63 @@ class TestCANConnect:
         # Simpler approach: directly call session and verify state
         await session.connect("vcan0")
         session.connect.assert_called_once_with("vcan0")
+
+
+class TestCANConnectSpecsAndBitrate:
+    """The real /api/can/connect handler, with discovery pinned."""
+
+    @pytest.mark.asyncio
+    async def test_bare_name_is_checked_against_discovery(self, client, session):
+        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+            resp = await client.post("/api/can/connect", json={"interface": "vcan99"})
+        assert resp.status == 400
+        data = await resp.json()
+        assert data["available_interfaces"] == ["vcan0"]
+        session.connect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_discovered_socketcan_name_needs_no_bitrate(self, client, session):
+        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+            resp = await client.post("/api/can/connect", json={"interface": "vcan0"})
+        assert resp.status == 200
+        session.connect.assert_awaited_once_with("vcan0", bitrate=None)
+
+    @pytest.mark.asyncio
+    async def test_explicit_spec_skips_discovery(self, client, session):
+        # Discovery never lists adapters such as gs_usb:0 (and lists nothing
+        # at all off Linux), so requiring a match made them unreachable.
+        with patch("main.discover_can_interfaces", return_value=[]) as discover:
+            resp = await client.post(
+                "/api/can/connect", json={"interface": "gs_usb:0", "bitrate": 250000},
+            )
+        assert resp.status == 200
+        discover.assert_not_called()
+        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=250000)
+
+    @pytest.mark.asyncio
+    async def test_adapter_without_bitrate_is_refused(self, client, session):
+        resp = await client.post("/api/can/connect", json={"interface": "gs_usb:0"})
+        assert resp.status == 400
+        assert "bitrate is required" in (await resp.json())["error"]
+        session.connect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_adapter_falls_back_to_server_bitrate(self, client, session):
+        # Started with --bitrate: API clients may leave it out.
+        session.default_bitrate = 250_000
+        resp = await client.post("/api/can/connect", json={"interface": "gs_usb:0"})
+        assert resp.status == 200
+        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=None)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bitrate", [0, 5_000_000, "500000", True])
+    async def test_rejects_invalid_bitrate(self, client, session, bitrate):
+        resp = await client.post(
+            "/api/can/connect", json={"interface": "gs_usb:0", "bitrate": bitrate},
+        )
+        assert resp.status == 400
+        assert "bitrate" in (await resp.json())["error"].lower()
+        session.connect.assert_not_awaited()
 
 
 class TestCANDisconnect:
@@ -621,6 +681,40 @@ class TestTransportDiagnostics:
         assert data["bus_utilization"] == 12.5
         scanner.get_transport_info.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_transport_behind_hub_reports_the_hub(self, client, session):
+        # An adapter such as gs_usb:0 has no kernel device for `ip link` to
+        # read; the hub says what it knows instead.
+        session.is_running = True
+        session.can_interface = "gs_usb:0"
+        session.bus_load = None
+        session.hub = MagicMock()
+        session.hub.link_diagnostics = MagicMock(return_value={
+            "bitrate": 500000, "adapter_frames_in": 10,
+            "adapter_frames_out": 4, "adapter_send_failures": 0,
+        })
+        scanner = MagicMock()
+        scanner.get_transport_info = MagicMock(return_value={"protocol": None, "statistics": None})
+        session.scanner = scanner
+        with patch("main.get_can_link_diagnostics") as diagnostics:
+            resp = await client.get("/api/can/transport")
+        assert resp.status == 200
+        link = (await resp.json())["link"]
+        assert link["bitrate"] == 500000 and link["adapter_send_failures"] == 0
+        diagnostics.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_transport_reads_socketcan_device_not_spec(self, client, session):
+        session.is_running = True
+        session.can_interface = "socketcan:vcan0"
+        session.bus_load = None
+        scanner = MagicMock()
+        scanner.get_transport_info = MagicMock(return_value={"protocol": None, "statistics": None})
+        session.scanner = scanner
+        with patch("main.get_can_link_diagnostics", return_value={}) as diagnostics:
+            await client.get("/api/can/transport")
+        diagnostics.assert_called_once_with("vcan0")
+
 
 class TestFrameCaptureAPI:
     """GET /api/can/capture snapshot + 'capture' WS message handling."""
@@ -682,3 +776,54 @@ class TestFrameCaptureAPI:
         await server._handle_capture_message(ws, enabled=False)
         mgr.unsubscribe.assert_called_once_with(q)
         assert ws not in server.capture_clients
+
+
+class TestAdapterListing:
+    """available_adapters in /api/status and GET /api/can/adapters."""
+
+    @pytest.fixture
+    def catalog(self):
+        from can_discovery import Adapter
+        c = MagicMock()
+        c.get = MagicMock(return_value=[
+            Adapter("vcan0", "vcan0 (SocketCAN)", False),
+            Adapter("gs_usb:0", "CANable 0", True),
+        ])
+        return c
+
+    @pytest.fixture
+    async def listing_client(self, session, log_store, catalog):
+        srv = WebSocketServer(session=session, host="127.0.0.1", port=0,
+                              log_store=log_store, adapter_catalog=catalog)
+        async with TestClient(TestServer(srv.app)) as c:
+            srv._running = True
+            yield c
+
+    @pytest.mark.asyncio
+    async def test_status_lists_adapters_and_bitrate(self, listing_client, session):
+        session.can_bitrate = None
+        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+            data = await (await listing_client.get("/api/status")).json()
+        assert data["available_interfaces"] == ["vcan0"]  # unchanged for old clients
+        assert data["available_adapters"][1] == {
+            "interface": "gs_usb:0", "label": "CANable 0", "needs_bitrate": True,
+        }
+        assert data["can_bitrate"] is None
+
+    @pytest.mark.asyncio
+    async def test_refresh_query_forces_a_rescan(self, listing_client, catalog):
+        resp = await listing_client.get("/api/can/adapters?refresh=1")
+        assert resp.status == 200
+        assert len((await resp.json())["adapters"]) == 2
+        catalog.get.assert_called_once_with(True, True)
+
+    @pytest.mark.asyncio
+    async def test_no_rescan_while_connected(self, listing_client, catalog, session):
+        # Probing the adapter the session holds could disturb it.
+        session.is_running = True
+        await listing_client.get("/api/can/adapters?refresh=1")
+        catalog.get.assert_called_once_with(True, False)
+
+    @pytest.mark.asyncio
+    async def test_without_a_catalog_nothing_is_listed(self, client):
+        assert (await (await client.get("/api/can/adapters")).json()) == {"adapters": []}

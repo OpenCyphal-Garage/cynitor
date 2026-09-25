@@ -375,6 +375,7 @@ const initNodesTable = () => {
   });
 
   nodesTabulator.on('tableBuilt', () => {
+    _nodesTableReady = true;
     const savedFilters = settings.headerFilters || {};
     for (const [field, value] of Object.entries(savedFilters)) {
       if (value) {
@@ -390,9 +391,10 @@ const initNodesTable = () => {
 const renderNodesTable = () => {
   if (state.activeView !== 'nodes') return;
 
-  const data = buildTableData();
+  // Until built, there is nothing to render into; tableBuilt renders once ready.
+  if (!nodesTabulator || !_nodesTableReady) return;
 
-  if (!nodesTabulator) return;
+  const data = buildTableData();
 
   if (!data.length) {
     nodesTabulator.clearData();

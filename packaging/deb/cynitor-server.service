@@ -9,6 +9,11 @@ EnvironmentFile=-/etc/default/cynitor-server
 ExecStart=/usr/bin/cynitor-server $CYNITOR_ARGS
 Restart=on-failure
 RestartSec=5
+# /var/lib/cynitor: history, recordings and the allocator's node-ID table.
+# systemd creates it and passes it on as STATE_DIRECTORY, which Cynitor uses as
+# its data folder. Data an earlier version wrote into / is moved there on the
+# first start.
+StateDirectory=cynitor
 # Raw SocketCAN sockets need CAP_NET_RAW. Running as root is the simple
 # default; to harden, create a dedicated user and grant only that capability:
 #   User=cynitor

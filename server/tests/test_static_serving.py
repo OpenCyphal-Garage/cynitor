@@ -18,6 +18,7 @@ def _make_session():
     s = MagicMock()
     s.is_running = False
     s.can_interface = None
+    s.can_bitrate = None
     s.telemetry = None
     s.bus_load = None
     s.last_error = None
@@ -87,6 +88,34 @@ class TestServesDashboard:
     async def test_generated_config_overrides_the_placeholder(self, client):
         resp = await client.get("/config.js")
         assert "placeholder" not in await resp.text()
+
+
+class TestDashboardRevalidation:
+    """After an upgrade, browsers must not keep running the old dashboard."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("path", ["/", "/state.js", "/config.js"])
+    async def test_dashboard_files_are_revalidated(self, client, path):
+        resp = await client.get(path)
+        assert resp.headers.get("Cache-Control") == "no-cache"
+
+    @pytest.mark.asyncio
+    async def test_unchanged_file_costs_a_304(self, client):
+        first = await client.get("/state.js")
+        validators = {k: first.headers[k] for k in ("ETag", "Last-Modified") if k in first.headers}
+        assert validators, "no validator to revalidate with"
+        headers = {}
+        if "ETag" in validators:
+            headers["If-None-Match"] = validators["ETag"]
+        if "Last-Modified" in validators:
+            headers["If-Modified-Since"] = validators["Last-Modified"]
+        again = await client.get("/state.js", headers=headers)
+        assert again.status == 304
+
+    @pytest.mark.asyncio
+    async def test_api_responses_are_left_alone(self, client):
+        resp = await client.get("/api/health")
+        assert "Cache-Control" not in resp.headers
 
 
 class TestApiKeepsPriority:

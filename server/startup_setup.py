@@ -8,6 +8,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+from can_config import (
+    BITRATE_ENV,
+    bitrate_env_value,
+    normalize_can_iface,
+    resolve_bitrate,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -99,8 +106,39 @@ def resolve_project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def prepare_runtime(can_iface: str = "can0", force_compile: bool = False) -> None:
-    """Prepare environment variables, sys.path, and optional DSDL compilation for runtime."""
+def ensure_libusb_on_path() -> None:
+    """Let pyusb find libusb on Windows, where it is not a system library.
+
+    python-can's gs_usb interface (candleLight adapters such as the CANable)
+    reaches the adapter through pyusb, which looks for libusb-1.0.dll on PATH
+    and fails with NoBackendError when it is missing. The libusb-package wheel
+    bundles the DLL; putting its directory on PATH covers this process and the
+    `yakut accommodate` child alike.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import libusb_package
+    except ImportError:
+        return
+    dll_path = libusb_package.get_library_path()
+    if dll_path:
+        _prepend_env_path("PATH", Path(dll_path).parent)
+
+
+def prepare_runtime(can_iface: str = "can0", force_compile: bool = False,
+                    bitrate: int | None = None, auto_node_id: bool = True) -> None:
+    """Prepare environment variables, sys.path, and optional DSDL compilation for runtime.
+
+    `auto_node_id` runs `yakut accommodate` when UAVCAN__NODE__ID is unset. It
+    has to be off when `can_iface` is a CAN hub's in-process channel, which a
+    child process cannot see.
+
+    `bitrate` is required for every interface except SocketCAN, whose bitrate
+    is set with `ip link`; ValueError is raised before anything changes if it
+    is missing or invalid.
+    """
+    bitrate = resolve_bitrate(can_iface, bitrate)
     project_root = resolve_project_root()
     dsdl_dir = project_root / "dsdl_messages"
     public_types_dir = dsdl_dir / "public_regulated_data_types"
@@ -141,15 +179,21 @@ def prepare_runtime(can_iface: str = "can0", force_compile: bool = False) -> Non
     _prepend_env_path("PYTHONPATH", python_output_dir)
     _ensure_sys_path(python_output_dir)
 
-    # If the user passed a full pycyphal transport spec (contains ":") use it
-    # verbatim — e.g. "pythoncan:pcan:PCAN_USBBUS1" on Windows or
-    # "socketcan:vcan0" cross-platform. Otherwise default to socketcan, which
-    # is the Linux SocketCAN path the original CLI was built around.
-    iface_spec = can_iface if ":" in can_iface else f"socketcan:{can_iface}"
-    os.environ["UAVCAN__CAN__IFACE"] = iface_spec
+    # A full transport spec (e.g. "gs_usb:0", "pcan:PCAN_USBBUS1") is used as
+    # given; a bare name such as "vcan0" means Linux SocketCAN.
+    os.environ["UAVCAN__CAN__IFACE"] = normalize_can_iface(can_iface)
     os.environ["UAVCAN__CAN__MTU"] = "8"
+    # Published before `yakut accommodate` runs, so that it too opens the
+    # interface at this bitrate rather than pycyphal's 1 Mbit/s default.
+    # Cleared for SocketCAN, where the kernel's setting applies, so that a
+    # previous session's value does not linger.
+    if bitrate is None:
+        os.environ.pop(BITRATE_ENV, None)
+    else:
+        os.environ[BITRATE_ENV] = bitrate_env_value(bitrate)
+    ensure_libusb_on_path()
 
-    if "UAVCAN__NODE__ID" not in os.environ:
+    if auto_node_id and "UAVCAN__NODE__ID" not in os.environ:
         node_id = _auto_node_id()
         if node_id is not None:
             os.environ["UAVCAN__NODE__ID"] = node_id

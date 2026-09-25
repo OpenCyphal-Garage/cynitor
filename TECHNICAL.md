@@ -43,6 +43,8 @@ All backend code lives in `server/`. Python 3.10+, asyncio, aiohttp, pycyphal.
 ### Lifecycle
 
 ```
+CANHub.start()             Non-SocketCAN only: open the adapter once, pick a free node-ID
+        |
 prepare_runtime()          Set env vars, compile DSDL via nnvg
         |
 AllocatorManager.start()   Detect external allocator on node-ID 1, or start a local one
@@ -67,19 +69,27 @@ EventLogger.start()        SQLite persistence
 | `websocket_server.py` | aiohttp HTTP+WS server, REST endpoints, per-client WebSocket filtering, periodic metrics broadcast, node history and service call history endpoints; also serves `website/` so one binary hosts both the API and the dashboard |
 | `event_logger.py` | SQLite persistence with batch writes, `asyncio.to_thread` for non-blocking I/O, configurable retention, node lifecycle history (30-day), service call history with response bodies |
 | `allocator.py` | Node-ID allocator detection / fallback (CentralizedAllocator), 10s re-check |
+| `can_config.py` | Interface-spec and bitrate rules: bare names mean SocketCAN, `--bitrate` is required for anything else, `UAVCAN__CAN__BITRATE` is published as `"<n> <n>"` |
+| `can_discovery.py` | Lists the adapters the dashboard offers besides SocketCAN: python-can vendor detection (PEAK, Kvaser, Vector, IXXAT), and off Linux a gs_usb USB scan and slcan serial ports by USB ID; cached for 10 s in `AdapterCatalog` |
+| `can_hub.py` | Opens a non-SocketCAN adapter once and bridges it to an in-process python-can `virtual` channel that the allocator probe, allocator and scanner all open instead; also picks Cynitor's node-ID from heartbeats on that channel; for those adapters it also measures bus load (`HubBusLoad`, from forwarded frame lengths, standing in for canbusload) and, for gs_usb, whose reads hide USB errors, checks every few seconds that the device is still enumerated |
 | `startup_setup.py` | DSDL compilation via `nnvg`, sets `UAVCAN__CAN__IFACE` / `UAVCAN__CAN__MTU`, calls `yakut accommodate` for node ID |
 | `node_identity_map.py` | Bidirectional `unique_id ↔ node_id` mapping with displacement detection, snapshot storage, and SQLite-backed persistence |
+| `data_dir.py` | The data folder: per-user default per OS (`STATE_DIRECTORY` under systemd), `--data-dir` / `CYNITOR_DATA_DIR` override, and the one-time move of databases an earlier version left in the working directory, each with its `-wal`/`-shm` files |
 | `log_store.py` | In-memory deque (max 5000) fed by a `logging.Handler`; exposed via `/api/logs` |
-| `dsdl_manager.py` | DSDL discovery, namespace tree, source/compiled state, custom-type CRUD under `dsdl_messages/custom/`, recompile orchestration |
+| `dsdl_manager.py` | DSDL discovery, namespace tree, source/compiled state, custom-type CRUD in the data folder (`dsdl/custom`, compiled to `dsdl/compiled`), compilation in-process via `pycyphal.dsdl.compile` (no `nnvg`, so it works frozen) |
 | `replay.py` | Recording-replay engine: streams `recording_events` rows back through subscriber queues at controlled speed; mirrors `TelemetryManager`'s broadcast shape so the WS handler picks one source per session (telemetry XOR replay) |
 
 ### CLI flags
 
 ```
---can <iface>     CAN interface name (vcan0, slcan0, can0, ...). Required for direct mode.
+--can <iface>     CAN interface: a SocketCAN name (vcan0, slcan0, can0, ...) or a python-can spec
+                  (gs_usb:0, pcan:PCAN_USBBUS1, slcan:COM5@115200, ...). Required for direct mode.
+--bitrate <n>     Bus speed in bit/s. Required with --can for non-SocketCAN adapters; no default. Every component that
+                  opens the bus reads it from UAVCAN__CAN__BITRATE, which prepare_runtime sets.
 --recompile       Force `nnvg` to regenerate Python from DSDL even if outputs exist.
 --bind <host>     Host/IP to bind the HTTP server to (default 127.0.0.1; use 0.0.0.0 to expose on the network).
 --port <n>        TCP port to listen on (default 8080).
+--data-dir <dir>  Folder for the databases (default: CYNITOR_DATA_DIR, else the per-user data folder; see data_dir.py).
 --version         Print the version and exit.
 --no-frontend     Serve only the REST API and WebSocket, not the dashboard.
 ```
@@ -87,6 +97,13 @@ EventLogger.start()        SQLite persistence
 Without `--can`, the backend starts in selection mode. Use `POST /api/can/connect` with `{"interface": "..."}` to attach.
 
 By default the dashboard is served from the same port as the API, so a deployment is one binary. `--no-frontend` turns that off for API-only deployments, where something other than the browser dashboard is consuming the data. A checkout with no `website/` directory is API-only regardless. The startup banner says which mode is active.
+
+### Tests
+
+- `server/tests/` — backend unit tests (pytest); they mock the Cyphal stack. CI runs them on Linux (Python 3.10–3.12) and on Windows Server 2022 and 2025.
+- `tests/integration/hub_session.py` — a whole CAN session through the CAN hub on a python-can `virtual` bus, with the real Cyphal stack and a simulated device and plug-and-play node; needs compiled DSDL. CI runs it on Linux and both Windows images.
+- `tests/e2e/` — Playwright checks of the static dashboard.
+- `packaging/smoke-test.ps1` — checks the built Windows executable: bundled modules and libusb, a session through the hub, the dashboard and token, and that killing the PyInstaller bootloader stops the server.
 
 ### DSDL
 
@@ -321,7 +338,8 @@ AppImage adds packaging rather than portability.
 - **Hidden imports** — pycyphal and python-can use dynamic imports extensively. The spec enumerates every submodule our code touches.
 - **Bundled data** — `python_compiled_messages/` (pre-compiled DSDL), `dsdl_messages/` (source definitions) and `website/` (the dashboard) are packed into the binary.
 - **pydsdl's vendored parser** — pydsdl reaches `parsimonious` by prepending its own `third_party` directory to `sys.path`. That directory is not a package, so static analysis cannot follow the import; the spec ships the tree as data at the same relative path and aborts if pydsdl ever moves it.
-- **Compiled DSDL is mandatory** — the spec aborts if `python_compiled_messages/` is absent, because `nnvg` is not bundled and the frozen binary cannot regenerate it. Run `python3 server/startup_setup.py --recompile` before building.
+- **Compiled DSDL is mandatory** — the spec aborts if `python_compiled_messages/` is absent: the frozen binary does not recompile the public regulated types. Run `python3 server/startup_setup.py --recompile` before building.
+- **Custom types compile at run time** — through `pycyphal.dsdl.compile`, in-process. The spec therefore bundles nunavut's templates and language modules (`collect_data_files` / `collect_submodules`) and pydsdl's `grammar.parsimonious`.
 - **Project root detection** — `startup_setup.resolve_project_root()` returns `sys._MEIPASS` when frozen. It is the only frozen-aware code: `prepare_runtime()` derives `sys.path`, `PYCYPHAL_PATH` and `CYPHAL_PATH` from it, and runs before anything imports the generated `uavcan.*` packages, so no PyInstaller runtime hook is needed.
 
 ### Versioning and releases

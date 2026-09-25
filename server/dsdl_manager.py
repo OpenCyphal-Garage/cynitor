@@ -8,7 +8,6 @@ import importlib
 import logging
 import re
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -26,12 +25,29 @@ _FIELD_RE = re.compile(
 
 class DsdlManager:
 
-    def __init__(self, project_root: Path | str) -> None:
+    def __init__(self, project_root: Path | str, data_dir: Optional[Path | str] = None) -> None:
+        """``data_dir`` is where custom types and their compiled code are kept.
+
+        Without it, both live in the source tree, as they used to. The server
+        passes its data folder, because the source tree is not writable where
+        it matters: inside the single-file executable it is a temporary
+        folder, emptied on every exit.
+        """
         self.project_root = Path(project_root)
         self.dsdl_dir = self.project_root / "dsdl_messages"
         self.public_types_dir = self.dsdl_dir / "public_regulated_data_types"
+        # The public regulated types, compiled once (and built into the executable).
         self.compiled_dir = self.project_root / "python_compiled_messages"
-        self.custom_dir = self.dsdl_dir / "custom"
+        legacy_custom_dir = self.dsdl_dir / "custom"
+        if data_dir is None:
+            self.custom_dir = legacy_custom_dir
+            self.custom_compiled_dir = self.compiled_dir
+        else:
+            self.custom_dir = Path(data_dir) / "dsdl" / "custom"
+            self.custom_compiled_dir = Path(data_dir) / "dsdl" / "compiled"
+            self._adopt_legacy_custom_types(legacy_custom_dir)
+        # Public types cannot be recompiled into the executable's temporary folder.
+        self.public_compilable = not getattr(sys, "frozen", False)
 
         self._tree_cache: Optional[dict] = None
         self._type_index: dict[str, Path] = {}
@@ -39,6 +55,12 @@ class DsdlManager:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def make_importable(self) -> None:
+        """Let compiled custom types be imported, including ones compiled in earlier runs."""
+        path = str(self.custom_compiled_dir.resolve())
+        if path not in sys.path:
+            sys.path.append(path)
 
     def get_status(self) -> dict[str, Any]:
         paths: list[dict] = []
@@ -54,7 +76,8 @@ class DsdlManager:
             lambda p: p.parts and p.parts[0] in public_roots
         ) if compiled_ok else None
         last_custom_compiled = self._max_compiled_mtime(
-            lambda p: p.parts and p.parts[0] not in public_roots
+            lambda p: p.parts and p.parts[0] not in public_roots,
+            self.custom_compiled_dir,
         )
         last_compiled_candidates = [t for t in (last_public_compiled, last_custom_compiled) if t is not None]
         last_compiled = max(last_compiled_candidates) if last_compiled_candidates else None
@@ -64,6 +87,7 @@ class DsdlManager:
 
         return {
             "paths": paths,
+            "public_compilable": self.public_compilable,
             "compiled": compiled_ok,
             "last_compiled": last_compiled,
             "last_public_compiled": last_public_compiled,
@@ -72,15 +96,16 @@ class DsdlManager:
             "custom_types": custom_count,
         }
 
-    def _max_compiled_mtime(self, predicate) -> Optional[float]:
-        if not self.compiled_dir.is_dir():
+    def _max_compiled_mtime(self, predicate, root: Optional[Path] = None) -> Optional[float]:
+        root = self.compiled_dir if root is None else root
+        if not root.is_dir():
             return None
         try:
             mtimes = []
-            for f in self.compiled_dir.rglob("*.py"):
-                if f.name.startswith("__"):
+            for f in root.rglob("*.py"):
+                if f.name.startswith("__") or f.name == "nunavut_support.py":
                     continue
-                rel = f.relative_to(self.compiled_dir)
+                rel = f.relative_to(root)
                 if predicate(rel):
                     mtimes.append(f.stat().st_mtime)
             return max(mtimes) if mtimes else None
@@ -210,7 +235,7 @@ class DsdlManager:
         # the namespace regenerates it cleanly; trying to patch it here is too
         # risky if other types share the namespace.
         major, minor = version.split(".")
-        compiled_ns_dir = self.compiled_dir / Path(*namespace.split("."))
+        compiled_ns_dir = self.custom_compiled_dir / Path(*namespace.split("."))
         compiled_basename = f"{type_name}_{major}_{minor}"
         for stem_path in (
             compiled_ns_dir / f"{compiled_basename}.py",
@@ -245,6 +270,8 @@ class DsdlManager:
         return self._run_compilation(scope="custom")
 
     def compile_public(self) -> dict[str, Any]:
+        if not self.public_compilable:
+            return {"ok": False, "error": "The public regulated types are built into this executable"}
         return self._run_compilation(scope="public")
 
     def compile_all(self) -> dict[str, Any]:
@@ -435,8 +462,8 @@ class DsdlManager:
         if len(parts) < 4:
             return False
         compiled_name = f"{parts[-3]}_{parts[-2]}_{parts[-1]}.py"
-        compiled_path = self.compiled_dir / Path(*parts[:-3]) / compiled_name
-        return compiled_path.is_file()
+        relative = Path(*parts[:-3]) / compiled_name
+        return any((root / relative).is_file() for root in (self.compiled_dir, self.custom_compiled_dir))
 
     @staticmethod
     def _validate_namespace(namespace: str) -> None:
@@ -444,25 +471,24 @@ class DsdlManager:
             raise ValueError("Namespace must be lowercase dotted identifiers (e.g. myapp.sensors)")
 
     def _run_compilation(self, scope: str = "all") -> dict[str, Any]:
-        if shutil.which("nnvg") is None:
-            return {"ok": False, "error": "nnvg not available — install nunavut"}
-
         uavcan_dir = self.public_types_dir / "uavcan"
         reg_dir = self.public_types_dir / "reg"
         errors: list[str] = []
 
-        if scope in ("all", "public"):
-            errors += self._nnvg_compile(reg_dir, [uavcan_dir], "reg")
-            errors += self._nnvg_compile(uavcan_dir, [reg_dir], "uavcan")
+        # "all" in the executable means the custom types: the public ones are built in.
+        if scope in ("all", "public") and self.public_compilable:
+            errors += self._compile(reg_dir, [uavcan_dir], self.compiled_dir, "reg")
+            errors += self._compile(uavcan_dir, [reg_dir], self.compiled_dir, "uavcan")
 
         if scope in ("all", "custom") and self.custom_dir.is_dir():
             custom_roots = [c for c in sorted(self.custom_dir.iterdir())
                             if c.is_dir() and not c.name.startswith(".")]
             for child in custom_roots:
                 siblings = [c for c in custom_roots if c != child]
-                errors += self._nnvg_compile(
+                errors += self._compile(
                     child,
                     [uavcan_dir, reg_dir, *siblings],
+                    self.custom_compiled_dir,
                     f"custom/{child.name}",
                 )
 
@@ -477,11 +503,12 @@ class DsdlManager:
         return {"ok": True}
 
     def _refresh_python_module_cache(self) -> None:
-        if not self.compiled_dir.is_dir():
+        roots = [r for r in {self.compiled_dir, self.custom_compiled_dir} if r.is_dir()]
+        if not roots:
             return
         importlib.invalidate_caches()
         compiled_top_namespaces = {
-            p.name for p in self.compiled_dir.iterdir()
+            p.name for root in roots for p in root.iterdir()
             if p.is_dir() and not p.name.startswith("_") and not p.name.startswith(".")
         }
         if not compiled_top_namespaces:
@@ -491,18 +518,41 @@ class DsdlManager:
             if top in compiled_top_namespaces:
                 sys.modules.pop(module_name, None)
 
-    def _nnvg_compile(self, target: Path, lookups: list[Path], label: str) -> list[str]:
-        args = ["nnvg", "--target-language", "py", str(target)]
-        for ld in lookups:
-            if ld.is_dir():
-                args += ["--lookup-dir", str(ld)]
-        args += ["--outdir", str(self.compiled_dir)]
+    @staticmethod
+    def _compile(target: Path, lookups: list[Path], output: Path, label: str) -> list[str]:
+        """Compile the namespace at ``target`` into ``output``; return error messages.
 
+        In-process through pycyphal (which drives nunavut), not by running
+        nnvg: the executable bundles the libraries but has no nnvg to run.
+        """
+        # pydsdl and nunavut log a line per type at INFO: hundreds for the
+        # public types, which would bury the dashboard's log panel.
+        chatty = [logging.getLogger(name) for name in ("pydsdl", "nunavut")]
+        levels = [lg.level for lg in chatty]
+        for lg in chatty:
+            lg.setLevel(logging.WARNING)
         try:
-            result = subprocess.run(args, check=False, capture_output=True, text=True)
+            import pycyphal.dsdl
+            output.mkdir(parents=True, exist_ok=True)
+            pycyphal.dsdl.compile(target, [ld for ld in lookups if ld.is_dir()], output_directory=output)
         except Exception as exc:
             return [f"{label}: {exc}"]
-        if result.returncode != 0:
-            stderr = (result.stderr or "").strip()
-            return [f"{label}: {stderr}" if stderr else f"{label}: exit code {result.returncode}"]
+        finally:
+            for lg, level in zip(chatty, levels):
+                lg.setLevel(level)
         return []
+
+    def _adopt_legacy_custom_types(self, legacy_dir: Path) -> None:
+        """Copy custom types an earlier version kept in the source tree into the data folder.
+
+        Copied, not moved: in a source checkout they may be under version
+        control. Only when the data folder has no custom types yet.
+        """
+        if self.custom_dir.exists() or not legacy_dir.is_dir() or not any(legacy_dir.rglob("*.dsdl")):
+            return
+        try:
+            shutil.copytree(legacy_dir, self.custom_dir)
+        except OSError as exc:
+            logger.warning("Could not copy custom DSDL types from %s: %s", legacy_dir, exc)
+            return
+        logger.info("Copied custom DSDL types from %s to %s; compile them there once", legacy_dir, self.custom_dir)

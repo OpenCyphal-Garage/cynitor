@@ -5,7 +5,8 @@ so the numeric port-ID comes from the register's natural16 value and the DSDL
 type name from the sibling ".type" register.
 """
 
-from unittest.mock import MagicMock
+import types
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -140,3 +141,48 @@ class TestReadRegister:
         node._find_non_none_field = lambda _value: ("natural16", [1620])
         result = await node._read_register(Client(), "uavcan.pub.x.id", 42)
         assert result == ("natural16", [1620])
+
+
+class TestTypeNameCase:
+    """Firmware that advertises type names in the wrong case still resolves."""
+
+    @pytest.fixture
+    def compiled(self):
+        # Stands in for compiled DSDL: uavcan.register with its real spellings.
+        module = types.SimpleNamespace(Access_1_0=object(), List_1_0=object())
+        modules = {"uavcan.register": module}
+
+        def import_module(name):
+            if name not in modules:
+                raise ImportError(name)
+            return modules[name]
+
+        with patch("scanner_node.importlib.import_module", side_effect=import_module):
+            yield
+
+    @pytest.mark.asyncio
+    async def test_lowercase_service_type_is_corrected(self, compiled, caplog):
+        node, _ = make_node({
+            "uavcan.srv.register_access.id": ("natural16", [384]),
+            "uavcan.srv.register_access.type": ("string", "uavcan.register.access.1.0"),
+        })
+        result = await resolve(node, "uavcan.srv.register_access.id",
+                               ScannerNode.MAX_SERVICE_ID, "service")
+        assert result == (384, "uavcan.register.Access_1_0")
+        # The firmware is still wrong; the log says where.
+        assert "uavcan.srv.register_access.type" in caplog.text
+        assert "case-sensitive" in caplog.text
+
+    def test_exact_name_is_kept(self, compiled):
+        assert ScannerNode._canonical_type_name("uavcan.register.List_1_0") == "uavcan.register.List_1_0"
+
+    def test_unknown_type_is_left_for_the_caller_to_report(self, compiled):
+        assert ScannerNode._canonical_type_name("uavcan.register.nope_1_0") == "uavcan.register.nope_1_0"
+
+    def test_unknown_namespace_is_left_alone(self, compiled):
+        assert ScannerNode._canonical_type_name("vendor.thing.Foo_1_0") == "vendor.thing.Foo_1_0"
+
+    def test_ambiguous_match_is_not_guessed(self):
+        module = types.SimpleNamespace(Foo_1_0=object(), FOO_1_0=object())
+        with patch("scanner_node.importlib.import_module", return_value=module):
+            assert ScannerNode._canonical_type_name("ns.foo_1_0") == "ns.foo_1_0"
