@@ -482,3 +482,26 @@ class TestGetInfoNoAnswer:
         assert "Node 50 does not answer GetInfo, though its heartbeats arrive" in caplog.text
         assert ("Run it in CAN FD too" in caplog.text) == fd
         assert "NoneType" not in caplog.text
+
+
+class TestLeavingSoftwareUpdate:
+    async def test_new_firmware_is_asked_for_its_info_at_once(self):
+        node = make_event_node()
+        info = NodeInfo(node_id=42)
+        info.mark_appeared(first_seen=datetime.datetime.now())
+        node.all_nodes = {42: info}
+        node._prev_health, node._prev_mode, node._prev_ports = {}, {}, {}
+        node._info_due = lambda _node, _now: False
+        node._schedule_info_refresh = MagicMock(return_value=True)
+        node._queue_event = AsyncMock()
+
+        async def heartbeat(mode):
+            msg = types.SimpleNamespace(uptime=10, health=types.SimpleNamespace(value=0),
+                                        mode=types.SimpleNamespace(value=mode), vendor_specific_status_code=0)
+            await node.heartbeat_callback(msg, types.SimpleNamespace(source_node_id=42))
+
+        for mode in (0, 3, 3):  # operational, then in its bootloader
+            await heartbeat(mode)
+        node._schedule_info_refresh.assert_not_called()
+        await heartbeat(0)  # the new firmware runs
+        node._schedule_info_refresh.assert_called_once_with(42, was_disappeared=False)

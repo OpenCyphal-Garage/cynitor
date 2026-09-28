@@ -57,13 +57,6 @@ const _humanDuration = (s) => {
   return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
 };
 
-const _formatBytes = (b) => {
-  if (b >= 1e9) return `${(b / 1e9).toFixed(2)} GB`;
-  if (b >= 1e6) return `${(b / 1e6).toFixed(1)} MB`;
-  if (b >= 1e3) return `${(b / 1e3).toFixed(1)} KB`;
-  return `${b} B`;
-};
-
 const _formatRetention = (seconds) => {
   if (!seconds) return 'unlimited';
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
@@ -210,7 +203,7 @@ const _renderBufferChip = () => {
     chip.textContent = '';
     return;
   }
-  chip.textContent = `Global buffer: last ${_formatRetention(b.retention_seconds)} · ${b.event_count.toLocaleString()} events · ${_formatBytes(b.db_size_bytes)}`;
+  chip.textContent = `Global buffer: last ${_formatRetention(b.retention_seconds)} · ${b.event_count.toLocaleString()} events · ${formatBytes(b.db_size_bytes)}`;
 };
 
 const _observedRatePerSec = () => {
@@ -227,7 +220,7 @@ const _updateDiskHint = () => {
   const rate = _observedRatePerSec();
   const maxBytes = draft.max_events * BYTES_PER_EVENT_ESTIMATE;
   if (!rate) {
-    hint.textContent = `≈ up to ${_formatBytes(maxBytes)} (no rate observed yet)`;
+    hint.textContent = `≈ up to ${formatBytes(maxBytes)} (no rate observed yet)`;
     return;
   }
   const fillSeconds = draft.max_events / rate;
@@ -235,7 +228,7 @@ const _updateDiskHint = () => {
   const projectedEvents = Math.min(draft.max_events, Math.round(rate * draft.max_length_seconds));
   const projectedBytes = projectedEvents * BYTES_PER_EVENT_ESTIMATE;
   const limitingFactor = fillSeconds < draft.max_length_seconds ? 'events cap' : 'time limit';
-  hint.textContent = `≈ ${_formatBytes(projectedBytes)} · ${_humanDuration(cappedSeconds)} before ${limitingFactor} (~${rate.toFixed(0)} msg/s observed)`;
+  hint.textContent = `≈ ${formatBytes(projectedBytes)} · ${_humanDuration(cappedSeconds)} before ${limitingFactor} (~${rate.toFixed(0)} msg/s observed)`;
 };
 
 const fetchRecordBuffer = async () => {
@@ -838,10 +831,15 @@ const fetchRawLogs = async () => {
   _renderRawLogPanel();
 };
 
+// Speeds a raw log can be played at, as [value, label]; 0 = as fast as possible.
+const RAW_LOG_SPEEDS = [[1, '1×'], [10, '10×'], [100, '100×'], [0, 'as fast as possible']];
+
 const _rawLogRow = (log) => `
   <li class="rawlog-item">
     <span class="record-name">${escapeHtml(log.name)}</span>
-    <span class="record-meta">${escapeHtml(_formatBytes(log.bytes))}</span>
+    <span class="record-meta">${escapeHtml(formatBytes(log.bytes))}</span>
+    <button type="button" class="btn-mini" data-rawlog-play="${escapeHtml(log.name)}"
+            ${state.canConnected ? 'disabled title="Disconnect CAN to play a raw log"' : 'title="Play it as if it were the bus"'}>Play</button>
     <a class="btn-mini" download
        href="${escapeHtml(withTokenParam(`${apiBase()}/api/rawlogs/${encodeURIComponent(log.name)}`))}">Download</a>
     <button type="button" class="btn-mini btn-danger" data-rawlog-delete="${escapeHtml(log.name)}">Delete</button>
@@ -854,17 +852,22 @@ const _renderRawLogPanel = () => {
   const control = active
     ? `<span class="record-dot rec" aria-hidden="true"></span>
        <span class="record-name">${escapeHtml(active.name)}</span>
-       <span class="record-meta">${Number(active.frames).toLocaleString()} frames · ${escapeHtml(_formatBytes(active.bytes))}</span>
+       <span class="record-meta">${Number(active.frames).toLocaleString()} frames · ${escapeHtml(formatBytes(active.bytes))}</span>
        ${active.error ? `<span class="record-badge record-badge-warn">${escapeHtml(active.error)}</span>` : ''}
        <button type="button" class="btn-mini" data-rawlog="stop">Stop</button>`
     : `<button type="button" class="btn-mini" data-rawlog="start"${state.canConnected ? '' : ' disabled title="Connect CAN first"'}>Start raw log</button>`;
   const saved = (logs || []).filter((log) => !active || log.name !== active.name);
+  const speeds = RAW_LOG_SPEEDS.map(([value, label]) =>
+    `<option value="${value}"${value === state.rawLogPlaybackSpeed ? ' selected' : ''}>${label}</option>`).join('');
+  const speedPicker = saved.length
+    ? `<label class="rawlog-speed">Play at <select data-rawlog="speed" aria-label="Playback speed">${speeds}</select></label>`
+    : '';
   const fresh = document.createElement('div');
   fresh.innerHTML = `
     <div class="rawlog-head">
       <h3 class="record-builder-h">Raw CAN log
         <span class="record-builder-sub">every frame, candump .log · opens in python-can, SavvyCAN, can-utils</span></h3>
-      <div class="rawlog-active">${control}</div>
+      <div class="rawlog-active">${speedPicker}${control}</div>
     </div>
     ${saved.length ? `<ul class="rawlog-list">${saved.map(_rawLogRow).join('')}</ul>` : ''}`;
   patchChildren(panel, fresh);  // keeps Stop in place while the frame count ticks
@@ -878,6 +881,13 @@ const _onRawLogClick = async (e) => {
       await requestJson('/api/rawlogs', { method: 'POST' });
     } else if (btn.dataset.rawlog === 'stop') {
       await requestJson('/api/rawlogs/stop', { method: 'POST' });
+    } else if (btn.dataset.rawlogPlay) {
+      await requestJson(`/api/rawlogs/${encodeURIComponent(btn.dataset.rawlogPlay)}/play`, {
+        method: 'POST',
+        body: JSON.stringify({ speed: state.rawLogPlaybackSpeed }),
+      });
+      showToast(`Playing ${btn.dataset.rawlogPlay}; Disconnect stops it`, 'info');
+      pollStatus();  // shows it as the connected interface now, not at the next poll
     } else if (btn.dataset.rawlogDelete) {
       const name = btn.dataset.rawlogDelete;
       if (!window.confirm(`Delete ${name}?`)) return;
@@ -903,6 +913,9 @@ const initRecordView = () => {
   container.dataset.ready = '1';
   _renderViewShell(container);
   el('rawLogPanel').addEventListener('click', _onRawLogClick);
+  el('rawLogPanel').addEventListener('change', (e) => {
+    if (e.target.dataset.rawlog === 'speed') state.rawLogPlaybackSpeed = Number(e.target.value);
+  });
   _initPickers();
   _bindBuilderInputs();
   _refreshSelection();

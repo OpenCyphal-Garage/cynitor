@@ -59,6 +59,7 @@ class ScannerNode:
     INFO_REFRESH_S = 60.0   # GetInfo refresh period once a node has answered
     INFO_RETRY_S = 10.0     # retry period while it has not
     NODE_ID_CONFLICT_REPORT_S = 60.0  # report a shared node-ID at most this often
+    offline: Optional[dict] = None    # set per session while a raw log plays (see __init__)
     STANDARD_SERVICES = {
         384: 'uavcan.register.Access_1_0',
         385: 'uavcan.register.List_1_0',
@@ -112,6 +113,9 @@ class ScannerNode:
         self.subject_types: dict[int, str] = {}           # subject_id -> the type it is decoded as
         self._uptime_before_drop: dict[int, int] = {}     # node_id -> uptime before a drop, until judged
         self._node_id_conflict_reported: dict[int, float] = {}  # node_id -> monotonic time of last report
+        # While a raw log plays: its sidecar (see raw_log). Nodes then answer
+        # nothing, so ports and names come from it instead of the nodes.
+        self.offline: Optional[dict] = None
         # Nodes publish uavcan.diagnostic.Record on its fixed subject-ID with no
         # register naming it, so it is decoded for every node regardless.
         self._subscribe(self.DIAGNOSTIC_SUBJECT_ID, uavcan.diagnostic.Record_1_1, "uavcan.diagnostic.Record_1_1")
@@ -277,6 +281,12 @@ class ScannerNode:
                 f"are case-sensitive. Using {canonical}."
             )
         return port_id, canonical
+
+    def offline_ports(self, node_id: int) -> tuple[dict[int, str], dict[int, str]]:
+        """(publishers, servers) of a node as a raw log's sidecar recorded them."""
+        def ports(kind: str) -> dict[int, str]:
+            return {int(k): v for k, v in self.offline.get(kind, {}).get(str(node_id), {}).items()}
+        return ports("publishers"), ports("servers")
 
     async def update_reg_list(self, node_id: int) -> tuple[dict[int, str], dict[int, str]]:
         """
@@ -1350,6 +1360,7 @@ class ScannerNode:
 
     HEALTH_NAMES = {0: "NOMINAL", 1: "ADVISORY", 2: "CAUTION", 3: "WARNING"}
     MODE_NAMES = {0: "OPERATIONAL", 1: "INITIALIZATION", 2: "MAINTENANCE", 3: "SOFTWARE_UPDATE"}
+    MODE_SOFTWARE_UPDATE = 3
 
     def _get_node_unique_id_hex(self, node_id: int) -> Optional[str]:
         node = self.all_nodes.get(node_id)
@@ -1457,6 +1468,8 @@ class ScannerNode:
                 "old": self.MODE_NAMES.get(prev_mode, str(prev_mode)),
                 "new": self.MODE_NAMES.get(mode_val, str(mode_val)),
             })
+            if prev_mode == self.MODE_SOFTWARE_UPDATE:  # new firmware runs: its version, at once
+                self._schedule_info_refresh(node_id, was_disappeared=False)
         self._prev_mode[node_id] = mode_val
 
         self._prev_uptime[node_id] = self._make_json_serializable(msg.uptime)
@@ -1642,7 +1655,7 @@ class ScannerNode:
         GetInfo can take up to the response timeout. Awaiting it inside the
         heartbeat callback would hold up every other node's heartbeats behind it.
         """
-        if node_id in self._info_in_flight:
+        if node_id in self._info_in_flight or self.offline is not None:
             return False
         self._info_in_flight.add(node_id)
         self.all_nodes[node_id].last_info_attempt = datetime.datetime.now()
@@ -1722,6 +1735,11 @@ class ScannerNode:
 
     def close(self) -> None:
         self._node.close()
+
+    def node_mode(self, node_id: int) -> Optional[str]:
+        """The mode in the node's latest heartbeat (e.g. SOFTWARE_UPDATE), or None if none was seen."""
+        mode = self._prev_mode.get(node_id)
+        return None if mode is None else self.MODE_NAMES.get(mode, str(mode))
 
     @property
     def node(self):

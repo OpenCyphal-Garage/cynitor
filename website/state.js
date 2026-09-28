@@ -27,6 +27,7 @@ const state = {
   // time. Never a guess: an adapter not connected before starts unselected.
   canBitrates: {},
   canDataBitrates: {},   // CAN FD data bitrate last used per adapter; absent = Classic CAN
+  rawLogPlaybackSpeed: 1,  // Record view: speed to play a raw log at; 0 = as fast as possible
   customCanSpec: '',
   favouriteNodeIds: new Set(),
   hiddenNodeIds: new Set(),
@@ -197,6 +198,13 @@ const setNodeAlias = (uid, alias) => {
     delete state.nodeAliases[key];
   }
   saveSettings();
+};
+
+const formatBytes = (b) => {
+  if (b >= 1e9) return `${(b / 1e9).toFixed(2)} GB`;
+  if (b >= 1e6) return `${(b / 1e6).toFixed(1)} MB`;
+  if (b >= 1e3) return `${(b / 1e3).toFixed(1)} KB`;
+  return `${b} B`;
 };
 
 const escapeHtml = (value) =>

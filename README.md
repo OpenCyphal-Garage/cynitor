@@ -75,7 +75,7 @@ Then open `http://localhost:5500` instead. The address field defaults to
 - **Live node table** — sortable, filterable, with health, message rate, uptime, and per-row publisher/subscriber/server/client port lists. Pin favourites to the top with a star, hide offline nodes you don't care about.
 - **Subject browser** — a second view (toggle via sidebar tabs) that lists every subject and service on the network. Expand any service inline to send requests to specific nodes without leaving the subject-centric view.
 - **Per-subject inspection** — click a node, then a subject card in the detail panel, to see live message attributes and a 60-second history.
-- **Service interaction** — invoke services on remote nodes with auto-discovered request schemas, expandable composite fields, and a persistent call history (stored in SQLite, survives restarts). Nodes that serve `uavcan.node.ExecuteCommand` get Restart and Factory reset buttons.
+- **Service interaction** — invoke services on remote nodes with auto-discovered request schemas, expandable composite fields, and a persistent call history (stored in SQLite, survives restarts). Nodes that serve `uavcan.node.ExecuteCommand` get Restart and Factory reset buttons, and **Update firmware…**: pick a `.bin` and Cynitor serves it to the node's Cyphal bootloader (e.g. Zubax Kocherga), with a progress bar as the node reads it.
 - **Node history** — lifecycle tracking with health/mode changes, restarts, service calls, and per-subject telemetry summaries. Two nodes sharing a node-ID, or publishing one subject with different types, are flagged there. Retained for 30 days.
 - **Network topology** — D3 force-directed graph of device and subject nodes with directional pub/sub links and animated live-traffic. Three view modes (nodes only / node-centric / subject-centric), drag-to-pin with persistent positions, adjacency highlighting, hide-system / hide-offline / per-node-or-subject hide with a restore badge, inline device rename, gravity bias by total links / channels / rate / payload, and per-link rate/payload overlays.
 - **Multi-attribute plots** — each numeric attribute gets its own panel with its own y-axis, so a fast-growing uptime doesn't squash a small voltage reading. Interactive three-zone legend pills for color, line style, and visibility.
@@ -83,7 +83,7 @@ Then open `http://localhost:5500` instead. The address field defaults to
 - **Compare view** — independent graphs for side-by-side multi-series comparison with derived series (delta, ratio, moving average, min/max, rate of change), thresholds, timeline markers (Shift+click), freehand drawing (Alt+drag), crosshair sync across graphs, and workspace export/import.
 - **DSDL Inspector** — searchable tree of all loaded DSDL types with bus-activity indicators (which types are actually being seen on the wire), field-level search, and dependency navigation. Create, edit, compile and delete custom DSDL types, kept in the data folder (`dsdl/custom`, compiled into `dsdl/compiled`), with a compile-state lock. Compiling runs inside Cynitor, so it works in the packaged binaries too.
 - **Recordings** — capture filtered events into per-recording SQLite stores with `max_length` / `max_events` limits and `stop_on_limit`. Quick-save the last N seconds from the global buffer, duplicate a configuration with "New like this", edit limits on live recordings without stopping them, and export per recording as CSV or JSONL. Replay any recording through the live UI with play/pause/seek/speed controls.
-- **Raw CAN logs** — record every frame on the bus (Classic, CAN FD and error frames) to a candump `.log` file from the Record view, and download it: python-can, SavvyCAN and can-utils open it, and `log2asc` turns it into Vector ASC.
+- **Raw CAN logs** — record every frame on the bus (Classic, CAN FD and error frames) to a candump `.log` file from the Record view, and download it: python-can, SavvyCAN and can-utils open it, and `log2asc` turns it into Vector ASC. Play a saved log back (1×, 10×, 100×, or as fast as possible) with CAN disconnected, and the dashboard shows it as if it were the live bus.
 - **Right log panel** — hidden by default, resizable; merges live `uavcan.diagnostic.Record` (subject 8184), any user-added text-bearing subject, and the backend's Python logs (polled from `/api/logs`) into one timeline. Per-source toggle pills with live count badges, severity floor across all sources, amber disconnect indicator when the backend is unreachable.
 - **Dark / light theme**, sidebar collapse, resizable detail panel.
 - **Auto-reconnect** on transient backend or frontend-server outages.
@@ -116,7 +116,7 @@ Other options:
 Bus history (24 h), node history (30 days), service-call history, recordings,
 remembered device names, and the allocator's table of which device got which
 node-ID are kept in SQLite files in one data folder, whatever folder Cynitor
-is started from. Raw CAN logs go in its `raw/` subfolder:
+is started from. Raw CAN logs go in its `raw/` subfolder, firmware files for updates in `firmware/`:
 
 | OS | Data folder |
 |----|-------------|

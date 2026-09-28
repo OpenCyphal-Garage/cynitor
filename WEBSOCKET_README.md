@@ -1039,7 +1039,12 @@ POST   /api/rawlogs           → 201 { name, frames, bytes, started_unix, error
 POST   /api/rawlogs/stop      → { name, frames, bytes, started_unix, error }       (409 if none runs)
 GET    /api/rawlogs/{name}    → the file, as an attachment                          (404 if no such log)
 DELETE /api/rawlogs/{name}    → { deleted }                                         (409 while it runs, 404 if no such log)
+POST   /api/rawlogs/{name}/play { speed } → { status, can_interface, can_fd }   (409 if CAN is connected, 404 if no such log, 400 bad speed)
 ```
+
+**Playback.** `POST /api/rawlogs/{name}/play` opens the log as if it were the bus: the session runs as usual (nodes, subjects, telemetry WebSocket, recordings), with `can_interface` `rawlog:<name>` in `/api/status`. `speed` is 1 (logged pace) to 1000, or 0 for as fast as the file can be read; default 1. Frames the recording Cynitor sent itself are left out, and nothing is sent: GetInfo, register reads and commands get no answer. The session ends by itself at the end of the log, and `POST /api/can/disconnect` ends it earlier.
+
+When a log stops, what the session knew about the bus is saved beside it as `cynitor-YYYYMMDD-HHMMSS.types.json`: each node's published subjects and their types, its servers and name, Cynitor's node-ID, the bitrates and whether it was CAN FD. Playback reads it, so subjects typed through registers still decode. Without it (a log from elsewhere or an older Cynitor), only fixed-port subjects decode, and CAN FD is detected from the frames. Deleting a log deletes its sidecar.
 
 `logs` includes the active log's file; `error` is set if writing failed (e.g. the disk is full), which ends the log. Only names of the `cynitor-YYYYMMDD-HHMMSS.log` form reach a file. The frames come from the CAN hub for adapters Cynitor opens itself, and on SocketCAN from a second, listen-only socket, whose timestamps are the kernel's. On SocketCAN a frame is marked `T` when the kernel says it was created on this computer, whichever program sent it (Cynitor, or on a `vcan` every node), and `R` when it came from the bus.
 
@@ -1140,6 +1145,21 @@ When replay terminates — naturally at the end of the recording, or because a c
 **MVP scope notes:**
 - Only `kind='subject'` rows are replayed. `service_call` rows stay in storage for export but aren't played.
 - `/api/nodes` during replay is synthesised from the recording's publisher list — no GetInfo / health / mode / uptime / client port lists. The placeholder payload carries `_replay: true` on each node so consumers can flag the view as approximate.
+
+### Firmware updates
+
+A node with a Cyphal bootloader (e.g. Zubax Kocherga) updates itself from a file Cynitor serves. Cynitor sends it `uavcan.node.ExecuteCommand` `COMMAND_BEGIN_SOFTWARE_UPDATE` (65533) with the file name as the parameter; the node restarts into its bootloader and reads the file, 256 bytes at a time, with `uavcan.file.Read` from Cynitor's node-ID. Checking the image and starting it is the bootloader's job. Files live in the data folder under `firmware/`.
+
+```http
+GET    /api/firmware                → { files: [{name, bytes, modified_unix}], updates: { "<node_id>": update } }
+POST   /api/firmware?name=<name>    → 201 { name, bytes }   body: the file (application/octet-stream); replaces a file of that name
+DELETE /api/firmware/{name}         → { deleted }           (404 if no such file)
+POST   /api/nodes/{node_id}/firmware { file } → update      (404 no such file, 409 refused or nothing can be sent, 504 no answer)
+```
+
+An `update` is `{ file, bytes, read, state, started_unix, updated_unix, mode }`: `read` is how far the node has read the file, `state` is `requested` (the node accepted the command), `reading`, or `transferred` (it read the last, short chunk), and `mode` the mode in its latest heartbeat (`SOFTWARE_UPDATE` in the bootloader, `OPERATIONAL` once the new firmware runs), or null. Updates are kept per session and end with it.
+
+Names are plain file names (letters, digits, `.`, `_`, `-`; up to 128 characters); a file holds 1 byte to 32 MiB (400 empty, 413 larger). Only `uavcan.file.Read` is served, and only for these files: other nodes cannot list, write or delete files on this computer. Nothing is served while a raw log plays or when Cynitor has no node-ID; then the update is refused with 409.
 
 ### Event Logger (SQLite)
 
