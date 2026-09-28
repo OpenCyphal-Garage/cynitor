@@ -899,6 +899,13 @@ body {
   letter-spacing: 0.1em;
 }
 
+/* The wordmark is dark blue, invisible on the dark sidebar: invert it and turn
+   the hue back, which keeps the orange stroke orange. */
+[data-theme="dark"] .cyphal-logo {
+  filter: invert(1) hue-rotate(180deg);
+  opacity: 0.85;
+}
+
 .powered-by-label {
   font-size: 0.4rem;
   letter-spacing: 0.06em;

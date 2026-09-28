@@ -1880,7 +1880,9 @@ const renderPlot = (container) => {
   _lastPlotFingerprint = fullFp;
 
   if (!state.hiddenPlotSeries.has(sid)) {
-    state.hiddenPlotSeries.set(sid, new Set());
+    // A timestamp is metadata, not a signal (in uavcan.si types usually 0):
+    // start it hidden; its legend pill shows it on demand.
+    state.hiddenPlotSeries.set(sid, new Set(allSeries.filter((s) => s.name === 'timestamp').map((s) => s.name)));
   }
   const hidden = state.hiddenPlotSeries.get(sid);
   const visible = allSeries.filter((s) => !hidden.has(s.name));

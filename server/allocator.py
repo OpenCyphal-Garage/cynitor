@@ -12,7 +12,6 @@ import pycyphal
 import pycyphal.application
 
 import uavcan.node
-from uavcan.node import Heartbeat_1_0
 
 from pycyphal.transport.can import CANTransport
 from pycyphal.transport.can.media.pythoncan import PythonCANMedia
@@ -55,7 +54,6 @@ class AllocatorApp:
         self.node = pycyphal.application.make_node(info=node_info, transport=transport, registry=self.registry)
         try:
             self.allocator = CentralizedAllocator(node=self.node)
-            self.heartbeat_publisher = self.node.make_publisher(Heartbeat_1_0, "uavcan.node.heartbeat")
             self.node.heartbeat_publisher.mode = uavcan.node.Mode_1.OPERATIONAL
             self.node.heartbeat_publisher.vendor_specific_status_code = os.getpid() % 100
             self.node.start()
