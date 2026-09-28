@@ -374,6 +374,9 @@ const _buildCard = (rec) => {
     const btn = e.target.closest('button[data-action]');
     if (!btn) return;
     if (btn.disabled) return;
+    // The card may outlive this render (see renderRecordList): act on the latest data.
+    const rec = state.recordings.find((r) => r.id === Number(card.dataset.id));
+    if (!rec) return;
     const action = btn.dataset.action;
     if (action === 'stop') stopRecording(rec.id);
     else if (action === 'edit-limits') openEditLimitsModal(rec);
@@ -411,7 +414,11 @@ const renderRecordList = () => {
     list.innerHTML = '<div class="record-empty">No recordings yet. Build a selection on the right, set limits, then press Start.</div>';
     return;
   }
-  list.replaceChildren(...state.recordings.map(_buildCard));
+  // Patched, not rebuilt: live cards refresh every second, and a rebuilt
+  // Stop button would swallow a click in progress.
+  const fresh = document.createElement('div');
+  fresh.replaceChildren(...state.recordings.map(_buildCard));
+  patchChildren(list, fresh);
 };
 
 const _tickLiveCards = () => {
@@ -852,13 +859,15 @@ const _renderRawLogPanel = () => {
        <button type="button" class="btn-mini" data-rawlog="stop">Stop</button>`
     : `<button type="button" class="btn-mini" data-rawlog="start"${state.canConnected ? '' : ' disabled title="Connect CAN first"'}>Start raw log</button>`;
   const saved = (logs || []).filter((log) => !active || log.name !== active.name);
-  panel.innerHTML = `
+  const fresh = document.createElement('div');
+  fresh.innerHTML = `
     <div class="rawlog-head">
       <h3 class="record-builder-h">Raw CAN log
         <span class="record-builder-sub">every frame, candump .log · opens in python-can, SavvyCAN, can-utils</span></h3>
       <div class="rawlog-active">${control}</div>
     </div>
     ${saved.length ? `<ul class="rawlog-list">${saved.map(_rawLogRow).join('')}</ul>` : ''}`;
+  patchChildren(panel, fresh);  // keeps Stop in place while the frame count ticks
 };
 
 const _onRawLogClick = async (e) => {

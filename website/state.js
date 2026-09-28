@@ -313,6 +313,32 @@ const diffUpdateTable = (tabulator, data, keyField) => {
   if (newRows.length) tabulator.addData(newRows);
 };
 
+// Put fresh content into `target`, replacing only the nodes that changed and
+// going deeper where an element kept its tag and attributes. A periodic
+// refresh then leaves unchanged buttons in place: a click is lost when its
+// button is swapped out between press and release.
+const _sameAttributes = (a, b) => a.attributes.length === b.attributes.length
+  && [...a.attributes].every((attr) => b.getAttribute(attr.name) === attr.value);
+
+const patchChildren = (target, fresh) => {
+  const oldKids = [...target.childNodes];
+  const newKids = [...fresh.childNodes];
+  if (oldKids.length !== newKids.length) {
+    target.replaceChildren(...newKids);
+    return;
+  }
+  newKids.forEach((kid, i) => {
+    const old = oldKids[i];
+    if (kid.isEqualNode(old)) return;
+    if (kid.nodeType === Node.ELEMENT_NODE && old.nodeType === Node.ELEMENT_NODE
+        && kid.tagName === old.tagName && _sameAttributes(kid, old)) {
+      patchChildren(old, kid);
+    } else {
+      old.replaceWith(kid);
+    }
+  });
+};
+
 const positionPopover = (popover, anchorEl) => {
   const rect = anchorEl.getBoundingClientRect();
   popover.style.top = (rect.bottom + 4) + 'px';
