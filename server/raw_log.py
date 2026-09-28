@@ -100,7 +100,9 @@ class SocketcanTap:
 
     It receives every frame on the bus, Cynitor's own among them (the kernel
     hands a socket's frames to the host's other sockets too), and the error
-    frames python-can subscribes to.
+    frames python-can subscribes to. python-can marks a frame sent when the
+    kernel says it was created on this host (MSG_DONTROUTE): Cynitor's own,
+    and those of any other program here, such as every node on a vcan.
     """
 
     def __init__(self, device: str, fd: bool, on_frame: Callable[[can.Message], None]) -> None:

@@ -1041,7 +1041,7 @@ GET    /api/rawlogs/{name}    → the file, as an attachment                    
 DELETE /api/rawlogs/{name}    → { deleted }                                         (409 while it runs, 404 if no such log)
 ```
 
-`logs` includes the active log's file; `error` is set if writing failed (e.g. the disk is full), which ends the log. Only names of the `cynitor-YYYYMMDD-HHMMSS.log` form reach a file. The frames come from the CAN hub for adapters Cynitor opens itself, and on SocketCAN from a second, listen-only socket, whose timestamps are the kernel's; there Cynitor's own frames are marked `R`, as the kernel delivers them like any other host socket's.
+`logs` includes the active log's file; `error` is set if writing failed (e.g. the disk is full), which ends the log. Only names of the `cynitor-YYYYMMDD-HHMMSS.log` form reach a file. The frames come from the CAN hub for adapters Cynitor opens itself, and on SocketCAN from a second, listen-only socket, whose timestamps are the kernel's. On SocketCAN a frame is marked `T` when the kernel says it was created on this computer, whichever program sent it (Cynitor, or on a `vcan` every node), and `R` when it came from the bus.
 
 #### Global buffer (`GET /api/recordings/buffer`)
 
