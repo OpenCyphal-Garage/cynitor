@@ -19,6 +19,7 @@ from can_config import (
     is_socketcan,
     media_mtu,
     normalize_can_iface,
+    socketcan_supports_fd,
     resolve_bitrate,
     resolve_data_bitrate,
     socketcan_device,
@@ -284,6 +285,8 @@ class CANSession:
         # instead of blocking it behind a cold-start connect.
         hub: Optional[CANHub] = None
         if is_socketcan(spec):
+            device = socketcan_device(spec)
+            await self._pick_node_id(spec, fd=socketcan_supports_fd(device))
             await asyncio.to_thread(prepare_runtime, can_iface, force_compile, bitrate)
         else:
             hub = await self._open_hub(spec, bitrate, force_compile, data_bitrate)
@@ -369,6 +372,23 @@ class CANSession:
                     logger.error("Cleanup error during failed connect: %s", cleanup_err)
                 raise
 
+    async def _pick_node_id(self, local_spec: str, fd: bool = False) -> None:
+        """Choose Cynitor's own node-ID from the heartbeats on the bus, unless one is set.
+
+        The way `yakut accommodate` does it, without needing yakut: without a
+        node-ID the scanner runs anonymously and can ask no node for its
+        GetInfo or registers.
+        """
+        if "UAVCAN__NODE__ID" in os.environ:
+            return
+        node_id = await asyncio.to_thread(
+            pick_free_node_id, local_spec, frozenset({ALLOCATOR_NODE_ID}), None, fd,
+        )
+        if node_id is None:
+            logger.warning("Every node-ID is in use; the scanner will run anonymously")
+        else:
+            os.environ["UAVCAN__NODE__ID"] = str(node_id)
+
     async def _open_hub(self, spec: str, bitrate: int, force_compile: bool,
                         data_bitrate: Optional[int] = None) -> CANHub:
         """Open a non-SocketCAN adapter once and point every component at the hub's channel.
@@ -380,16 +400,7 @@ class CANSession:
         hub = CANHub(spec, bitrate, data_bitrate)
         await asyncio.to_thread(hub.start)
         try:
-            # `yakut accommodate` would run in a child process, which cannot
-            # see the hub's in-process channel, so pick the node-ID here.
-            if "UAVCAN__NODE__ID" not in os.environ:
-                node_id = await asyncio.to_thread(
-                    pick_free_node_id, hub.local_spec, frozenset({ALLOCATOR_NODE_ID}),
-                )
-                if node_id is None:
-                    logger.warning("Every node-ID is in use; the scanner will run anonymously")
-                else:
-                    os.environ["UAVCAN__NODE__ID"] = str(node_id)
+            await self._pick_node_id(hub.local_spec)
             await asyncio.to_thread(
                 prepare_runtime, hub.local_spec, force_compile, bitrate, False, data_bitrate,
             )

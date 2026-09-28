@@ -380,17 +380,20 @@ def _heartbeat_source(msg: can.Message) -> Optional[tuple[int, Optional[int]]]:
 
 
 def pick_free_node_id(local_spec: str, exclude: frozenset[int] = frozenset(),
-                      rng: Optional[random.Random] = None) -> Optional[int]:
+                      rng: Optional[random.Random] = None, fd: bool = False) -> Optional[int]:
     """Listen to heartbeats on ``local_spec`` and pick an unused node-ID at random.
 
     Same procedure as `yakut accommodate`: listen for two heartbeat periods,
     extending the wait whenever a new node shows up (three periods if it is
     still initializing, as the network may be starting), then choose among
     the node-IDs nobody used. Blocking. Returns None if every node-ID is taken.
+
+    ``fd`` opens the bus for CAN FD frames, which a SocketCAN socket otherwise
+    never receives: on a CAN FD bus every heartbeat is one.
     """
     interface, _, channel = local_spec.partition(":")
     candidates = set(range(_MAX_NODE_ID + 1)) - set(exclude)
-    bus = can.Bus(interface=interface, channel=channel)
+    bus = can.Bus(interface=interface, channel=channel, fd=fd)
     try:
         deadline = time.monotonic() + HEARTBEAT_MAX_PUBLICATION_PERIOD * 2.0
         while (remaining := deadline - time.monotonic()) > 0:

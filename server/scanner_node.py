@@ -1674,11 +1674,24 @@ class ScannerNode:
         finally:
             self._info_in_flight.discard(node_id)
 
+    def _no_answer_hint(self) -> str:
+        """What to check when a node sends heartbeats but answers nothing."""
+        if self.get_transport_info().get("protocol", {}).get("is_fd"):
+            # Cynitor then sends CAN FD frames, which a Classic CAN node never
+            # receives, while its own Classic frames still reach Cynitor.
+            return (" This bus runs CAN FD: a node in Classic CAN mode receives none of "
+                    "Cynitor's requests. Run it in CAN FD too, or set the interface to Classic CAN.")
+        return ""
+
     async def getInfo(self, node_id: int) -> None:
         info_client    = self._node.make_client(uavcan.node.GetInfo_1, node_id)
         try:
             request         = uavcan.node.GetInfo_1.Request()
             response        = await info_client.call(request)
+            if response is None:
+                logging.warning(f"Node {node_id} does not answer GetInfo, though its heartbeats "
+                                f"arrive.{self._no_answer_hint()}")
+                return
             self._snapshot_node_for_identity(node_id)
             self.all_nodes[node_id].set_info(get_info_response=response[0], transfer_from=response[1])
             self.all_nodes[node_id].last_info_time = datetime.datetime.now()
