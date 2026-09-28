@@ -149,6 +149,9 @@ class CANHub:
         self.frames_to_bus = 0
         self.send_failures = 0
         self.error_frames = 0  # reported by the adapter's driver, if it reports them
+        # Called from the pump threads with every frame on the wire, both ways
+        # (raw_log.RawLog.write while a raw log runs).
+        self.on_frame: Optional[Callable[[can.Message], None]] = None
         # Seconds the forwarded frames occupied the wire, for bus load. One
         # counter per pump thread, so that neither can overwrite the other's.
         self.busy_from_bus = 0.0
@@ -234,6 +237,11 @@ class CANHub:
             "adapter_error_frames": self.error_frames,
         }
 
+    def _tell(self, msg: can.Message) -> None:
+        on_frame = self.on_frame
+        if on_frame is not None:
+            on_frame(msg)
+
     def _fail(self, message: str) -> None:
         if self._stop.is_set():
             return  # shutting down; errors from closing buses are expected
@@ -251,9 +259,10 @@ class CANHub:
                 return
             if msg is None:
                 continue
-            # Counted, not forwarded: the Cyphal stack has no use for them.
+            # Counted and logged, not forwarded: the Cyphal stack has no use for them.
             if msg.is_error_frame:
                 self.error_frames += 1
+                self._tell(msg)
                 continue
             # is_rx is False for adapters that echo what they sent (gs_usb
             # does). Forwarding the echo would hand each node its own frames.
@@ -266,6 +275,7 @@ class CANHub:
                 return
             self.frames_from_bus += 1
             self.busy_from_bus += self._wire_seconds(msg)
+            self._tell(msg)
 
     def _pump_to_bus(self) -> None:
         assert self._adapter is not None and self._local is not None
@@ -289,6 +299,10 @@ class CANHub:
                 continue
             self.frames_to_bus += 1
             self.busy_to_bus += self._wire_seconds(msg)
+            if self.on_frame is not None:
+                msg.is_rx = False           # sent by Cynitor
+                msg.timestamp = time.time()  # pycyphal leaves it unset
+                self._tell(msg)
 
 
 class HubBusLoad:

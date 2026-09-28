@@ -557,3 +557,37 @@ class TestHealth:
         link = hub.link_diagnostics()
         assert link["bitrate"] == 500_000
         assert {"adapter_frames_in", "adapter_frames_out", "adapter_send_failures"} <= set(link)
+
+
+class TestFrameCallback:
+    """on_frame sees every frame on the wire, as a raw log needs."""
+
+    def test_both_directions_with_cynitors_own_marked_sent(self, hub, other_node):
+        seen = []
+        hub.on_frame = seen.append
+        a = _component(hub)
+        try:
+            other_node.send(_frame(0xA00))
+            assert _recv_matching(a, 0xA00) is not None
+            a.send(_frame(0xA01))
+            assert _recv_matching(other_node, 0xA01) is not None
+            _wait_for_frames(hub, 2)
+            by_id = {m.arbitration_id: m for m in seen}
+            assert by_id[0xA00].is_rx and not by_id[0xA01].is_rx
+            assert by_id[0xA01].timestamp > 1e9  # stamped when sent
+        finally:
+            a.shutdown()
+
+    def test_error_frames_are_passed_on(self):
+        adapter = StubAdapter(incoming=[can.Message(arbitration_id=0x600, is_error_frame=True), _frame(0x601)])
+        seen = []
+        h = CANHub("stub:0", 500_000, open_bus=lambda spec, bitrate, data_bitrate: adapter)
+        h.on_frame = seen.append  # before the first frame is forwarded
+        a = _component(h)
+        h.start()
+        try:
+            assert _recv_matching(a, 0x601) is not None
+            assert [m.is_error_frame for m in seen] == [True, False]
+        finally:
+            a.shutdown()
+            h.stop()
