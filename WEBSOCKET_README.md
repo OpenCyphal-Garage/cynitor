@@ -1027,6 +1027,22 @@ JSONL (JSON Lines) streams one JSON object per line. The first line is a header:
 
 Both formats set `Content-Disposition: attachment; filename="<sanitized-name>.<ext>"`.
 
+A browser download cannot send an `Authorization` header; with a token set, pass it as `?token=<token>` (the dashboard does).
+
+### Raw CAN logs
+
+Every frame on the bus, in both directions, written to a candump `.log` file (python-can's `CanutilsLogWriter`). python-can (`can.LogReader`), SavvyCAN and can-utils (`canplayer`, `log2asc`, which also converts to Vector ASC) read it. It holds Classic and CAN FD frames and error frames, each with its direction (`R`/`T`). Separate from recordings, which hold decoded events: one raw log runs at a time, and it stops when CAN disconnects. Files live in the data folder under `raw/`, named `cynitor-YYYYMMDD-HHMMSS.log`.
+
+```http
+GET    /api/rawlogs           → { active: {name, frames, bytes, started_unix, error} | null, logs: [{name, bytes, modified_unix}] }
+POST   /api/rawlogs           → 201 { name, frames, bytes, started_unix, error }   (409 if CAN is not connected or a log runs)
+POST   /api/rawlogs/stop      → { name, frames, bytes, started_unix, error }       (409 if none runs)
+GET    /api/rawlogs/{name}    → the file, as an attachment                          (404 if no such log)
+DELETE /api/rawlogs/{name}    → { deleted }                                         (409 while it runs, 404 if no such log)
+```
+
+`logs` includes the active log's file; `error` is set if writing failed (e.g. the disk is full), which ends the log. Only names of the `cynitor-YYYYMMDD-HHMMSS.log` form reach a file. The frames come from the CAN hub for adapters Cynitor opens itself, and on SocketCAN from a second, listen-only socket, whose timestamps are the kernel's; there Cynitor's own frames are marked `R`, as the kernel delivers them like any other host socket's.
+
 #### Global buffer (`GET /api/recordings/buffer`)
 
 Stats about the shared `events` ring used by legacy bookmarks and quick-save:

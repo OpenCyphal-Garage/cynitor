@@ -402,16 +402,17 @@ const setAuthToken = (token) => {
   } catch (_) {}
 };
 
-// Build a wsBase that carries the auth token as a query param when set —
-// browsers don't let JS attach custom headers to WebSocket handshakes, so
-// query string is the only path for the WS auth check.
-const wsUrlWithToken = (path) => {
-  const base = `${wsBase()}${path}`;
+// Append the auth token as a query parameter, for requests that cannot carry
+// an Authorization header: WebSocket handshakes, and downloads the browser
+// makes itself (links, window.location).
+const withTokenParam = (url) => {
   const token = getAuthToken();
-  if (!token) return base;
-  const sep = base.includes('?') ? '&' : '?';
-  return `${base}${sep}token=${encodeURIComponent(token)}`;
+  if (!token) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}token=${encodeURIComponent(token)}`;
 };
+
+const wsUrlWithToken = (path) => withTokenParam(`${wsBase()}${path}`);
 
 const withSmartJsonHeaders = (options = {}) => {
   const method = String(options.method || 'GET').toUpperCase();

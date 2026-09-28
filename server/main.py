@@ -29,6 +29,7 @@ from can_discovery import AdapterCatalog, discover_adapters
 from can_hub import CANHub, HubBusLoad, pick_free_node_id
 from data_dir import ALLOCATOR_DB, EVENTS_DB, SCANNER_DB, prepare_data_dir, resolve_data_dir
 from log_store import InMemoryLogStore, APILogHandler
+from raw_log import RAW_LOG_DIR, RawLog, SocketcanTap, new_log_name
 from startup_setup import ensure_libusb_on_path, prepare_runtime, resolve_project_root
 from version import __version__
 
@@ -217,6 +218,9 @@ class CANSession:
         self.can_bitrate: Optional[int] = None
         self.can_data_bitrate: Optional[int] = None
         self.can_fd = False
+        # The raw frame log being written, if any, and its SocketCAN tap.
+        self.raw_log: Optional[RawLog] = None
+        self._raw_tap: Optional[SocketcanTap] = None
         self.scanner = None
         self.telemetry = None
         self.allocator_manager = None
@@ -415,6 +419,53 @@ class CANSession:
             "clients": self.telemetry.dropped["client"],
         }
 
+    @property
+    def raw_log_folder(self) -> Path:
+        return self.data_dir / RAW_LOG_DIR
+
+    def start_raw_log(self) -> RawLog:
+        """Start logging every frame on the bus to a new candump .log file.
+
+        Behind the hub the frames come from its forwarding loops; on SocketCAN
+        from a second, listen-only socket. RuntimeError if CAN is not connected
+        or a log is already running.
+        """
+        if not self.is_running:
+            raise RuntimeError("CAN is not connected")
+        if self.raw_log is not None:
+            raise RuntimeError("A raw log is already running")
+        self.raw_log_folder.mkdir(parents=True, exist_ok=True)
+        path = self.raw_log_folder / new_log_name()
+        if self.hub is not None:
+            log = RawLog(path, channel="can0")
+            self.hub.on_frame = log.write
+        else:
+            device = socketcan_device(self.can_interface)
+            log = RawLog(path, channel=device)
+            try:
+                self._raw_tap = SocketcanTap(device, self.can_fd, log.write)
+            except Exception:
+                log.close()
+                path.unlink(missing_ok=True)
+                raise
+        self.raw_log = log
+        logger.info("Raw CAN log started: %s", path)
+        return log
+
+    def stop_raw_log(self) -> Optional[RawLog]:
+        """Stop the raw log, if one runs, and return it."""
+        log, self.raw_log = self.raw_log, None
+        if log is None:
+            return None
+        if self.hub is not None:
+            self.hub.on_frame = None
+        if self._raw_tap is not None:
+            self._raw_tap.stop()
+            self._raw_tap = None
+        log.close()
+        logger.info("Raw CAN log stopped: %s (%d frames)", log.path, log.frames)
+        return log
+
     def rescan_registrations(self) -> None:
         """Force the register loop to re-attempt every appeared node on its next tick.
 
@@ -477,6 +528,7 @@ class CANSession:
         """Internal cleanup — caller must hold self._lock."""
         logger.info("Tearing down CAN session...")
 
+        self.stop_raw_log()
         for task in self._tasks:
             if not task.done():
                 task.cancel()

@@ -519,7 +519,7 @@ const deleteRecording = async (id, purge) => {
 };
 
 const exportRecording = (id, fmt) => {
-  window.location.href = `${apiBase()}/api/recordings/${id}/export?format=${fmt}`;
+  window.location.href = withTokenParam(`${apiBase()}/api/recordings/${id}/export?format=${fmt}`);
 };
 
 const duplicateRecording = async (rec) => {
@@ -716,6 +716,7 @@ const _renderViewShell = (container) => {
         </div>
         <span class="record-buffer-chip" id="recBufferChip"></span>
       </header>
+      <section class="rawlog-panel" id="rawLogPanel" aria-label="Raw CAN log"></section>
       <div class="record-layout">
         <section class="record-list-pane">
           <div class="record-list" id="recordList"></div>
@@ -797,6 +798,72 @@ const _bindBuilderInputs = () => {
   el('recStart').addEventListener('click', startRecording);
 };
 
+// ── Raw CAN log: every frame on the bus, as a candump .log file ──
+
+const RAW_LOG_POLL_MS = 2000;
+let _rawLogState = null;   // last GET /api/rawlogs
+let _rawLogTimer = null;
+
+const fetchRawLogs = async () => {
+  try {
+    _rawLogState = await requestJson('/api/rawlogs');
+  } catch {
+    _rawLogState = null;
+  }
+  _renderRawLogPanel();
+};
+
+const _rawLogRow = (log) => `
+  <li class="rawlog-item">
+    <span class="record-name">${escapeHtml(log.name)}</span>
+    <span class="record-meta">${escapeHtml(_formatBytes(log.bytes))}</span>
+    <a class="btn-mini" download
+       href="${escapeHtml(withTokenParam(`${apiBase()}/api/rawlogs/${encodeURIComponent(log.name)}`))}">Download</a>
+    <button type="button" class="btn-mini btn-danger" data-rawlog-delete="${escapeHtml(log.name)}">Delete</button>
+  </li>`;
+
+const _renderRawLogPanel = () => {
+  const panel = el('rawLogPanel');
+  if (!panel) return;
+  const { active, logs } = _rawLogState || { active: null, logs: [] };
+  const control = active
+    ? `<span class="record-dot rec" aria-hidden="true"></span>
+       <span class="record-name">${escapeHtml(active.name)}</span>
+       <span class="record-meta">${Number(active.frames).toLocaleString()} frames · ${escapeHtml(_formatBytes(active.bytes))}</span>
+       ${active.error ? `<span class="record-badge record-badge-warn">${escapeHtml(active.error)}</span>` : ''}
+       <button type="button" class="btn-mini" data-rawlog="stop">Stop</button>`
+    : `<button type="button" class="btn-mini" data-rawlog="start"${state.canConnected ? '' : ' disabled title="Connect CAN first"'}>Start raw log</button>`;
+  const saved = (logs || []).filter((log) => !active || log.name !== active.name);
+  panel.innerHTML = `
+    <div class="rawlog-head">
+      <h3 class="record-builder-h">Raw CAN log
+        <span class="record-builder-sub">every frame, candump .log · opens in python-can, SavvyCAN, can-utils</span></h3>
+      <div class="rawlog-active">${control}</div>
+    </div>
+    ${saved.length ? `<ul class="rawlog-list">${saved.map(_rawLogRow).join('')}</ul>` : ''}`;
+};
+
+const _onRawLogClick = async (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  try {
+    if (btn.dataset.rawlog === 'start') {
+      await requestJson('/api/rawlogs', { method: 'POST' });
+    } else if (btn.dataset.rawlog === 'stop') {
+      await requestJson('/api/rawlogs/stop', { method: 'POST' });
+    } else if (btn.dataset.rawlogDelete) {
+      const name = btn.dataset.rawlogDelete;
+      if (!window.confirm(`Delete ${name}?`)) return;
+      await requestJson(`/api/rawlogs/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    } else {
+      return;
+    }
+  } catch (err) {
+    showToast(`Raw log: ${err?.data?.error || err.message}`, 'error');
+  }
+  fetchRawLogs();
+};
+
 const initRecordView = () => {
   const container = el('recordContainer');
   if (container.dataset.ready) {
@@ -808,6 +875,7 @@ const initRecordView = () => {
   }
   container.dataset.ready = '1';
   _renderViewShell(container);
+  el('rawLogPanel').addEventListener('click', _onRawLogClick);
   _initPickers();
   _bindBuilderInputs();
   _refreshSelection();
@@ -826,7 +894,10 @@ const setRecordViewActive = (active) => {
     if (!_bufferPollTimer) _bufferPollTimer = setInterval(fetchRecordBuffer, BUFFER_POLL_MS);
     if (!_cardsTickerTimer) _cardsTickerTimer = setInterval(_tickLiveCards, 1000);
     if (!_pickerRefreshTimer) _pickerRefreshTimer = setInterval(_refreshPickerTables, PICKER_REFRESH_MS);
+    fetchRawLogs();
+    if (!_rawLogTimer) _rawLogTimer = setInterval(fetchRawLogs, RAW_LOG_POLL_MS);
   } else {
+    if (_rawLogTimer) { clearInterval(_rawLogTimer); _rawLogTimer = null; }
     if (_bufferPollTimer) { clearInterval(_bufferPollTimer); _bufferPollTimer = null; }
     if (_cardsTickerTimer) { clearInterval(_cardsTickerTimer); _cardsTickerTimer = null; }
     if (_pickerRefreshTimer) { clearInterval(_pickerRefreshTimer); _pickerRefreshTimer = null; }

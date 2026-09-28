@@ -17,6 +17,7 @@ Checks, in order:
      register names it, as with most firmware);
   3. Cynitor's allocator gives the anonymous node a node-ID;
   4. bus load is measured by the hub, not canbusload;
+     and a raw log of the frames reads back through python-can;
   5. an adapter that disappears ends the session with an error;
   6. the databases are written to the session's data folder.
 
@@ -160,6 +161,16 @@ async def run() -> None:
         check(isinstance(session.bus_load, HubBusLoad), "bus load comes from the hub")
         loaded = await wait_for(lambda: session.bus_load.utilization > 0, timeout=5.0)
         check(loaded, f"bus load measured ({session.bus_load.utilization} %)")
+
+        log = session.start_raw_log()
+        await asyncio.sleep(3)  # a few heartbeats each way
+        session.stop_raw_log()
+        logged = list(can.LogReader(str(log.path)))
+        from_device = [m for m in logged if m.is_rx and m.arbitration_id & 0x7F == DEVICE_NODE_ID]
+        own = [m for m in logged if not m.is_rx and m.arbitration_id & 0x7F == int(own_id)]
+        check(from_device and own and all(m.is_fd == FD for m in from_device + own),
+              f"raw log {log.path.name}: {len(logged)} frames, the device's and Cynitor's own "
+              f"({'CAN FD' if FD else 'Classic CAN'}), read back by python-can")
 
         session.hub._still_present = lambda: False  # the adapter goes away
         gone = await wait_for(lambda: not session.is_running, timeout=10.0)

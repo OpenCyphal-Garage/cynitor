@@ -13,6 +13,7 @@ from aiohttp import web, WSCloseCode
 
 from can_config import is_explicit_spec, is_socketcan, resolve_bitrate, resolve_data_bitrate, socketcan_device
 from version import __version__
+from raw_log import list_logs, log_path
 
 
 def _csv_escape(value: Any) -> str:
@@ -281,6 +282,12 @@ class WebSocketServer:
         self.app.router.add_post('/api/recordings/{rec_id}/stop', self._post_recording_stop)
         self.app.router.add_get('/api/recordings/{rec_id}/export', self._export_recording)
 
+        self.app.router.add_get('/api/rawlogs', self._get_raw_logs)
+        self.app.router.add_post('/api/rawlogs', self._start_raw_log)
+        self.app.router.add_post('/api/rawlogs/stop', self._stop_raw_log)
+        self.app.router.add_get('/api/rawlogs/{name}', self._download_raw_log)
+        self.app.router.add_delete('/api/rawlogs/{name}', self._delete_raw_log)
+
         self.app.router.add_post('/api/replay/start', self._replay_start)
         self.app.router.add_post('/api/replay/control', self._replay_control)
         self.app.router.add_post('/api/replay/seek', self._replay_seek)
@@ -427,6 +434,54 @@ class WebSocketServer:
         except Exception as e:
             logger.error(f"Failed to connect CAN: {e}", exc_info=True)
             return web.json_response({"error": str(e)}, status=500)
+
+    # ── Raw CAN logs (candump .log files; see raw_log.py) ──
+
+    async def _get_raw_logs(self, request: web.Request) -> web.Response:
+        active = self.session.raw_log
+        return web.json_response({
+            "active": active.status() if active is not None else None,
+            "logs": list_logs(self.session.raw_log_folder),
+        })
+
+    async def _start_raw_log(self, request: web.Request) -> web.Response:
+        try:
+            log = self.session.start_raw_log()
+        except RuntimeError as e:
+            return web.json_response({"error": str(e)}, status=409)
+        except Exception as e:
+            logger.error(f"Failed to start raw log: {e}", exc_info=True)
+            return web.json_response({"error": str(e)}, status=500)
+        return web.json_response(log.status(), status=201)
+
+    async def _stop_raw_log(self, request: web.Request) -> web.Response:
+        log = self.session.stop_raw_log()
+        if log is None:
+            return web.json_response({"error": "No raw log is running"}, status=409)
+        return web.json_response(log.status())
+
+    def _raw_log_file(self, request: web.Request) -> Optional[Path]:
+        path = log_path(self.session.raw_log_folder, request.match_info["name"])
+        return path if path is not None and path.is_file() else None
+
+    async def _download_raw_log(self, request: web.Request) -> web.StreamResponse:
+        path = self._raw_log_file(request)
+        if path is None:
+            return web.json_response({"error": "No such raw log"}, status=404)
+        return web.FileResponse(path, headers={
+            "Content-Type": "text/plain; charset=utf-8",
+            "Content-Disposition": f'attachment; filename="{path.name}"',
+        })
+
+    async def _delete_raw_log(self, request: web.Request) -> web.Response:
+        path = self._raw_log_file(request)
+        if path is None:
+            return web.json_response({"error": "No such raw log"}, status=404)
+        active = self.session.raw_log
+        if active is not None and active.path == path:
+            return web.json_response({"error": "Stop the raw log before deleting it"}, status=409)
+        path.unlink()
+        return web.json_response({"deleted": path.name})
 
     async def _can_disconnect(self, request: web.Request) -> web.Response:
         from main import discover_can_interfaces
