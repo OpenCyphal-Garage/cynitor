@@ -1039,7 +1039,12 @@ POST   /api/rawlogs           → 201 { name, frames, bytes, started_unix, error
 POST   /api/rawlogs/stop      → { name, frames, bytes, started_unix, error }       (409 if none runs)
 GET    /api/rawlogs/{name}    → the file, as an attachment                          (404 if no such log)
 DELETE /api/rawlogs/{name}    → { deleted }                                         (409 while it runs, 404 if no such log)
+POST   /api/rawlogs/{name}/play { speed } → { status, can_interface, can_fd }   (409 if CAN is connected, 404 if no such log, 400 bad speed)
 ```
+
+**Playback.** `POST /api/rawlogs/{name}/play` opens the log as if it were the bus: the session runs as usual (nodes, subjects, telemetry WebSocket, recordings), with `can_interface` `rawlog:<name>` in `/api/status`. `speed` is 1 (logged pace) to 1000, or 0 for as fast as the file can be read; default 1. Frames the recording Cynitor sent itself are left out, and nothing is sent: GetInfo, register reads and commands get no answer. The session ends by itself at the end of the log, and `POST /api/can/disconnect` ends it earlier.
+
+When a log stops, what the session knew about the bus is saved beside it as `cynitor-YYYYMMDD-HHMMSS.types.json`: each node's published subjects and their types, its servers and name, Cynitor's node-ID, the bitrates and whether it was CAN FD. Playback reads it, so subjects typed through registers still decode. Without it (a log from elsewhere or an older Cynitor), only fixed-port subjects decode, and CAN FD is detected from the frames. Deleting a log deletes its sidecar.
 
 `logs` includes the active log's file; `error` is set if writing failed (e.g. the disk is full), which ends the log. Only names of the `cynitor-YYYYMMDD-HHMMSS.log` form reach a file. The frames come from the CAN hub for adapters Cynitor opens itself, and on SocketCAN from a second, listen-only socket, whose timestamps are the kernel's. On SocketCAN a frame is marked `T` when the kernel says it was created on this computer, whichever program sent it (Cynitor, or on a `vcan` every node), and `R` when it came from the bus.
 

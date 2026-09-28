@@ -30,7 +30,8 @@ from can_discovery import AdapterCatalog, discover_adapters
 from can_hub import CANHub, HubBusLoad, pick_free_node_id
 from data_dir import ALLOCATOR_DB, EVENTS_DB, SCANNER_DB, prepare_data_dir, resolve_data_dir
 from log_store import InMemoryLogStore, APILogHandler
-from raw_log import RAW_LOG_DIR, RawLog, SocketcanTap, new_log_name
+from raw_log import (RAW_LOG_DIR, LogPlayer, RawLog, SocketcanTap, log_has_fd_frames, log_path,
+                     new_log_name, read_sidecar, write_sidecar)
 from startup_setup import ensure_libusb_on_path, prepare_runtime, resolve_project_root
 from version import __version__
 
@@ -246,7 +247,8 @@ class CANSession:
         return self.scanner is not None
 
     async def connect(self, can_iface: str, force_compile: bool = False,
-                      bitrate: Optional[int] = None, data_bitrate: Optional[int] = None) -> None:
+                      bitrate: Optional[int] = None, data_bitrate: Optional[int] = None,
+                      *, open_bus=None, offline: Optional[dict] = None) -> None:
         """Start all CAN components.
 
         `bitrate` is ignored by SocketCAN (set it with `ip link`) and required
@@ -289,7 +291,7 @@ class CANSession:
             await self._pick_node_id(spec, fd=socketcan_supports_fd(device))
             await asyncio.to_thread(prepare_runtime, can_iface, force_compile, bitrate)
         else:
-            hub = await self._open_hub(spec, bitrate, force_compile, data_bitrate)
+            hub = await self._open_hub(spec, bitrate, force_compile, data_bitrate, open_bus)
 
         async with self._lock:
             if self.is_running:
@@ -315,6 +317,7 @@ class CANSession:
 
                 logger.info("Initializing ScannerNode...")
                 self.scanner = ScannerNode(register_file=str(self.data_dir / SCANNER_DB))
+                self.scanner.offline = offline
 
                 logger.info("Initializing TelemetryManager...")
                 self.telemetry = TelemetryManager(self.scanner)
@@ -390,14 +393,14 @@ class CANSession:
             os.environ["UAVCAN__NODE__ID"] = str(node_id)
 
     async def _open_hub(self, spec: str, bitrate: int, force_compile: bool,
-                        data_bitrate: Optional[int] = None) -> CANHub:
+                        data_bitrate: Optional[int] = None, open_bus=None) -> CANHub:
         """Open a non-SocketCAN adapter once and point every component at the hub's channel.
 
         Most such adapters admit a single open handle, and the allocator probe,
         the allocator and the scanner each open the bus; see can_hub.
         """
         ensure_libusb_on_path()  # before gs_usb is opened, not just before yakut
-        hub = CANHub(spec, bitrate, data_bitrate)
+        hub = CANHub(spec, bitrate, data_bitrate) if open_bus is None else CANHub(spec, bitrate, data_bitrate, open_bus)
         await asyncio.to_thread(hub.start)
         try:
             await self._pick_node_id(hub.local_spec)
@@ -474,8 +477,64 @@ class CANSession:
             self._raw_tap.stop()
             self._raw_tap = None
         log.close()
+        if self.scanner is not None:
+            write_sidecar(log.path, self._bus_knowledge())
         logger.info("Raw CAN log stopped: %s (%d frames)", log.path, log.frames)
         return log
+
+    def _bus_knowledge(self) -> dict:
+        """What this session knows about the bus that a raw log cannot hold, for playing it."""
+        scanner = self.scanner
+        publishers: dict[str, dict[str, str]] = {}
+        for subject_id, node_ids in scanner.active_publishers.items():
+            subject_type = scanner.subject_types.get(subject_id)
+            for node_id in node_ids if subject_type else ():
+                publishers.setdefault(str(node_id), {})[str(subject_id)] = subject_type
+        names = {}
+        for node_id, node in scanner.all_nodes.items():
+            info = getattr(node, "info_response", None)
+            if info is not None:
+                names[str(node_id)] = info.name.tobytes().decode("utf-8", errors="replace")
+        own = os.environ.get("UAVCAN__NODE__ID")
+        return {
+            "version": 1,
+            "own_node_id": int(own) if own and own.isdigit() else None,
+            "bitrate": self.can_bitrate,
+            "data_bitrate": self.can_data_bitrate,
+            "fd": self.can_fd,
+            "publishers": publishers,
+            "servers": {str(n): {str(s): t for s, t in types.items()}
+                        for n, types in scanner.node_service_types.items()},
+            "names": names,
+        }
+
+    async def play_raw_log(self, name: str, speed: float = 1.0) -> None:
+        """Connect to a saved raw log as if it were the bus (see raw_log.LogPlayer).
+
+        ``speed`` scales the logged pace; 0 plays as fast as frames can be read.
+        The session ends when the log does. FileNotFoundError for an unknown log.
+        """
+        path = log_path(self.raw_log_folder, name)
+        if path is None or not path.is_file():
+            raise FileNotFoundError(f"No raw log named {name!r}")
+        info = read_sidecar(path)
+        fd = info["fd"] if "fd" in info else log_has_fd_frames(path)
+        # Rates only size the bus-load estimate here; a SocketCAN session did not record them.
+        bitrate = info.get("bitrate") or 500_000
+        data_bitrate = (info.get("data_bitrate") or 2_000_000) if fd else None
+        player = LogPlayer(path, speed, info.get("own_node_id"))
+        await self.connect(
+            f"rawlog:{name}", bitrate=bitrate, data_bitrate=data_bitrate, offline=info,
+            open_bus=lambda _spec, _bitrate, _data_bitrate: player,
+        )
+        # Decode every subject the sidecar names from the first frame on,
+        # rather than once each node has registered, which may be too late.
+        for node_id, subjects in info.get("publishers", {}).items():
+            try:
+                await self.scanner.add_subscriptions(int(node_id), {int(s): t for s, t in subjects.items()})
+            except Exception as exc:  # e.g. a custom type that is no longer compiled
+                logger.warning("Raw log %s: cannot decode node %s's subjects: %s", name, node_id, exc)
+        player.play()
 
     def rescan_registrations(self) -> None:
         """Force the register loop to re-attempt every appeared node on its next tick.
@@ -633,7 +692,10 @@ async def register_nodes(scanner, registered_nodes_set: set[int],
             continue
 
         try:
-            dsdl_pub_messages, dsdl_srv_messages = await scanner.update_reg_list(node.node_id)
+            if isinstance(scanner.offline, dict):  # a raw log plays: nobody answers register reads
+                dsdl_pub_messages, dsdl_srv_messages = scanner.offline_ports(node.node_id)
+            else:
+                dsdl_pub_messages, dsdl_srv_messages = await scanner.update_reg_list(node.node_id)
             scanner.node_service_types[node.node_id] = dict(dsdl_srv_messages)
             await scanner.add_subscriptions(node.node_id, dsdl_pub_messages)
             await scanner.add_servers(node.node_id, dsdl_srv_messages)

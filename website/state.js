@@ -27,6 +27,7 @@ const state = {
   // time. Never a guess: an adapter not connected before starts unselected.
   canBitrates: {},
   canDataBitrates: {},   // CAN FD data bitrate last used per adapter; absent = Classic CAN
+  rawLogPlaybackSpeed: 1,  // Record view: speed to play a raw log at; 0 = as fast as possible
   customCanSpec: '',
   favouriteNodeIds: new Set(),
   hiddenNodeIds: new Set(),

@@ -6286,6 +6286,21 @@ details.svc-history-entry[open] > summary::before {
   margin-right: auto;
 }
 
+.rawlog-speed {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.rawlog-speed select {
+  width: auto;
+  font-size: 0.75rem;
+  padding: 0.1875rem 0.375rem;
+}
+
 .record-view a.btn-mini {
   text-decoration: none;
 }

@@ -838,10 +838,15 @@ const fetchRawLogs = async () => {
   _renderRawLogPanel();
 };
 
+// Speeds a raw log can be played at, as [value, label]; 0 = as fast as possible.
+const RAW_LOG_SPEEDS = [[1, '1×'], [10, '10×'], [100, '100×'], [0, 'as fast as possible']];
+
 const _rawLogRow = (log) => `
   <li class="rawlog-item">
     <span class="record-name">${escapeHtml(log.name)}</span>
     <span class="record-meta">${escapeHtml(_formatBytes(log.bytes))}</span>
+    <button type="button" class="btn-mini" data-rawlog-play="${escapeHtml(log.name)}"
+            ${state.canConnected ? 'disabled title="Disconnect CAN to play a raw log"' : 'title="Play it as if it were the bus"'}>Play</button>
     <a class="btn-mini" download
        href="${escapeHtml(withTokenParam(`${apiBase()}/api/rawlogs/${encodeURIComponent(log.name)}`))}">Download</a>
     <button type="button" class="btn-mini btn-danger" data-rawlog-delete="${escapeHtml(log.name)}">Delete</button>
@@ -859,12 +864,17 @@ const _renderRawLogPanel = () => {
        <button type="button" class="btn-mini" data-rawlog="stop">Stop</button>`
     : `<button type="button" class="btn-mini" data-rawlog="start"${state.canConnected ? '' : ' disabled title="Connect CAN first"'}>Start raw log</button>`;
   const saved = (logs || []).filter((log) => !active || log.name !== active.name);
+  const speeds = RAW_LOG_SPEEDS.map(([value, label]) =>
+    `<option value="${value}"${value === state.rawLogPlaybackSpeed ? ' selected' : ''}>${label}</option>`).join('');
+  const speedPicker = saved.length
+    ? `<label class="rawlog-speed">Play at <select data-rawlog="speed" aria-label="Playback speed">${speeds}</select></label>`
+    : '';
   const fresh = document.createElement('div');
   fresh.innerHTML = `
     <div class="rawlog-head">
       <h3 class="record-builder-h">Raw CAN log
         <span class="record-builder-sub">every frame, candump .log · opens in python-can, SavvyCAN, can-utils</span></h3>
-      <div class="rawlog-active">${control}</div>
+      <div class="rawlog-active">${speedPicker}${control}</div>
     </div>
     ${saved.length ? `<ul class="rawlog-list">${saved.map(_rawLogRow).join('')}</ul>` : ''}`;
   patchChildren(panel, fresh);  // keeps Stop in place while the frame count ticks
@@ -878,6 +888,13 @@ const _onRawLogClick = async (e) => {
       await requestJson('/api/rawlogs', { method: 'POST' });
     } else if (btn.dataset.rawlog === 'stop') {
       await requestJson('/api/rawlogs/stop', { method: 'POST' });
+    } else if (btn.dataset.rawlogPlay) {
+      await requestJson(`/api/rawlogs/${encodeURIComponent(btn.dataset.rawlogPlay)}/play`, {
+        method: 'POST',
+        body: JSON.stringify({ speed: state.rawLogPlaybackSpeed }),
+      });
+      showToast(`Playing ${btn.dataset.rawlogPlay}; Disconnect stops it`, 'info');
+      pollStatus();  // shows it as the connected interface now, not at the next poll
     } else if (btn.dataset.rawlogDelete) {
       const name = btn.dataset.rawlogDelete;
       if (!window.confirm(`Delete ${name}?`)) return;
@@ -903,6 +920,9 @@ const initRecordView = () => {
   container.dataset.ready = '1';
   _renderViewShell(container);
   el('rawLogPanel').addEventListener('click', _onRawLogClick);
+  el('rawLogPanel').addEventListener('change', (e) => {
+    if (e.target.dataset.rawlog === 'speed') state.rawLogPlaybackSpeed = Number(e.target.value);
+  });
   _initPickers();
   _bindBuilderInputs();
   _refreshSelection();

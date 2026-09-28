@@ -146,7 +146,7 @@ class TelemetryManager:
                     "uptime": self._to_builtin_int(getattr(node, "uptime", None)),
                     "has_disappeared": node.has_disappeared,
                     "has_responded_to_getinfo": node.has_responded_to_getInfo,
-                    "name": self._decode_name_field(info_response.name) if info_response else None,
+                    "name": self._decode_name_field(info_response.name) if info_response else self._offline_name(node_id),
                     "software_version": {
                         "major": self._to_builtin_int(info_response.software_version.major),
                         "minor": self._to_builtin_int(info_response.software_version.minor)
@@ -201,6 +201,11 @@ class TelemetryManager:
             return None
         clients = self.scanner.get_client_info(node_id)
         return {"node_id": node_id, "clients": clients}
+
+    def _offline_name(self, node_id: int) -> Optional[str]:
+        """While a raw log plays, the node's name as its sidecar recorded it."""
+        offline = getattr(self.scanner, "offline", None)
+        return offline.get("names", {}).get(str(node_id)) if isinstance(offline, dict) else None
 
     @staticmethod
     def _to_builtin_int(value: Any) -> Optional[int]:
