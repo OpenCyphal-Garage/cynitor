@@ -2,13 +2,15 @@
 
 import os
 import asyncio
+import collections
+import json
 import logging
 import datetime
 import re
 import importlib
 import time
 import numpy as np
-from pycyphal.dsdl import get_model
+from pycyphal.dsdl import get_model, to_builtin
 from pydsdl import CompositeType, Field
 
 from typing import Any, Optional, Callable
@@ -46,6 +48,7 @@ class ScannerNode:
     PORT_LIST_SUBJECT_ID = 7510
     PNP_SUBJECT_ID_V2 = 8165
     PNP_SUBJECT_ID_V1 = 8166
+    DIAGNOSTIC_SUBJECT_ID = 8184
     MESSAGE_QUEUE_SIZE = 1000
     REGISTER_TIMEOUT = 2.0
     SERVICE_CALL_TIMEOUT = 5.0
@@ -53,10 +56,14 @@ class ScannerNode:
     MAX_SUBJECT_ID = 8191
     MAX_SERVICE_ID = 511
     MAX_REGISTERS = 256
+    INFO_REFRESH_S = 60.0   # GetInfo refresh period once a node has answered
+    INFO_RETRY_S = 10.0     # retry period while it has not
+    NODE_ID_CONFLICT_REPORT_S = 60.0  # report a shared node-ID at most this often
     STANDARD_SERVICES = {
         384: 'uavcan.register.Access_1_0',
         385: 'uavcan.register.List_1_0',
-        430: 'uavcan.node.GetInfo_1_0'
+        430: 'uavcan.node.GetInfo_1_0',
+        435: 'uavcan.node.ExecuteCommand_1_3',
     }
 
     def __init__(self, register_file: Optional[str] = None) -> None:
@@ -87,8 +94,8 @@ class ScannerNode:
         self.identity_map = NodeIdentityMap()
         self.subject_attributes: dict[int, list[str]] = {}                # Maps subject_id to list of attribute names
         self.publishers_subscribers: dict[int, pycyphal.application.Subscriber] = {}
-        self.message_timestamps: dict[int, list[float]] = {}              # Maps subject_id to timestamps for rate calculation
         self.message_queue: asyncio.Queue = asyncio.Queue(maxsize=self.MESSAGE_QUEUE_SIZE)
+        self.dropped_events = 0  # events discarded because message_queue was full
         self.active_publishers: dict[int, set] = {}                        # Maps subject_id to set of publisher node_ids
         self.services: set[str] = set()
         self.service_metadata = {}  # (node_id, service_id) -> {"namespace": str, "service_name": str}
@@ -100,6 +107,14 @@ class ScannerNode:
         self._prev_mode: dict[int, int] = {}
         self._prev_uptime: dict[int, int] = {}
         self._prev_ports: dict[int, dict] = {}  # node_id -> {publishers: [...], ...}
+        self._info_in_flight: set[int] = set()  # node_ids with a GetInfo running
+        self._rate_timestamps: dict[tuple[int, int], collections.deque] = {}  # (subject_id, node_id) -> times
+        self.subject_types: dict[int, str] = {}           # subject_id -> the type it is decoded as
+        self._uptime_before_drop: dict[int, int] = {}     # node_id -> uptime before a drop, until judged
+        self._node_id_conflict_reported: dict[int, float] = {}  # node_id -> monotonic time of last report
+        # Nodes publish uavcan.diagnostic.Record on its fixed subject-ID with no
+        # register naming it, so it is decoded for every node regardless.
+        self._subscribe(self.DIAGNOSTIC_SUBJECT_ID, uavcan.diagnostic.Record_1_1, "uavcan.diagnostic.Record_1_1")
         try:
             self._node.start()
         except Exception as e:
@@ -202,8 +217,9 @@ class ScannerNode:
         """
         Read one register by name.
 
-        Returns the (field_name, value) pair of the register's union value, or
-        None when the node did not answer.
+        Returns the (field_name, value) pair of the register's union value.
+        Raises TimeoutError when the node did not answer: a lost response is
+        not a missing register, and must not be mistaken for one.
         """
         request = uavcan.register.Access_1_0.Request(
             name=uavcan.register.Name_1_0(name=reg_name.encode("utf-8"))
@@ -212,8 +228,7 @@ class ScannerNode:
             register_access_client.call(request), timeout=self.REGISTER_TIMEOUT
         )
         if not response_tuple or not response_tuple[0]:
-            logging.warning(f"Failed to access register '{reg_name}' for node {node_id}")
-            return None
+            raise TimeoutError(f"Node {node_id} did not answer a read of register '{reg_name}'")
         return self._find_non_none_field(response_tuple[0].value)
 
     async def _resolve_port_register(self, register_access_client, reg_name: str, node_id: int,
@@ -283,15 +298,20 @@ class ScannerNode:
             register_names = []
             index = 0
 
-            # Step 1: Collect all register names
+            # Step 1: Collect all register names. Only an empty name ends the
+            # list; no answer (after one retry) fails the whole registration,
+            # so the caller retries later instead of keeping a truncated list.
             while index < self.MAX_REGISTERS:
                 list_request = uavcan.register.List_1_0.Request(index=index)
-                list_response_tuple = await asyncio.wait_for(
-                    register_list_client.call(list_request), timeout=self.REGISTER_TIMEOUT
-                )
+                list_response_tuple = None
+                for _attempt in range(2):
+                    list_response_tuple = await asyncio.wait_for(
+                        register_list_client.call(list_request), timeout=self.REGISTER_TIMEOUT
+                    )
+                    if list_response_tuple and list_response_tuple[0]:
+                        break
                 if not list_response_tuple or not list_response_tuple[0]:
-                    logging.debug(f"No response for register list at index {index} for node {node_id}")
-                    break
+                    raise TimeoutError(f"Node {node_id} did not answer register list request at index {index}")
 
                 list_response = list_response_tuple[0]
                 register_name = list_response.name.name.tobytes().decode("utf-8")
@@ -341,38 +361,58 @@ class ScannerNode:
                 register_access_client.close()
 
     async def add_subscriptions(self, node_id: int, dsdl_pub_messages: dict[int, str]) -> None:
-        # Creates a subscription if it was not existed before.
+        """Decode every subject the node publishes, subscribing to those not decoded yet."""
         for subject_id, message_type in dsdl_pub_messages.items():
+            self.active_publishers.setdefault(subject_id, set()).add(node_id)
 
-            if subject_id not in self.active_publishers:
-                self.active_publishers[subject_id] = set()
-            self.active_publishers[subject_id].add(node_id)
-
-            # Breaks message name type into the class and message types. For example "uavcan.primitive.String_1_0" -> "uavcan.primitive" and "String_1_0"
-            last_dot_index = message_type.rfind('.')
-            if last_dot_index == -1:
+            # "uavcan.primitive.String_1_0" -> module "uavcan.primitive", class "String_1_0"
+            namespace, _, data_type = message_type.rpartition('.')
+            if not namespace:
                 continue
 
-            namespace = message_type[:last_dot_index]
-            data_type = message_type[last_dot_index + 1:]
+            subscribed = self.subject_types.get(subject_id)
+            if subscribed is None:
+                data_type_class = getattr(importlib.import_module(namespace), data_type)
+                self._subscribe(subject_id, data_type_class, message_type)
+            elif self._major_type(subscribed) != self._major_type(message_type):
+                self._report_type_conflict(subject_id, node_id, message_type, subscribed)
 
-            # Imports modules with this messages to extract attributes and create subscriptions
-            module              = importlib.import_module(namespace)
-            data_type_class     = getattr(module, data_type)
-            message_type_model  = get_model(data_type_class)
+    def _subscribe(self, subject_id: int, data_type_class, message_type: str) -> None:
+        """Decode ``subject_id`` as ``data_type_class`` from now on."""
+        model = get_model(data_type_class)
+        self.subject_attributes[subject_id] = [a.name for a in model.attributes if isinstance(a, Field)]
+        self.subject_types[subject_id] = message_type
 
-            attribute_list = [attribute.name for attribute in message_type_model.attributes if isinstance(attribute, Field)]
-            self.subject_attributes[subject_id] = attribute_list
+        async def callback(msg, transfer, sub_id=subject_id):
+            await self._publisher_callback(msg, transfer, sub_id)
 
-            # Just a wrapper around "_publisher_callback" to pass subject_id into "receive_in_background" method
-            async def callback_with_subject_id(msg, transfer, sub_id=subject_id):
-                await self._publisher_callback(msg, transfer, sub_id)
-            
-            if subject_id not in self.publishers_subscribers:
-                subscriber = self._node.make_subscriber(data_type_class, subject_id)
-                subscriber.receive_in_background(callback_with_subject_id)
-                self.publishers_subscribers[subject_id] = subscriber
-                logging.debug(f"Subscribed to publisher on subject {subject_id}")
+        subscriber = self._node.make_subscriber(data_type_class, subject_id)
+        subscriber.receive_in_background(callback)
+        self.publishers_subscribers[subject_id] = subscriber
+        logging.debug(f"Subscribed to subject {subject_id} as {message_type}")
+
+    @staticmethod
+    def _major_type(type_name: str) -> str:
+        """``type_name`` without its minor version: "ns.Rec_1_1" -> "ns.Rec_1".
+
+        Minor versions of one major version are compatible on the wire, so
+        only a different type or major version is a conflict.
+        """
+        return re.sub(r'_(\d+)_\d+$', r'_\1', type_name)
+
+    def _report_type_conflict(self, subject_id: int, node_id: int, advertised: str, subscribed: str) -> None:
+        """A publisher advertises another type on a subject already decoded as ``subscribed``.
+
+        The subject stays decoded as the first publisher's type, so this
+        node's messages on it may decode wrongly or not at all; say so.
+        """
+        logging.warning(
+            f"Subject {subject_id}: node {node_id} publishes {advertised}, but the subject is "
+            f"decoded as {subscribed}, which an earlier publisher advertised"
+        )
+        self._emit_node_event(node_id, "type_conflict", {
+            "subject_id": subject_id, "type": advertised, "decoded_as": subscribed,
+        })
 
     async def add_servers(self, node_id: int, dsdl_srv_messages: dict[int, str]) -> dict[int, dict[str, Any]]:
         """
@@ -547,16 +587,18 @@ class ScannerNode:
                                         logging.error(f"No fields found in {attribute_type_name} for attribute {key}")
                                         raise ValueError(f"No fields defined in {attribute_type_name}")
                                     
-                                    field_name = fields[0].name
-                                    logging.debug(f"Setting field {field_name} in {attribute_type_name} to value={attr_value}")
-                                    
-                                    # Attempt to set the field with the value
-                                    try:
-                                        setattr(struct_instance, field_name, attr_value)
-                                        logging.debug(f"Set {field_name}={attr_value} on {attribute_type_name} instance")
-                                    except (TypeError, ValueError) as e:
-                                        logging.error(f"Failed to set {field_name}={attr_value} on {attribute_type_name}: {str(e)}")
-                                        raise ValueError(f"Invalid value {attr_value} for field {field_name}: {str(e)}")
+                                    # A dict names the fields to set; a single value sets the
+                                    # first field, as single-field wrappers (primitive.String) need.
+                                    values = attr_value if isinstance(attr_value, dict) else {fields[0].name: attr_value}
+                                    known = {f.name for f in fields}
+                                    for field_name, field_value in values.items():
+                                        if field_name not in known:
+                                            raise ValueError(f"{attribute_type_name} has no field {field_name!r}")
+                                        try:
+                                            setattr(struct_instance, field_name, field_value)
+                                        except (TypeError, ValueError) as e:
+                                            logging.error(f"Failed to set {field_name}={field_value} on {attribute_type_name}: {str(e)}")
+                                            raise ValueError(f"Invalid value {field_value} for field {field_name}: {str(e)}")
                                     
                                     # Assign struct to request
                                     setattr(request, attr.name, struct_instance)
@@ -634,8 +676,9 @@ class ScannerNode:
             response = response_tuple[0]
             logging.info(f"Received response for service {service_id}: {response}")
 
-            response_str = str(response)
-            logging.debug(f"Formatted response as string: {response_str}")
+            # JSON, so that it reads well and scripts can parse it.
+            response_str = json.dumps(to_builtin(response), indent=2)
+            logging.debug(f"Formatted response as JSON: {response_str}")
             return response_str
 
         except Exception as e:
@@ -952,15 +995,6 @@ class ScannerNode:
             register_access_client.close()
 
 
-    def get_message_rate(self, subject_id: int) -> float:
-        timestamps = self.message_timestamps.get(subject_id, [])
-        if len(timestamps) < 2:
-            return 0.0
-        time_span = timestamps[-1] - timestamps[0]
-        if time_span == 0:
-            return 0.0
-        return len(timestamps) / time_span
-
     def _extract_attributes(self, msg: Any, field_names: list[str]) -> list[dict]:
         """Recursively extract attributes from a DSDL message, flattening nested composites."""
         results: list[dict] = []
@@ -1022,14 +1056,44 @@ class ScannerNode:
             return value.tolist()  # Convert array to list
         return value
 
-    def _track_rate(self, subject_id: int, timestamp: float) -> int:
-        """Update message timestamps for rate calculation and return current rate."""
-        if subject_id not in self.message_timestamps:
-            self.message_timestamps[subject_id] = []
-        self.message_timestamps[subject_id].append(timestamp)
-        self.message_timestamps[subject_id] = [t for t in self.message_timestamps[subject_id]
-                                                if t > timestamp - self.MESSAGE_RATE_WINDOW_SECONDS]
-        return round(self.get_message_rate(subject_id))
+    def _windowed_rate(self, times: collections.deque, now: float) -> float:
+        """Messages per second in ``times`` over the rate window ending at ``now``."""
+        cutoff = now - self.MESSAGE_RATE_WINDOW_SECONDS
+        while times and times[0] <= cutoff:
+            times.popleft()
+        if len(times) < 2 or times[-1] == times[0]:
+            return 0.0
+        return (len(times) - 1) / (times[-1] - times[0])
+
+    def _track_rate(self, subject_id: int, node_id: int, timestamp: float) -> tuple[float, float]:
+        """Record one message and return (this publisher's rate, the whole subject's rate).
+
+        Rates are kept per publisher: several nodes publish the same subject
+        (every node publishes Heartbeat), and a per-subject rate would credit
+        each of them with all the others' traffic.
+        """
+        times = self._rate_timestamps.setdefault((subject_id, node_id), collections.deque())
+        times.append(timestamp)
+        publisher_rate = self._windowed_rate(times, timestamp)
+        subject_rate = sum(
+            self._windowed_rate(other, timestamp)
+            for (sid, _nid), other in self._rate_timestamps.items() if sid == subject_id
+        )
+        return round(publisher_rate, 1), round(subject_rate, 1)
+
+    @staticmethod
+    def _transfer_times(transfer) -> tuple[float, float]:
+        """(wall-clock, monotonic) receive time of ``transfer`` in seconds.
+
+        pycyphal stamps a frame when the driver receives it (SocketCAN: in the
+        kernel), which is earlier and steadier than the moment our callback
+        runs. Falls back to now when no transfer is given.
+        """
+        stamp = getattr(transfer, "timestamp", None)
+        try:
+            return float(stamp.system), float(stamp.monotonic)
+        except (AttributeError, TypeError, ValueError):
+            return time.time(), time.monotonic()
 
     @staticmethod
     def _transfer_payload_bytes(transfer) -> Optional[int]:
@@ -1043,15 +1107,17 @@ class ScannerNode:
             return None
 
     async def _queue_event(self, subject_id: int, message_type: str, attributes: list,
-                           publisher_node_id: int, payload_bytes: Optional[int] = None) -> None:
+                           publisher_node_id: int, payload_bytes: Optional[int] = None,
+                           transfer=None) -> None:
         """Build a standardized event dict and put it on the message queue."""
-        timestamp = time.time()
-        rate = self._track_rate(subject_id, timestamp)
+        timestamp, monotonic = self._transfer_times(transfer)
+        rate, subject_rate = self._track_rate(subject_id, publisher_node_id, monotonic)
         event = {
             "subject_id": subject_id,
             "timestamp": datetime.datetime.fromtimestamp(timestamp).isoformat(timespec="seconds"),
             "timestamp_unix": timestamp,
             "rate": rate,
+            "subject_rate": subject_rate,
             "message_type": message_type,
             "attributes": attributes,
             "publisher_node_id": publisher_node_id,
@@ -1062,6 +1128,7 @@ class ScannerNode:
             self.message_queue.put_nowait(event)
         except asyncio.QueueFull:
             self.message_queue.get_nowait()
+            self.dropped_events += 1
             await self.message_queue.put(event)
 
     async def _publisher_callback(self, msg, transfer: pycyphal.transport.TransferFrom, subject_id: int) -> None:
@@ -1077,6 +1144,7 @@ class ScannerNode:
             attributes=attributes,
             publisher_node_id=transfer.source_node_id,
             payload_bytes=self._transfer_payload_bytes(transfer),
+            transfer=transfer,
         )
 
     async def set_register(self, node_id: int, register_name: str, value: str, reg_type: str) -> Any | None:
@@ -1241,6 +1309,7 @@ class ScannerNode:
         self._prev_health.pop(node_id, None)
         self._prev_mode.pop(node_id, None)
         self._prev_uptime.pop(node_id, None)
+        self._uptime_before_drop.pop(node_id, None)
         self._emit_node_event(node_id, "disappeared")
         to_remove = []
 
@@ -1248,10 +1317,12 @@ class ScannerNode:
             if node_id in nodes:
                 nodes.remove(node_id)
 
-            if not nodes and subject_id in self.publishers_subscribers:
+            # The diagnostic subject is decoded for every node, whoever advertises it.
+            if not nodes and subject_id in self.publishers_subscribers and subject_id != self.DIAGNOSTIC_SUBJECT_ID:
                 logging.info(f"Unsubscribing from subject {subject_id}, no active publishers")
                 self.publishers_subscribers[subject_id].close()
                 del self.publishers_subscribers[subject_id]
+                self.subject_types.pop(subject_id, None)
                 to_remove.append(subject_id)
 
         for subject_id in to_remove:
@@ -1337,6 +1408,7 @@ class ScannerNode:
                 {"attribute": "clients", "value": clt_count},
             ],
             publisher_node_id=node_id,
+            transfer=transfer,
         )
 
     async def heartbeat_callback(self, msg: uavcan.node.Heartbeat_1_0, transfer: pycyphal.transport.TransferFrom):
@@ -1348,7 +1420,7 @@ class ScannerNode:
             node.mark_appeared(first_seen=now)
             logging.debug(f"Node {node_id} has appeared for the first time.")
             self._emit_node_event(node_id, "first_seen")
-            await self.getInfo(node_id)
+            self._schedule_info_refresh(node_id, was_disappeared=False)
 
         else:
             was_disappeared = node.has_disappeared
@@ -1357,42 +1429,14 @@ class ScannerNode:
             if was_disappeared:
                 self._prev_ports.pop(node_id, None)
 
-            # Restart detection: uptime jumped backward
-            prev_uptime = self._prev_uptime.get(node_id)
-            new_uptime = self._make_json_serializable(msg.uptime)
-            if prev_uptime is not None and new_uptime < prev_uptime and prev_uptime > 5:
-                self._emit_node_event(node_id, "restart_suspected", {
-                    "old_uptime": prev_uptime, "new_uptime": new_uptime,
-                })
+            self._check_uptime(node_id, self._make_json_serializable(msg.uptime))
 
             node.uptime = msg.uptime
 
-            # Refresh getInfo: immediately on reappearance, otherwise every 60s
-            needs_refresh = (
-                was_disappeared
-                or node.last_info_time is None
-                or (now - node.last_info_time).total_seconds() >= 60
-            )
-            if needs_refresh:
-                old_unique_id = ''.join(f'{byte:02x}' for byte in node.unique_id) if node.has_responded_to_getInfo else None
-                await self.getInfo(node_id)
-                new_unique_id = ''.join(f'{byte:02x}' for byte in node.unique_id) if node.has_responded_to_getInfo else None
-
-                is_replacement = old_unique_id and new_unique_id and old_unique_id != new_unique_id
-                if is_replacement:
-                    known_nid = self.identity_map.get_nid(new_unique_id)
-                    if known_nid is None or known_nid == node_id:
-                        logging.info(f"Node {node_id} identity changed: {old_unique_id} -> {new_unique_id}. Resetting node state.")
-                        self._prev_ports.pop(node_id, None)
-                        self._prev_health.pop(node_id, None)
-                        self._prev_mode.pop(node_id, None)
-                        self._prev_uptime.pop(node_id, None)
-                        self.all_nodes[node_id] = NodeInfo(node_id=node.node_id)
-                        await self.getInfo(node_id)
-                else:
-                    if was_disappeared:
-                        self._emit_node_event(node_id, "reappeared")
-            elif was_disappeared:
+            # Refresh getInfo: immediately on reappearance, otherwise periodically
+            scheduled = (was_disappeared or self._info_due(node, now)) and \
+                self._schedule_info_refresh(node_id, was_disappeared)
+            if was_disappeared and not scheduled:
                 self._emit_node_event(node_id, "reappeared")
 
         # Track health/mode changes
@@ -1430,6 +1474,7 @@ class ScannerNode:
                 {"attribute": "vssc", "value": self._make_json_serializable(msg.vendor_specific_status_code)},
             ],
             publisher_node_id=node_id,
+            transfer=transfer,
         )
 
     async def pnp_v2_callback(self, msg: uavcan.pnp.NodeIDAllocationData_2_0, transfer: pycyphal.transport.TransferFrom):
@@ -1452,6 +1497,7 @@ class ScannerNode:
             message_type="NodeIDAllocationData_2_0",
             attributes=attrs,
             publisher_node_id=transfer.source_node_id if transfer.source_node_id is not None else -1,
+            transfer=transfer,
         )
 
     async def pnp_v1_callback(self, msg: uavcan.pnp.NodeIDAllocationData_1_0, transfer: pycyphal.transport.TransferFrom):
@@ -1467,6 +1513,7 @@ class ScannerNode:
             message_type="NodeIDAllocationData_1_0",
             attributes=attrs,
             publisher_node_id=transfer.source_node_id if transfer.source_node_id is not None else -1,
+            transfer=transfer,
         )
 
     def _snapshot_node_for_identity(self, node_id: int) -> None:
@@ -1532,7 +1579,7 @@ class ScannerNode:
             if client:
                 client.close()
 
-        for tracker in (self._prev_health, self._prev_mode, self._prev_uptime):
+        for tracker in (self._prev_health, self._prev_mode, self._prev_uptime, self._uptime_before_drop):
             val = tracker.pop(old_node_id, None)
             if val is not None:
                 tracker[new_node_id] = val
@@ -1548,6 +1595,84 @@ class ScannerNode:
             "new_node_id": new_node_id,
             "unique_id": unique_id_hex,
         })
+
+    def _check_uptime(self, node_id: int, uptime: int) -> None:
+        """Tell a node restarting from two nodes sharing one node-ID.
+
+        Both make the heartbeat's uptime drop. After a restart the uptime then
+        counts on from its new value; with two nodes the next heartbeat usually
+        comes from the other one, back on the old count. So a drop is judged
+        on the heartbeat after it.
+        """
+        prev = self._prev_uptime.get(node_id)
+        before_drop = self._uptime_before_drop.pop(node_id, None)
+        if before_drop is not None:
+            if uptime >= before_drop:
+                self._report_node_id_conflict(node_id, prev, uptime)
+            else:
+                self._emit_node_event(node_id, "restart_suspected", {
+                    "old_uptime": before_drop, "new_uptime": prev,
+                })
+        elif prev is not None and uptime < prev and prev > 5:
+            self._uptime_before_drop[node_id] = prev
+
+    def _report_node_id_conflict(self, node_id: int, uptime_a: int, uptime_b: int) -> None:
+        now = time.monotonic()
+        last = self._node_id_conflict_reported.get(node_id)
+        if last is not None and now - last < self.NODE_ID_CONFLICT_REPORT_S:
+            return
+        self._node_id_conflict_reported[node_id] = now
+        logging.warning(
+            f"Node-ID {node_id} is used by more than one node: its heartbeats "
+            f"alternate between uptimes {uptime_a}s and {uptime_b}s"
+        )
+        self._emit_node_event(node_id, "node_id_conflict", {"uptimes": [uptime_a, uptime_b]})
+
+    def _info_due(self, node: NodeInfo, now: datetime.datetime) -> bool:
+        """Whether a node's GetInfo should be sent again: periodically once it
+        has answered, sooner while it has not."""
+        if node.last_info_attempt is None:
+            return True
+        interval = self.INFO_REFRESH_S if node.has_responded_to_getInfo else self.INFO_RETRY_S
+        return (now - node.last_info_attempt).total_seconds() >= interval
+
+    def _schedule_info_refresh(self, node_id: int, was_disappeared: bool) -> bool:
+        """Start a GetInfo refresh in the background; False if one is already running.
+
+        GetInfo can take up to the response timeout. Awaiting it inside the
+        heartbeat callback would hold up every other node's heartbeats behind it.
+        """
+        if node_id in self._info_in_flight:
+            return False
+        self._info_in_flight.add(node_id)
+        self.all_nodes[node_id].last_info_attempt = datetime.datetime.now()
+        _fire_and_log(self._refresh_info(node_id, was_disappeared), f"getInfo({node_id})")
+        return True
+
+    async def _refresh_info(self, node_id: int, was_disappeared: bool) -> None:
+        """Run GetInfo and handle a changed identity behind the same node-ID."""
+        try:
+            node = self.all_nodes[node_id]
+            old_unique_id = ''.join(f'{byte:02x}' for byte in node.unique_id) if node.has_responded_to_getInfo else None
+            await self.getInfo(node_id)
+            new_unique_id = ''.join(f'{byte:02x}' for byte in node.unique_id) if node.has_responded_to_getInfo else None
+
+            is_replacement = old_unique_id and new_unique_id and old_unique_id != new_unique_id
+            if is_replacement:
+                known_nid = self.identity_map.get_nid(new_unique_id)
+                if known_nid is None or known_nid == node_id:
+                    logging.info(f"Node {node_id} identity changed: {old_unique_id} -> {new_unique_id}. Resetting node state.")
+                    self._prev_ports.pop(node_id, None)
+                    self._prev_health.pop(node_id, None)
+                    self._prev_mode.pop(node_id, None)
+                    self._prev_uptime.pop(node_id, None)
+                    self._uptime_before_drop.pop(node_id, None)
+                    self.all_nodes[node_id] = NodeInfo(node_id=node.node_id)
+                    await self.getInfo(node_id)
+            elif was_disappeared:
+                self._emit_node_event(node_id, "reappeared")
+        finally:
+            self._info_in_flight.discard(node_id)
 
     async def getInfo(self, node_id: int) -> None:
         info_client    = self._node.make_client(uavcan.node.GetInfo_1, node_id)

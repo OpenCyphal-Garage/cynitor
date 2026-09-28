@@ -184,6 +184,32 @@ async def _(page):
     assert count >= 4, f"Expected at least 4 sortable columns, got {count}"
 
 
+# Keep last: it reloads the page with every other host unreachable.
+@test("Dashboard works with no internet access")
+async def _(page):
+    own_host = urlparse(BASE_URL).hostname
+    external_scripts = []
+
+    async def offline(route):
+        request = route.request
+        if urlparse(request.url).hostname == own_host:
+            await route.continue_()
+            return
+        if request.resource_type == "script":
+            external_scripts.append(request.url)
+        await route.abort("internetdisconnected")
+
+    await page.route("**/*", offline)
+    try:
+        await page.reload(wait_until="load")
+        await page.wait_for_selector(".tabulator-col-title", timeout=5000)
+        loaded = await page.evaluate("typeof d3 === 'object' && typeof Tabulator === 'function'")
+        assert loaded, "D3 or Tabulator did not load without internet access"
+        assert not external_scripts, f"Scripts requested from other hosts: {external_scripts}"
+    finally:
+        await page.unroute("**/*", offline)
+
+
 # ── Runner ──
 
 async def run_tests():

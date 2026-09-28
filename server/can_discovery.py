@@ -25,6 +25,8 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Callable, Iterable, Iterator, Optional
 
+from can_config import supports_fd
+
 logger = logging.getLogger(__name__)
 
 _VENDOR_LABELS = {
@@ -47,6 +49,9 @@ class Adapter:
     interface: str        # what --can and POST /api/can/connect take
     label: str            # what the dropdown shows
     needs_bitrate: bool   # False only for SocketCAN, where the kernel owns it
+    # Whether a session can run CAN FD: for SocketCAN, whether the interface is
+    # set up for it; otherwise whether Cynitor can open the adapter as CAN FD.
+    supports_fd: bool = False
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -84,7 +89,8 @@ def _vendor_adapters() -> list[Adapter]:
             channel = config.get("channel")
             if channel is None:
                 continue
-            found.append(Adapter(f"{interface}:{channel}", f"{vendor} {channel}", True))
+            spec = f"{interface}:{channel}"
+            found.append(Adapter(spec, f"{vendor} {channel}", True, supports_fd(spec)))
     return found
 
 
@@ -129,7 +135,7 @@ def _slcan_adapters() -> list[Adapter]:
 def discover_adapters(socketcan_names: Iterable[str],
                       platform: str = sys.platform) -> list[Adapter]:
     """Every adapter found, SocketCAN interfaces first."""
-    adapters = [Adapter(name, f"{name} (SocketCAN)", False) for name in socketcan_names]
+    adapters = [Adapter(name, f"{name} (SocketCAN)", False, supports_fd(name)) for name in socketcan_names]
     adapters += _vendor_adapters()
     if not platform.startswith("linux"):
         adapters += _gs_usb_adapters()

@@ -15,6 +15,8 @@ const HISTORY_EVENT_LABELS = {
   service_call: 'Service call',
   got_node_id: 'Got node ID',
   lost_node_id: 'Lost node ID',
+  node_id_conflict: 'Node-ID conflict',
+  type_conflict: 'Type conflict',
 };
 
 const HISTORY_EVENT_CLS = {
@@ -29,6 +31,8 @@ const HISTORY_EVENT_CLS = {
   service_call: 'hist-muted',
   got_node_id: 'hist-ok',
   lost_node_id: 'hist-err',
+  node_id_conflict: 'hist-err',
+  type_conflict: 'hist-warn',
 };
 
 const formatHistoryTime = (unix) => {
@@ -60,6 +64,10 @@ const formatEventDetail = (evt) => {
     case 'got_node_id':
     case 'lost_node_id':
       return `#${d.node_id}`;
+    case 'node_id_conflict':
+      return `two nodes share it · uptimes ${(d.uptimes || []).map(Number).join('s / ')}s`;
+    case 'type_conflict':
+      return `subject ${Number(d.subject_id)}: ${escapeHtml(d.type)} · decoded as ${escapeHtml(d.decoded_as)}`;
     case 'port_change': {
       const parts = [];
       for (const kind of ['publishers', 'subscribers', 'servers', 'clients']) {

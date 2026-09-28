@@ -2,7 +2,7 @@
 
 import asyncio
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 
 @pytest.fixture
@@ -56,9 +56,10 @@ class TestRescanRegistrations:
 class FakeHub:
     """Stands in for CANHub so that no test opens a real adapter."""
 
-    def __init__(self, spec, bitrate):
+    def __init__(self, spec, bitrate, data_bitrate=None):
         self.spec = spec
         self.bitrate = bitrate
+        self.data_bitrate = data_bitrate
         self.local_spec = "virtual:fake-hub"
         self.error = None
         self.started = False
@@ -79,8 +80,8 @@ def hubs(monkeypatch):
     import main
     created = []
 
-    def make_hub(spec, bitrate):
-        created.append(FakeHub(spec, bitrate))
+    def make_hub(spec, bitrate, data_bitrate=None):
+        created.append(FakeHub(spec, bitrate, data_bitrate))
         return created[-1]
 
     monkeypatch.setattr(main, "CANHub", make_hub)
@@ -113,7 +114,7 @@ class TestConnectBitrate:
         with pytest.raises(RuntimeError, match="stop"):
             await s.connect("gs_usb:0")
         assert (hubs[0].spec, hubs[0].bitrate) == ("gs_usb:0", 250_000)
-        assert captured == [("virtual:fake-hub", False, 250_000, False)]
+        assert captured == [("virtual:fake-hub", False, 250_000, False, None)]
 
     async def test_explicit_bitrate_wins(self, captured, hubs):
         from main import CANSession
@@ -121,7 +122,7 @@ class TestConnectBitrate:
         with pytest.raises(RuntimeError, match="stop"):
             await s.connect("gs_usb:0", bitrate=125_000)
         assert hubs[0].bitrate == 125_000
-        assert captured == [("virtual:fake-hub", False, 125_000, False)]
+        assert captured == [("virtual:fake-hub", False, 125_000, False, None)]
 
     async def test_invalid_bitrate_fails_before_prepare_runtime(self, captured, hubs):
         from main import CANSession
@@ -153,6 +154,40 @@ class TestConnectBitrate:
         from main import CANSession
         with pytest.raises(ValueError):
             CANSession(default_bitrate=0)
+
+
+class TestConnectCanFd:
+    """A data bitrate opens a hub adapter as CAN FD; SocketCAN decides for itself."""
+
+    async def test_data_bitrate_reaches_hub_and_runtime(self, captured, hubs):
+        from main import CANSession
+        with pytest.raises(RuntimeError, match="stop"):
+            await CANSession().connect("pcan:PCAN_USBBUS1", bitrate=500_000, data_bitrate=2_000_000)
+        assert hubs[0].data_bitrate == 2_000_000
+        assert captured == [("virtual:fake-hub", False, 500_000, False, 2_000_000)]
+
+    async def test_session_default_data_bitrate(self, captured, hubs):
+        from main import CANSession
+        with pytest.raises(RuntimeError, match="stop"):
+            await CANSession(default_bitrate=500_000, default_data_bitrate=4_000_000).connect("kvaser:0")
+        assert hubs[0].data_bitrate == 4_000_000
+
+    async def test_adapter_without_can_fd_is_refused_before_opening(self, captured, hubs):
+        from main import CANSession
+        with pytest.raises(ValueError, match="cannot run CAN FD"):
+            await CANSession().connect("gs_usb:0", bitrate=500_000, data_bitrate=2_000_000)
+        assert captured == [] and hubs == []
+
+    async def test_socketcan_ignores_a_data_bitrate(self, captured, hubs):
+        from main import CANSession
+        with pytest.raises(RuntimeError, match="stop"):
+            await CANSession().connect("vcan0", data_bitrate=2_000_000)
+        assert captured == [("vcan0", False, None)]
+
+    def test_invalid_default_data_bitrate_is_rejected_up_front(self):
+        from main import CANSession
+        with pytest.raises(ValueError):
+            CANSession(default_data_bitrate=50_000_000)
 
 
 class TestConnectThroughHub:
@@ -254,3 +289,58 @@ class TestQuietCompletionOfCancelledFutures:
         for context in cases:
             main._quiet_completion_of_cancelled_futures(loop, context)
         assert loop.default_exception_handler.call_count == len(cases)
+
+
+class TestRegisterNodesRetry:
+    """A node whose registration fails is retried later, not given up on."""
+
+    def make_scanner(self, update_reg_list):
+        node = MagicMock(node_id=42, has_disappeared=False, has_appeared=True, has_registered_ports=True)
+        scanner = MagicMock()
+        scanner.nodes = {42: node}
+        scanner.node_service_types = {}
+        scanner.update_reg_list = update_reg_list
+        scanner.add_subscriptions = AsyncMock()
+        scanner.add_servers = AsyncMock()
+        return scanner
+
+    @pytest.mark.asyncio
+    async def test_failed_node_is_not_marked_registered(self):
+        from main import register_nodes
+        scanner = self.make_scanner(AsyncMock(side_effect=TimeoutError("no answer")))
+        registered, retry_at = set(), {}
+        await register_nodes(scanner, registered, retry_at)
+        assert registered == set()
+        assert 42 in retry_at
+
+    @pytest.mark.asyncio
+    async def test_retry_waits_then_succeeds(self):
+        from main import register_nodes
+        update = AsyncMock(side_effect=[TimeoutError("no answer"), ({1620: "t.T_1_0"}, {})])
+        scanner = self.make_scanner(update)
+        registered, retry_at = set(), {}
+        await register_nodes(scanner, registered, retry_at)
+        await register_nodes(scanner, registered, retry_at)  # still backing off
+        assert update.await_count == 1
+        retry_at[42] = 0.0  # backoff elapsed
+        await register_nodes(scanner, registered, retry_at)
+        assert registered == {42}
+        assert 42 not in retry_at
+        scanner.add_subscriptions.assert_awaited_once_with(42, {1620: "t.T_1_0"})
+
+
+class TestDroppedEvents:
+
+    def test_none_when_not_connected(self):
+        from main import CANSession
+        assert CANSession().dropped_events() is None
+
+    def test_sums_logger_drops_from_both_queues(self):
+        from collections import defaultdict
+        from main import CANSession
+        s = CANSession()
+        s.scanner = MagicMock(dropped_events=1)
+        s.telemetry = MagicMock(dropped=defaultdict(int, {"logger": 2, "client": 7}))
+        s.event_logger = MagicMock(dropped_events=3)
+        with patch.object(CANSession, "is_running", new_callable=PropertyMock, return_value=True):
+            assert s.dropped_events() == {"scanner": 1, "logger": 5, "clients": 7}

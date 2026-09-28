@@ -242,9 +242,18 @@ const collectFormAttributes = (cardEl, schema) => {
   const fields = schema.request_fields || [];
   for (const field of fields) {
     if (field.kind === 'composite') {
-      const input = cardEl.querySelector(`[data-field="${field.name}"]`);
-      if (input && input.value.trim()) {
-        attributes[field.name] = { value: input.value.trim(), type: field.type };
+      // Every sub-field given, by name. Values stay strings: the node's
+      // types convert them, and a number would not fit a string-like array.
+      const value = {};
+      for (const input of cardEl.querySelectorAll(`[data-field="${field.name}"][data-subfield]`)) {
+        if (input.value.trim()) value[input.dataset.subfield] = input.value.trim();
+      }
+      // No sub-field schema: one input, set on the composite's first field.
+      const single = cardEl.querySelector(`[data-field="${field.name}"]:not([data-subfield])`);
+      if (Object.keys(value).length) {
+        attributes[field.name] = { value, type: field.type };
+      } else if (single && single.value.trim()) {
+        attributes[field.name] = { value: single.value.trim(), type: field.type };
       }
     } else {
       const input = cardEl.querySelector(`[data-field="${field.name}"]`);
@@ -425,6 +434,48 @@ const bindServiceCardEvents = (content, nodeId, forSubjects = false) => {
   });
 };
 
+// uavcan.node.ExecuteCommand, on its fixed service-ID, and the commands offered
+// as buttons. Status names follow the order of its STATUS_* constants.
+const EXECUTE_COMMAND_SERVICE_ID = 435;
+const NODE_COMMANDS = [
+  { command: 65535, label: 'Restart', question: (id) => `Restart node ${id}?` },
+  { command: 65532, label: 'Factory reset', danger: true,
+    question: (id) => `Factory reset node ${id}? Its registers return to their defaults.` },
+];
+const EXECUTE_COMMAND_STATUS = ['success', 'failure', 'not authorized', 'bad command',
+  'bad parameter', 'bad state', 'internal error'];
+
+const renderNodeCommands = (services) => {
+  const served = services.some((s) => s.service_id === EXECUTE_COMMAND_SERVICE_ID && s.callable !== false);
+  if (!served) return '';
+  const buttons = NODE_COMMANDS.map(({ command, label, danger }) => `
+    <button type="button" class="svc-btn${danger ? ' svc-btn-danger' : ''}"
+            data-node-command="${command}">${label}</button>`).join('');
+  return `<div class="svc-node-commands" role="group" aria-label="Node commands">${buttons}</div>`;
+};
+
+const sendNodeCommand = async (nodeId, command) => {
+  const { label, question } = NODE_COMMANDS.find((c) => c.command === command);
+  if (!window.confirm(question(nodeId))) return;
+  try {
+    const data = await requestJson(`/api/services/${nodeId}/${EXECUTE_COMMAND_SERVICE_ID}/call`, {
+      method: 'POST',
+      body: JSON.stringify({ attributes: { command: { value: command } } }),
+    });
+    const status = JSON.parse(data.response || '{}').status;
+    if (status === 0) {
+      showToast(`${label}: node ${nodeId} accepted`, 'info');
+    } else {
+      showToast(`${label}: node ${nodeId} answered "${EXECUTE_COMMAND_STATUS[status] ?? `status ${status}`}"`, 'error');
+    }
+  } catch (e) {
+    const timedOut = e?.status === 504;
+    showToast(timedOut
+      ? `${label}: no answer from node ${nodeId} (it may already be restarting)`
+      : `${label} failed: ${e?.data?.error || e.message}`, timedOut ? 'info' : 'error');
+  }
+};
+
 const renderServicesTab = async () => {
   const content = el('selectedNodeContent');
   const nodeId = state.selectedNodeId;
@@ -558,7 +609,11 @@ const renderServicesTab = async () => {
   }
 
   // State 9+: render service cards
-  content.innerHTML = `<section class="svc-panel">${services.map(svc => renderServiceCard(svc)).join('')}</section>`;
+  content.innerHTML = `${renderNodeCommands(services)}
+    <section class="svc-panel">${services.map(svc => renderServiceCard(svc)).join('')}</section>`;
   bindServiceCardEvents(content, nodeId);
+  content.querySelectorAll('[data-node-command]').forEach((btn) => {
+    btn.addEventListener('click', () => sendNodeCommand(nodeId, Number(btn.dataset.nodeCommand)));
+  });
   _loadPersistentHistory(content, nodeId);
 };

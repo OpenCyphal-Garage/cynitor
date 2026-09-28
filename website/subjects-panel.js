@@ -84,7 +84,7 @@ const buildSubjectsRows = () => {
       messageType: event?.message_type || '-',
       publishers: info.publishers.sort((a, b) => a - b).join(', '),
       subscribers: info.subscribers.sort((a, b) => a - b).join(', '),
-      rate: event?.rate ?? 0,
+      rate: getSubjectRate(event),
       lastTime: event?.timestamp_unix ? `${formatPlotTime(event.timestamp_unix)} ${pubNode}` : '-',
       lastDate: event?.timestamp_unix ? _fmtDate(event.timestamp_unix) : '-',
       _fav: state.favouriteSubjectIds.has(sid),

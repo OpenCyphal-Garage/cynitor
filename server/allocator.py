@@ -18,7 +18,7 @@ from pycyphal.transport.can import CANTransport
 from pycyphal.transport.can.media.pythoncan import PythonCANMedia
 from pycyphal.application.plug_and_play import CentralizedAllocator
 
-from can_config import ALLOCATOR_NODE_ID, media_bitrate, normalize_can_iface
+from can_config import ALLOCATOR_NODE_ID, media_bitrate, media_mtu, normalize_can_iface
 
 
 logger = logging.getLogger(__name__)
@@ -49,7 +49,7 @@ class AllocatorApp:
         )
 
         can_interface = normalize_can_iface(iface_name or _iface_from_env())
-        media = PythonCANMedia(iface_name=can_interface, bitrate=media_bitrate(can_interface))
+        media = PythonCANMedia(iface_name=can_interface, bitrate=media_bitrate(can_interface), mtu=media_mtu())
         transport = CANTransport(media, local_node_id=AllocatorApp.NODE_ID)
         self.registry = pycyphal.application.make_registry(register_file)
         self.node = pycyphal.application.make_node(info=node_info, transport=transport, registry=self.registry)
@@ -76,7 +76,7 @@ async def allocator_exists(
     timeout: float = 3.0,
 ) -> bool:
     can_interface = normalize_can_iface(iface_name or _iface_from_env())
-    media = PythonCANMedia(iface_name=can_interface, bitrate=media_bitrate(can_interface))
+    media = PythonCANMedia(iface_name=can_interface, bitrate=media_bitrate(can_interface), mtu=media_mtu())
     transport = CANTransport(media, local_node_id=None)
     registry = pycyphal.application.make_registry()
     probe = pycyphal.application.make_node(

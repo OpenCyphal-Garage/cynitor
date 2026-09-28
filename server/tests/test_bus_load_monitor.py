@@ -5,14 +5,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from main import BusLoadMonitor, _get_can_bitrate
+from main import BusLoadMonitor, _get_can_bitrates
 
 
-class TestGetCanBitrate:
+class TestGetCanBitrates:
     def test_default_when_command_fails(self):
         with patch("main.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1, stdout="")
-            assert _get_can_bitrate("vcan0") == 500000
+            assert _get_can_bitrates("vcan0") == (500000, None)
 
     def test_parses_bitrate_from_output(self):
         with patch("main.subprocess.run") as mock_run:
@@ -20,19 +20,28 @@ class TestGetCanBitrate:
                 returncode=0,
                 stdout="3: can0: <NOARP,UP,LOWER_UP> mtu 16 qdisc fq_codel state UP\n    link/can  promiscuity 0\n    can state ERROR-ACTIVE restart-ms 0\n          bitrate 1000000 sample-point 0.750",
             )
-            assert _get_can_bitrate("can0") == 1000000
+            assert _get_can_bitrates("can0") == (1000000, None)
+
+    def test_parses_can_fd_data_bitrate(self):
+        with patch("main.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout="3: can0: <NOARP,UP,LOWER_UP> mtu 72 qdisc pfifo_fast state UP\n    link/can  promiscuity 0\n    can <FD> state ERROR-ACTIVE restart-ms 0\n          bitrate 500000 sample-point 0.875\n          dbitrate 2000000 dsample-point 0.750",
+            )
+            assert _get_can_bitrates("can0") == (500000, 2000000)
 
     def test_default_when_no_match(self):
         with patch("main.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="no bitrate info here")
-            assert _get_can_bitrate("can0") == 500000
+            assert _get_can_bitrates("can0") == (500000, None)
 
     def test_default_on_exception(self):
         with patch("main.subprocess.run", side_effect=FileNotFoundError):
-            assert _get_can_bitrate("can0") == 500000
+            assert _get_can_bitrates("can0") == (500000, None)
 
 
-def make_monitor(iface: str = "vcan0", canbusload: str | None = "/usr/bin/canbusload"):
+def make_monitor(iface: str = "vcan0", canbusload: str | None = "/usr/bin/canbusload",
+                 bitrates: tuple = (500000, None)):
     """Build a BusLoadMonitor with the canbusload probe pinned.
 
     The monitor decides once, at construction, whether it is permanently
@@ -43,7 +52,7 @@ def make_monitor(iface: str = "vcan0", canbusload: str | None = "/usr/bin/canbus
 
     Pass canbusload=None to construct the disabled no-op variant.
     """
-    with patch("main._get_can_bitrate", return_value=500000), \
+    with patch("main._get_can_bitrates", return_value=bitrates), \
          patch("main.shutil.which", return_value=canbusload):
         return BusLoadMonitor(iface)
 
@@ -89,6 +98,19 @@ class TestBusLoadMonitor:
             await asyncio.sleep(0.1)
 
         assert monitor.utilization == 73.0
+        await monitor.stop()
+
+    @pytest.mark.asyncio
+    async def test_can_fd_data_bitrate_is_passed_to_canbusload(self):
+        monitor = make_monitor("can0", bitrates=(500000, 2000000))
+        mock_proc = AsyncMock()
+        mock_proc.returncode = None
+        mock_proc.stdout.readline = AsyncMock(return_value=b"")
+        mock_proc.terminate = MagicMock()
+        mock_proc.wait = AsyncMock()
+        with patch("main.asyncio.create_subprocess_exec", return_value=mock_proc) as spawn:
+            await monitor.start()
+        assert spawn.call_args.args[:2] == ("canbusload", "can0@500000,2000000")
         await monitor.stop()
 
     def test_is_alive_false_when_not_started(self):

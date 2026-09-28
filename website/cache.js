@@ -45,6 +45,10 @@ const getSelectedNode = () => {
   return nodes[String(state.selectedNodeId)] || null;
 };
 
+// Rate of a subject across all its publishers. `rate` on an event is only its
+// own publisher's; recordings made before `subject_rate` existed fall back to it.
+const getSubjectRate = (event) => Number(event?.subject_rate ?? event?.rate) || 0;
+
 const getNodeRate = (nodeId) => {
   const nodes = state.latestNodesPayload?.nodes;
   const node = nodes ? nodes[String(nodeId)] : null;

@@ -53,7 +53,7 @@ def wire():
 def hub(wire):
     h = CANHub(
         "virtual:" + wire, 500_000,
-        open_bus=lambda spec, bitrate: can.Bus(interface="virtual", channel=wire),
+        open_bus=lambda spec, bitrate, data_bitrate: can.Bus(interface="virtual", channel=wire),
     )
     h.start()
     yield h
@@ -151,7 +151,7 @@ class StubAdapter(can.BusABC):
 def _start_with(adapter, listen=False):
     """Start a hub on ``adapter``; with ``listen``, also a component that is on
     the channel before the first frame is forwarded."""
-    h = CANHub("stub:0", 500_000, open_bus=lambda spec, bitrate: adapter)
+    h = CANHub("stub:0", 500_000, open_bus=lambda spec, bitrate, data_bitrate: adapter)
     component = _component(h) if listen else None
     h.start()
     return (h, component) if listen else h
@@ -171,13 +171,15 @@ class TestFiltering:
             a.shutdown()
             h.stop()
 
-    def test_error_frames_are_dropped(self):
+    def test_error_frames_are_counted_not_forwarded(self):
         error = can.Message(arbitration_id=0x600, is_error_frame=True)
         real = _frame(0x601)
         h, a = _start_with(StubAdapter(incoming=[error, real]), listen=True)
         try:
             assert _recv_matching(a, 0x601) is not None
             assert _recv_matching(a, 0x600, timeout=0.3) is None
+            assert h.error_frames == 1
+            assert h.link_diagnostics()["adapter_error_frames"] == 1
         finally:
             a.shutdown()
             h.stop()
@@ -225,7 +227,7 @@ class TestFailures:
         assert hub.channel not in virtual.channels
 
     def test_adapter_open_failure_propagates(self):
-        def refuse(spec, bitrate):
+        def refuse(spec, bitrate, data_bitrate):
             raise can.CanInitializationError("Access denied")
 
         h = CANHub("gs_usb:0", 500_000, open_bus=refuse)
@@ -359,18 +361,35 @@ class TestPickFreeNodeId:
 
 
 class TestFrameBits:
+    """Counted as canbusload does by default: worst-case bit stuffing."""
+
     def test_extended_frame_with_eight_bytes(self):
-        assert frame_bits(can.Message(arbitration_id=0x1, is_extended_id=True, data=bytes(8))) == 131
+        assert frame_bits(can.Message(arbitration_id=0x1, is_extended_id=True, data=bytes(8))) == (160, 0)
 
     def test_base_frame_with_eight_bytes(self):
-        assert frame_bits(can.Message(arbitration_id=0x1, is_extended_id=False, data=bytes(8))) == 111
+        assert frame_bits(can.Message(arbitration_id=0x1, is_extended_id=False, data=bytes(8))) == (135, 0)
 
     def test_remote_frame_carries_no_data(self):
         msg = can.Message(arbitration_id=0x1, is_extended_id=True, is_remote_frame=True, dlc=8)
-        assert frame_bits(msg) == 67
+        assert frame_bits(msg) == (80, 0)
+
+    def test_can_fd_frame_splits_into_nominal_and_data_phase(self):
+        msg = can.Message(arbitration_id=0x1, is_extended_id=True, is_fd=True,
+                          bitrate_switch=True, data=bytes(64))
+        assert frame_bits(msg) == (52, 673)
+
+    def test_can_fd_frame_without_bitrate_switch_is_all_nominal(self):
+        msg = can.Message(arbitration_id=0x1, is_extended_id=False, is_fd=True, data=bytes(8))
+        assert frame_bits(msg) == (137, 0)
 
 
-class TestForwardedBits:
+def _wait_for_frames(hub, count):
+    deadline = time.monotonic() + _TIMEOUT
+    while hub.frames_from_bus + hub.frames_to_bus < count and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
+class TestForwardedTime:
     def test_both_directions_are_counted(self, hub, other_node):
         a = _component(hub)
         try:
@@ -378,20 +397,70 @@ class TestForwardedBits:
             assert _recv_matching(a, 0x800) is not None
             a.send(_frame(0x801, data=bytes(8)))
             assert _recv_matching(other_node, 0x801) is not None
-            deadline = time.monotonic() + _TIMEOUT
-            while hub.bits_on_bus < 262 and time.monotonic() < deadline:
-                time.sleep(0.01)
-            assert hub.bits_from_bus == 131 and hub.bits_to_bus == 131
-            assert hub.bits_on_bus == 262
+            _wait_for_frames(hub, 2)
+            assert hub.busy_from_bus == pytest.approx(160 / 500_000)
+            assert hub.busy_to_bus == pytest.approx(160 / 500_000)
+            assert hub.busy_seconds == pytest.approx(320 / 500_000)
         finally:
             a.shutdown()
+
+
+class TestCanFdThroughTheHub:
+    @pytest.fixture
+    def fd_hub(self, wire):
+        h = CANHub(
+            "virtual:" + wire, 500_000, 2_000_000,
+            open_bus=lambda spec, bitrate, data_bitrate: can.Bus(interface="virtual", channel=wire),
+        )
+        h.start()
+        yield h
+        h.stop()
+
+    def test_fd_frames_pass_intact_and_count_both_rates(self, fd_hub, other_node):
+        a = _component(fd_hub)
+        try:
+            other_node.send(can.Message(arbitration_id=0x900, is_extended_id=True, is_fd=True,
+                                        bitrate_switch=True, data=bytes(range(64))))
+            got = _recv_matching(a, 0x900)
+            assert got is not None and got.is_fd and got.bitrate_switch
+            assert bytes(got.data) == bytes(range(64))
+            _wait_for_frames(fd_hub, 1)
+            assert fd_hub.busy_from_bus == pytest.approx(52 / 500_000 + 673 / 2_000_000)
+        finally:
+            a.shutdown()
+
+
+class TestOpenAdapterCanFd:
+    """CAN FD is asked of each driver the way pycyphal asks it."""
+
+    @pytest.fixture
+    def opened(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(can_hub.can, "ThreadSafeBus", lambda **kwargs: calls.append(kwargs))
+        return calls
+
+    def test_classic_passes_the_bitrate_only(self, opened):
+        open_adapter("pcan:PCAN_USBBUS1", 500_000)
+        assert opened == [{"interface": "pcan", "channel": "PCAN_USBBUS1", "bitrate": 500_000}]
+
+    def test_pcan_fd_gets_a_bit_timing(self, opened):
+        open_adapter("pcan:PCAN_USBBUS1", 500_000, 2_000_000)
+        timing = opened[0]["timing"]
+        assert isinstance(timing, can.BitTimingFd) and opened[0]["fd"] is True
+        assert (timing.nom_bitrate, timing.data_bitrate) == (500_000, 2_000_000)
+        assert "bitrate" not in opened[0]
+
+    def test_other_drivers_get_both_rates(self, opened):
+        open_adapter("kvaser:0", 500_000, 4_000_000)
+        assert opened == [{"interface": "kvaser", "channel": 0, "bitrate": 500_000,
+                           "data_bitrate": 4_000_000, "fd": True}]
 
 
 class FakeCountingHub:
     bitrate = 500_000
 
     def __init__(self):
-        self.bits_on_bus = 0
+        self.busy_seconds = 0.0
 
 
 class TestHubBusLoad:
@@ -408,21 +477,21 @@ class TestHubBusLoad:
         hub = FakeCountingHub()
         load = HubBusLoad(hub, clock=clock)
         load.sample()
-        hub.bits_on_bus, clock.now = 250_000, 1.0
+        hub.busy_seconds, clock.now = 0.5, 1.0
         assert load.sample() == 50.0
 
     def test_first_sample_has_nothing_to_compare(self, clock):
         hub = FakeCountingHub()
-        hub.bits_on_bus = 10_000_000
+        hub.busy_seconds = 20.0
         assert HubBusLoad(hub, clock=clock).sample() == 0.0
 
     def test_capped_at_one_hundred(self, clock):
-        # Frame lengths without stuffing are an estimate; never report more
-        # than the bus can carry.
+        # Worst-case stuffing is an estimate; never report more than the bus
+        # can carry.
         hub = FakeCountingHub()
         load = HubBusLoad(hub, clock=clock)
         load.sample()
-        hub.bits_on_bus, clock.now = 900_000, 1.0
+        hub.busy_seconds, clock.now = 1.8, 1.0
         assert load.sample() == 100.0
 
     def test_always_alive(self, clock):

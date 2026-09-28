@@ -34,7 +34,7 @@ One process serves everything: the REST API, the WebSocket stream, and the dashb
 
 The pipeline is unidirectional from bus to browser. The backend is event-pushed; the frontend pulls structural data (`/api/nodes`, `/api/status`) on a poll interval and consumes the live event stream over WebSocket.
 
-During frontend development the dashboard is often served separately on `:5500` so it can be reloaded without restarting the backend. That is the only case where two ports are involved, and it is why `website/config.js` exists: served from the backend it is replaced by a generated version naming the API origin, while the static-server copy is an empty placeholder that leaves the built-in default in place.
+During frontend development the dashboard is often served separately on `:5500` so it can be reloaded without restarting the backend. That is the only case where two ports are involved, and it is why `website/config.js` exists: served from the backend it is replaced by a generated version naming the API origin and the server's version (shown in the sidebar footer), while the static-server copy is an empty placeholder that leaves the built-in default in place.
 
 ## Backend
 
@@ -63,16 +63,16 @@ EventLogger.start()        SQLite persistence
 | File | Role |
 |------|------|
 | `main.py` | Entry point, lifecycle orchestration, two startup modes (direct vs selection) |
-| `scanner_node.py` | CAN network discovery: heartbeat + port list subscriptions, dynamic per-subject subscribers, per-service clients, service schema introspection with STANDARD_SERVICES fallback |
+| `scanner_node.py` | CAN network discovery: heartbeat + port list subscriptions, a permanent `uavcan.diagnostic.Record` subscription (fixed subject 8184, which no register names), dynamic per-subject subscribers (one decoded type per subject; a publisher advertising another is a `type_conflict`), per-service clients, service schema introspection with STANDARD_SERVICES fallback (including ExecuteCommand), restart vs. node-ID conflict detection from heartbeat uptimes |
 | `node_info.py` | Per-node lifecycle state: appearance, last-heartbeat timestamp, disappearance threshold (>1.1s), port lists, GetInfo response |
 | `telemetry_manager.py` | Event router: maintains `latest_by_subject` and `latest_by_node` caches, broadcasts to subscriber queues |
-| `websocket_server.py` | aiohttp HTTP+WS server, REST endpoints, per-client WebSocket filtering, periodic metrics broadcast, node history and service call history endpoints; also serves `website/` so one binary hosts both the API and the dashboard |
+| `websocket_server.py` | aiohttp HTTP+WS server, REST endpoints, per-client WebSocket filtering, periodic metrics broadcast, node history and service call history endpoints; also serves `website/` so one binary hosts both the API and the dashboard; refuses API and event-stream requests from browser pages of other sites (`_browser_request_allowed`) |
 | `event_logger.py` | SQLite persistence with batch writes, `asyncio.to_thread` for non-blocking I/O, configurable retention, node lifecycle history (30-day), service call history with response bodies |
 | `allocator.py` | Node-ID allocator detection / fallback (CentralizedAllocator), 10s re-check |
-| `can_config.py` | Interface-spec and bitrate rules: bare names mean SocketCAN, `--bitrate` is required for anything else, `UAVCAN__CAN__BITRATE` is published as `"<n> <n>"` |
+| `can_config.py` | Interface-spec and bitrate rules: bare names mean SocketCAN, `--bitrate` is required for anything else, `UAVCAN__CAN__BITRATE` is published as `"<n> <n>"` (`"<n> <data>"` for CAN FD); which adapters can run CAN FD, and whether a SocketCAN interface is set up for it |
 | `can_discovery.py` | Lists the adapters the dashboard offers besides SocketCAN: python-can vendor detection (PEAK, Kvaser, Vector, IXXAT), and off Linux a gs_usb USB scan and slcan serial ports by USB ID; cached for 10 s in `AdapterCatalog` |
-| `can_hub.py` | Opens a non-SocketCAN adapter once and bridges it to an in-process python-can `virtual` channel that the allocator probe, allocator and scanner all open instead; also picks Cynitor's node-ID from heartbeats on that channel; for those adapters it also measures bus load (`HubBusLoad`, from forwarded frame lengths, standing in for canbusload) and, for gs_usb, whose reads hide USB errors, checks every few seconds that the device is still enumerated |
-| `startup_setup.py` | DSDL compilation via `nnvg`, sets `UAVCAN__CAN__IFACE` / `UAVCAN__CAN__MTU`, calls `yakut accommodate` for node ID |
+| `can_hub.py` | Opens a non-SocketCAN adapter once and bridges it to an in-process python-can `virtual` channel that the allocator probe, allocator and scanner all open instead; also picks Cynitor's node-ID from heartbeats on that channel; for those adapters it also opens CAN FD adapters with pycyphal's parameters, measures bus load (`HubBusLoad`, from forwarded frames' time on the wire, counted as canbusload counts: worst-case stuffing, CAN FD data phase at the data rate), counts error frames, and, for gs_usb, whose reads hide USB errors, checks every few seconds that the device is still enumerated |
+| `startup_setup.py` | DSDL compilation via `nnvg`, sets `UAVCAN__CAN__IFACE` / `UAVCAN__CAN__MTU` (64 for CAN FD, else 8), calls `yakut accommodate` for node ID |
 | `node_identity_map.py` | Bidirectional `unique_id ↔ node_id` mapping with displacement detection, snapshot storage, and SQLite-backed persistence |
 | `data_dir.py` | The data folder: per-user default per OS (`STATE_DIRECTORY` under systemd), `--data-dir` / `CYNITOR_DATA_DIR` override, and the one-time move of databases an earlier version left in the working directory, each with its `-wal`/`-shm` files |
 | `log_store.py` | In-memory deque (max 5000) fed by a `logging.Handler`; exposed via `/api/logs` |
@@ -86,6 +86,9 @@ EventLogger.start()        SQLite persistence
                   (gs_usb:0, pcan:PCAN_USBBUS1, slcan:COM5@115200, ...). Required for direct mode.
 --bitrate <n>     Bus speed in bit/s. Required with --can for non-SocketCAN adapters; no default. Every component that
                   opens the bus reads it from UAVCAN__CAN__BITRATE, which prepare_runtime sets.
+--data-bitrate <n>  CAN FD data-phase bitrate; opens a non-SocketCAN adapter as CAN FD (can_config.FD_INTERFACES).
+                  prepare_runtime then publishes UAVCAN__CAN__MTU=64 and "<bitrate> <data-bitrate>". SocketCAN
+                  ignores it: its MTU follows the interface (72 in sysfs means CAN FD).
 --recompile       Force `nnvg` to regenerate Python from DSDL even if outputs exist.
 --bind <host>     Host/IP to bind the HTTP server to (default 127.0.0.1; use 0.0.0.0 to expose on the network).
 --port <n>        TCP port to listen on (default 8080).
@@ -101,7 +104,7 @@ By default the dashboard is served from the same port as the API, so a deploymen
 ### Tests
 
 - `server/tests/` — backend unit tests (pytest); they mock the Cyphal stack. CI runs them on Linux (Python 3.10–3.12) and on Windows Server 2022 and 2025.
-- `tests/integration/hub_session.py` — a whole CAN session through the CAN hub on a python-can `virtual` bus, with the real Cyphal stack and a simulated device and plug-and-play node; needs compiled DSDL. CI runs it on Linux and both Windows images.
+- `tests/integration/hub_session.py` — a whole CAN session through the CAN hub on a python-can `virtual` bus, with the real Cyphal stack and a simulated device and plug-and-play node; needs compiled DSDL. With `--fd` the device and Cynitor run Cyphal/CAN FD, and Cynitor's own frames on the wire must be CAN FD frames. CI runs both on Linux and both Windows images.
 - `tests/e2e/` — Playwright checks of the static dashboard.
 - `packaging/smoke-test.ps1` — checks the built Windows executable: bundled modules and libusb, a session through the hub, the dashboard and token, and that killing the PyInstaller bootloader stops the server.
 
@@ -118,7 +121,7 @@ dsdl_messages/
 
 ## Frontend
 
-All frontend code lives in `website/`. Plain HTML/CSS/JS. No build step. D3 (CDN) for plots and force graph; Tabulator (CDN) for data tables. Concern-focused script files load in order:
+All frontend code lives in `website/`. Plain HTML/CSS/JS. No build step. D3 for plots and force graph and Tabulator for data tables, both vendored in `website/vendor/` so the dashboard works without internet access. Concern-focused script files load in order:
 
 | File | Role |
 |------|------|
@@ -221,7 +224,8 @@ Every event flowing from `ScannerNode` through `TelemetryManager` to consumers u
   "subject_id": 7509,
   "timestamp": "2026-03-13T10:30:45",
   "timestamp_unix": 1741949445.123,
-  "rate": 10,
+  "rate": 1.0,
+  "subject_rate": 5.0,
   "message_type": "Heartbeat_1_0",
   "publisher_node_id": 42,
   "attributes": [
@@ -230,6 +234,8 @@ Every event flowing from `ScannerNode` through `TelemetryManager` to consumers u
   ]
 }
 ```
+
+`rate` is per publisher, keyed by `(subject_id, publisher_node_id)`; `subject_rate` sums all publishers of the subject. Node-level views sum `rate` (`getNodeRate`), subject-level views use `subject_rate` (`getSubjectRate`). `timestamp_unix` comes from the transfer's transport timestamp.
 
 Consumers identify a series by `(subject_id, attribute)`. The frontend keeps a per-attribute time-series under `state.subjectHistory["{subject_id}:{attr_name}"]` capped at 3600 samples per key.
 
@@ -275,6 +281,7 @@ cynitor/
     connection.js           WS + polling + lifecycle
     app.js                  Boot, bindings, heartbeat, view switching
     config.js               Empty placeholder; the backend serves its own
+    vendor/                 D3 and Tabulator, copied unmodified from npm (see its README)
     styles.css              Theme and layout
   dsdl_messages/
     public_regulated_data_types/   git submodule (uavcan/, reg/)
@@ -403,5 +410,5 @@ cd tests/e2e && python3 test_landing_page.py
 - `aria-label` on every icon-only button.
 - Sanitize all dynamic HTML with `escapeHtml()` before insertion.
 - Mutations go through the global `state` object; no per-component state.
-- No new external dependencies beyond D3 and Tabulator (both via CDN).
+- No new external dependencies beyond D3 and Tabulator (both vendored in `website/vendor/`, no CDN).
 - All `.md` files in this repo are written in English.

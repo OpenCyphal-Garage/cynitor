@@ -25,6 +25,13 @@ const stateFormatter = (cell) => {
   return `<span class="state-cell"><span class="state-dot ${escapeHtml(v)}"></span><span class="state-label">${escapeHtml(v)}</span></span>`;
 };
 
+// Uptime of a live node; for an offline one, since when it has been gone,
+// worded so that it cannot be read as an uptime.
+const uptimeFormatter = (cell) => {
+  const text = escapeHtml(cell.getValue());
+  return cell.getRow().getData()._offline ? `<span class="last-seen">${text}</span>` : text;
+};
+
 const healthFormatter = (cell) => {
   const v = cell.getValue() || '-';
   const cls = v === 'NOMINAL' ? 'nominal'
@@ -43,7 +50,9 @@ const healthFormatter = (cell) => {
 const portsFormatter = (cell) => {
   const text = cell.getValue() || '-';
   const cls = text !== '-' ? 'has-ports' : '';
-  return `<span class="port-ids ${cls}">${escapeHtml(text)}</span>`;
+  // Long lists scroll within the cell; the tooltip shows them whole.
+  const title = text !== '-' ? ` title="${escapeHtml(text)}"` : '';
+  return `<span class="port-ids ${cls}"${title}>${escapeHtml(text)}</span>`;
 };
 
 // Pass these to Tabulator as pre-joined strings, not fresh arrays. Each
@@ -124,8 +133,11 @@ const startNameEdit = (cell) => {
 const EYE_ICON = '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
 const EYE_OFF_ICON = '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
 
-const actionsFormatter = () => {
-  return `<button type="button" class="action-hide" aria-label="Hide node">${EYE_ICON}</button>`;
+const actionsFormatter = (cell) => {
+  const hide = `<button type="button" class="action-hide" aria-label="Hide node">${EYE_ICON}</button>`;
+  if (!cell.getRow().getData()._ghost) return hide;
+  // An offline node that lost its node-ID can also be forgotten for good.
+  return `${hide}<button type="button" class="ghost-delete-btn" aria-label="Remove offline node" title="Remove">✕</button>`;
 };
 
 const toggleFavourite = (nodeId) => {
@@ -285,17 +297,21 @@ const buildTableData = () => {
     const isGhost = node._ghost === true;
     const nodeState = getNodeVisualState(node);
     const alias = getNodeAlias(isGhost ? null : node.unique_id);
+    const offline = isGhost || node.has_disappeared;
+    const lastSeen = offline ? formatLastSeen(node.last_seen) : '-';
     rows.push({
       id: isGhost ? key : node.node_id,
       _sortId: isGhost ? (node.last_node_id ?? Infinity) : node.node_id,
       _fav: state.favouriteNodeIds.has(nodeStableKey(node)),
       _uid: isGhost ? node.unique_id_hex : node.unique_id,
       _ghost: isGhost,
+      _lastNodeId: isGhost ? node.last_node_id : null,
+      _offline: offline,
       name: alias || node.name || '-',
       state: nodeState,
       health: (isGhost || node.has_disappeared) ? '-' : (getNodeHealthValue(node.node_id) || '-'),
       rate: isGhost ? 0 : getNodeRate(node.node_id),
-      uptime: isGhost ? formatLastSeen(node.last_seen) : (node.has_disappeared ? formatLastSeen(node.last_seen) : formatUptime(node.uptime)),
+      uptime: offline ? (lastSeen !== '-' ? `last seen ${lastSeen}` : '-') : formatUptime(node.uptime),
       publishers: portsToString(node.publishers),
       subscribers: portsToString(node.subscribers),
       servers: portsToString(node.servers),
@@ -334,24 +350,30 @@ const initNodesTable = () => {
       colDef('ID', '_sortId', { sorter: 'number', minWidth: 50, widthGrow: 0.5, headerFilterPlaceholder: 'id', cssClass: 'cell-scroll', formatter: (cell) => {
         const row = cell.getRow().getData();
         if (!row._ghost) return escapeHtml(String(row.id));
-        return '<button class="ghost-delete-btn" aria-label="Remove ghost node" title="Remove">✕</button>';
-      }, cellClick: (e, cell) => {
-        if (e.target.closest('.ghost-delete-btn')) {
-          e.stopPropagation();
-          const row = cell.getRow().getData();
-          if (row._ghost && row._uid) deleteGhostNode(row._uid);
-        }
-      }, headerFilterFunc: (headerValue, _rowValue, rowData) => { if (!headerValue) return true; return String(rowData.id).includes(headerValue); } }),
+        // An offline node that lost its node-ID: the one it last had.
+        return `<span class="ghost-id" title="Last node-ID; the node is offline">${escapeHtml(String(row._lastNodeId ?? '-'))}</span>`;
+      }, headerFilterFunc: (headerValue, _rowValue, rowData) => {
+        if (!headerValue) return true;
+        return String(rowData._ghost ? (rowData._lastNodeId ?? '') : rowData.id).includes(headerValue);
+      } }),
       colDef('Name', 'name', { sorter: 'string', minWidth: 100, widthGrow: 2, formatter: nameFormatter, headerFilterPlaceholder: 'name', cssClass: 'cell-scroll cell-name', cellDblClick: (_e, cell) => { startNameEdit(cell); } }),
       colDef('State', 'state', { sorter: 'string', minWidth: 40, widthGrow: 0.7, formatter: stateFormatter, headerFilterPlaceholder: 'state', cssClass: 'td-state' }),
       colDef('Health', 'health', { sorter: 'string', minWidth: 70, widthGrow: 0.8, formatter: healthFormatter, headerFilterPlaceholder: 'health', cssClass: 'cell-scroll' }),
       colDef('Rate', 'rate', { sorter: 'number', minWidth: 70, widthGrow: 0.7, formatter: rateFormatter, headerFilterPlaceholder: 'rate', cssClass: 'cell-scroll', headerFilterFunc: (headerValue, rowValue) => { if (!headerValue) return true; return Number(rowValue).toFixed(1).includes(headerValue); } }),
-      colDef('Uptime', 'uptime', { sorter: 'string', minWidth: 100, widthGrow: 1, headerFilterPlaceholder: 'uptime', cssClass: 'cell-scroll' }),
+      colDef('Uptime', 'uptime', { sorter: 'string', minWidth: 100, widthGrow: 1, formatter: uptimeFormatter, headerFilterPlaceholder: 'uptime', cssClass: 'cell-scroll' }),
       colDef('Publishers', 'publishers', { minWidth: 80, widthGrow: 1, formatter: portsFormatter, headerFilterPlaceholder: 'pub', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
       colDef('Subscribers', 'subscribers', { minWidth: 80, widthGrow: 1, formatter: portsFormatter, headerFilterPlaceholder: 'sub', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
       colDef('Servers', 'servers', { minWidth: 80, widthGrow: 1, formatter: portsFormatter, headerFilterPlaceholder: 'srv', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
       colDef('Clients', 'clients', { minWidth: 80, widthGrow: 1, formatter: portsFormatter, headerFilterPlaceholder: 'clt', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
-      { title: '', field: '_actions', formatter: actionsFormatter, width: 56, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-actions', titleFormatter: () => { const btn = document.createElement('button'); btn.type = 'button'; btn.id = 'hiddenNodesChip'; btn.className = 'hidden-chip hidden'; btn.setAttribute('aria-label', 'Show hidden nodes'); btn.addEventListener('click', (e) => { e.stopPropagation(); toggleHiddenPopover(); }); return btn; }, cellClick: (e, cell) => { e.stopPropagation(); hideNode(cell.getRow().getData().id); } },
+      { title: '', field: '_actions', formatter: actionsFormatter, width: 56, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-actions', titleFormatter: () => { const btn = document.createElement('button'); btn.type = 'button'; btn.id = 'hiddenNodesChip'; btn.className = 'hidden-chip hidden'; btn.setAttribute('aria-label', 'Show hidden nodes'); btn.addEventListener('click', (e) => { e.stopPropagation(); toggleHiddenPopover(); }); return btn; }, cellClick: (e, cell) => {
+        e.stopPropagation();
+        const row = cell.getRow().getData();
+        if (e.target.closest('.ghost-delete-btn')) {
+          if (row._uid) deleteGhostNode(row._uid);
+          return;
+        }
+        hideNode(row.id);
+      } },
     ],
   });
 

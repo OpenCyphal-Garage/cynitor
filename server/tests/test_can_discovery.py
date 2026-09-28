@@ -20,6 +20,9 @@ def probes(monkeypatch):
     monkeypatch.setattr(can_discovery, "_vendor_adapters", lambda: results["vendor"])
     monkeypatch.setattr(can_discovery, "_gs_usb_adapters", lambda: results["gs_usb"])
     monkeypatch.setattr(can_discovery, "_slcan_adapters", lambda: results["slcan"])
+    # Not whatever this machine's vcan0 happens to be set up as.
+    monkeypatch.setattr(can_discovery, "supports_fd", lambda iface: iface in results["fd"])
+    results["fd"] = set()
     return results
 
 
@@ -45,9 +48,16 @@ class TestDiscoverAdapters:
             Adapter("can0", "can0 (SocketCAN)", False),
         ]
 
+    def test_socketcan_set_up_for_can_fd_says_so(self, probes):
+        probes["fd"] = {"can1"}
+        assert discover_adapters(["can0", "can1"], platform="linux") == [
+            Adapter("can0", "can0 (SocketCAN)", False, False),
+            Adapter("can1", "can1 (SocketCAN)", False, True),
+        ]
+
     def test_as_dict(self):
         assert Adapter("gs_usb:0", "CANable", True).as_dict() == {
-            "interface": "gs_usb:0", "label": "CANable", "needs_bitrate": True,
+            "interface": "gs_usb:0", "label": "CANable", "needs_bitrate": True, "supports_fd": False,
         }
 
 
@@ -62,9 +72,10 @@ class TestVendorProbe:
             }.get(interfaces[0], [])
 
         monkeypatch.setattr(can, "detect_available_configs", detect)
+        # Both drivers run CAN FD through python-can.
         assert can_discovery._vendor_adapters() == [
-            Adapter("pcan:PCAN_USBBUS1", "PEAK PCAN_USBBUS1", True),
-            Adapter("kvaser:0", "Kvaser 0", True),
+            Adapter("pcan:PCAN_USBBUS1", "PEAK PCAN_USBBUS1", True, True),
+            Adapter("kvaser:0", "Kvaser 0", True, True),
         ]
 
     def test_a_failing_probe_skips_only_that_vendor(self, monkeypatch):

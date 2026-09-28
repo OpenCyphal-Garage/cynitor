@@ -161,7 +161,7 @@ const GraphView = (() => {
         type: 'subject',
         label: _truncate(ev?.message_type ? ev.message_type.split('.').pop() : `Subject ${sid}`),
         fullType: ev?.message_type || null,
-        rate: ev?.rate ?? null,
+        rate: ev ? getSubjectRate(ev) : null,
         pubs: meta.pubs,
         subs: meta.subs,
       });
@@ -212,7 +212,7 @@ const GraphView = (() => {
   const linkRate = (link) => {
     let total = 0;
     for (const sid of _linkSubjectIds(link)) {
-      total += state.latestBySubject.get(sid)?.rate || 0;
+      total += getSubjectRate(state.latestBySubject.get(sid));
     }
     return total;
   };
@@ -227,7 +227,7 @@ const GraphView = (() => {
     for (const sid of _linkSubjectIds(link)) {
       const ev = state.latestBySubject.get(sid);
       if (!ev) continue;
-      if ((ev.rate || 0) > 0) return true;
+      if (getSubjectRate(ev) > 0) return true;
       if (ev.timestamp_unix && now - ev.timestamp_unix < 2) return true;
     }
     return false;
@@ -250,7 +250,7 @@ const GraphView = (() => {
     for (const sid of _linkSubjectIds(link)) {
       const ev = state.latestBySubject.get(sid);
       if (!ev) continue;
-      rate += ev.rate || 0;
+      rate += getSubjectRate(ev);
       payload += ev.payload_bytes || 0;
     }
     const parts = [];
@@ -302,7 +302,7 @@ const GraphView = (() => {
       case 'degree':
       case 'subjects': return channelDegree;
       case 'services': return 0;
-      case 'rate': return ev?.rate || 0;
+      case 'rate': return getSubjectRate(ev);
       case 'payload': return ev?.payload_bytes || 0;
     }
     return 0;

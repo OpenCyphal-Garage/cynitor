@@ -24,11 +24,11 @@ TelemetryManager (pub-sub router)
 ✅ **REST API** - Query latest events via HTTP  
 ✅ **Log API** - Retrieve recent application logs with log-level filtering  
 ✅ **Optional Persistence** - SQLite logging for historical replay  
-✅ **CORS Support** - Ready for web dashboard integration  
+✅ **Browser Origin Policy** - The API accepts browser requests only from its own dashboard and from pages served on this machine  
 ✅ **Clean Shutdown** - Graceful WebSocket disconnect and logger queue flush  
 ✅ **Allocator Guard** - Reuses external allocator if present, otherwise starts local allocator and re-checks every 10s
 ✅ **CAN Health Monitoring** - Detects CAN bus faults (BUS-OFF, ERROR-PASSIVE, interface disappearance on SocketCAN; a failing or unplugged adapter otherwise) and auto-disconnects
-✅ **Bus Load Monitoring** - Real-time CAN bus utilization via `canbusload` subprocess on SocketCAN, or counted from the forwarded frames for other adapters, streamed to clients via WebSocket  
+✅ **Bus Load Monitoring** - Real-time CAN bus utilization via `canbusload` subprocess on SocketCAN, or counted from the forwarded frames for other adapters (Classic CAN and CAN FD alike), streamed to clients via WebSocket  
 ✅ **Register Access** - Read and write Cyphal node registers via REST API  
 ✅ **Offline Node Detection** - Tracks node disappearance with `last_seen` timestamps and stale state handling  
 ✅ **Node History** - Lifecycle event tracking (health changes, mode changes, service calls) with 30-day retention  
@@ -46,7 +46,7 @@ pip install -r requirements.txt
 Key dependencies:
 - `pycyphal` - UAVCAN protocol library
 - `aiohttp` - Async HTTP/WebSocket server
-- CORS is handled via built-in middleware (no extra dependency)
+- CORS and the origin policy are handled by built-in middleware (no extra dependency)
 
 ### 2. Run the System
 
@@ -90,6 +90,19 @@ Unauthenticated requests get `HTTP 401 {"error": "missing or invalid token"}`. W
 
 When a terminal is attached, the server prints the token once at startup so it can be copied into the dashboard. It is written straight to stderr rather than logged: the log buffer is served through `/api/logs` and rendered in the dashboard's log panel, and a service manager captures stdout into the system journal, so logging it would scatter copies. Runs without a terminal, which is every supervised run, print nothing.
 
+#### Browser origin policy
+
+The API commands nodes on the bus, and any website a user visits could otherwise send requests to `localhost:8080` through their browser. So requests to `/ws`, `/api` and `/api/...` are refused with `HTTP 403 {"error": "cross-origin request refused"}` when their `Origin` header names any page other than:
+
+- the dashboard this server serves itself (the `Origin` matches the `Host` it was reached at), or
+- a page served from this machine (`localhost`, `127.0.0.1` or `[::1]`, any port), such as the frontend dev server on `:5500`.
+
+Requests without an `Origin` header (curl, scripts, other non-browser clients) are not affected. `Origin: null`, which sandboxed frames and `file://` pages send, is refused. Allowed browser origins get `Access-Control-Allow-Origin` echoed back; nobody gets `*`.
+
+While the server listens on loopback only (the default `--bind 127.0.0.1`), the `Host` header must also name loopback. This stops DNS rebinding, where a site re-points its own name at `127.0.0.1` so its requests look same-origin. Behind a reverse proxy, the proxy must pass the browser's original `Host` on (nginx: `proxy_set_header Host $host;`) and the server must not be bound to loopback only; set a token.
+
+This works alongside the token, not instead of it: set `CYNITOR_AUTH_TOKEN` whenever the server is reachable from other machines.
+
 
 ### Serving the dashboard
 
@@ -98,7 +111,7 @@ When a `website/` directory is present next to the server (a source checkout, or
 | Route | Serves |
 |-------|--------|
 | `GET /` | `website/index.html` |
-| `GET /config.js` | Generated: `window.__CYNITOR = {"apiBase": "<this request's origin>"}` |
+| `GET /config.js` | Generated: `window.__CYNITOR = {"apiBase": "<this request's origin>", "version": "<server version>"}` |
 | `GET /<path>` | Any other file under `website/` |
 
 These are registered after the API routes, so `/api/*` and `/ws` always win over the catch-all static mount.
@@ -107,7 +120,7 @@ They are sent with `Cache-Control: no-cache`, so a browser checks for a newer ve
 
 Start the server with `--no-frontend` to omit them entirely, for deployments where something other than the dashboard consumes the API. Those three routes then return `404` and everything else is unchanged.
 
-`config.js` is how a browser-served dashboard learns its API address. The checked-in `website/config.js` is an empty placeholder, which is what a separate static file server on port 5500 delivers, leaving the address field at its built-in default. Served from the backend, the generated version wins and points the page at the origin it was fetched from, so no per-client configuration is needed.
+`config.js` is how a browser-served dashboard learns its API address. The checked-in `website/config.js` is an empty placeholder, which is what a separate static file server on port 5500 delivers, leaving the address field at its built-in default. Served from the backend, the generated version wins and points the page at the origin it was fetched from, so no per-client configuration is needed. It also names the server's version, which the sidebar footer shows; with the placeholder the footer shows none.
 
 ### 3. Runtime Environment
 
@@ -143,6 +156,7 @@ Mode:        selection  (waiting for the UI or POST /api/can/connect)
 Startup options:
   --can <iface>    attach to a CAN interface at startup (e.g. vcan0, can0, gs_usb:0, pcan:PCAN_USBBUS1)
   --bitrate <n>    bus speed in bit/s; required with --can for any adapter except SocketCAN
+  --data-bitrate <n>  CAN FD data-phase speed; opens PCAN/Kvaser/Vector/IXXAT as CAN FD
   --bind <host>    bind HTTP server to <host>  (default 127.0.0.1; 0.0.0.0 to expose on the network)
   --port <n>       listen on <n> instead of 8080
   --data-dir <dir> keep history, recordings and node-IDs in <dir>
@@ -209,7 +223,8 @@ Telemetry events (filtered per client):
     "subject_id": 7509,
     "timestamp": "2026-03-13T10:30:45",
     "timestamp_unix": 1741949445.123,
-    "rate": 10,
+    "rate": 1.0,
+    "subject_rate": 5.0,
     "message_type": "Heartbeat_1_0",
     "publisher_node_id": 42,
     "payload_bytes": 7,
@@ -221,6 +236,10 @@ Telemetry events (filtered per client):
     ]
 }
 ```
+
+`rate` is this publisher's message rate on the subject, in Hz (one decimal, over the last 10 s). `subject_rate` is the subject's total over all its publishers: with five nodes publishing Heartbeat at 1 Hz, each event carries `rate` 1.0 and `subject_rate` 5.0. Events recorded before `subject_rate` existed lack it, and there `rate` was the subject total.
+
+`timestamp_unix` is when the transfer was received as stamped by the transport (for SocketCAN, the kernel's receive timestamp), not when the backend got round to processing it.
 
 `payload_bytes` is the size, in bytes, of the received transfer's serialized payload (sum of `transfer.fragmented_payload` fragment lengths). It is `null` if the transport did not expose the fragmented payload (best-effort field).
 
@@ -274,7 +293,8 @@ Raw frame batch (sent only to clients that opted into capture; batched ~every
     ]
 }
 ```
-`dir` is `tx`/`rx` (TX = forced-loopback of our own frames). For Cyphal frames,
+`dir` is `tx`/`rx` (TX = forced-loopback of our own frames). `dlc` is the data
+length in bytes (0–64), not the DLC code. For Cyphal frames,
 `kind` is `msg`/`req`/`resp` and `port` is the subject- or service-ID; non-Cyphal
 ("foreign") frames carry only the raw fields with `cyphal: false`.
 
@@ -298,19 +318,24 @@ Response:
     "status": "running",
     "can_interface": "vcan0",
     "can_bitrate": null,
+    "can_data_bitrate": null,
+    "can_fd": false,
     "available_interfaces": ["vcan0", "can0"],
     "available_adapters": [
-        {"interface": "vcan0", "label": "vcan0 (SocketCAN)", "needs_bitrate": false},
-        {"interface": "pcan:PCAN_USBBUS1", "label": "PEAK PCAN_USBBUS1", "needs_bitrate": true}
+        {"interface": "vcan0", "label": "vcan0 (SocketCAN)", "needs_bitrate": false, "supports_fd": false},
+        {"interface": "pcan:PCAN_USBBUS1", "label": "PEAK PCAN_USBBUS1", "needs_bitrate": true, "supports_fd": true}
     ],
     "bus_utilization": 3.0,
+    "dropped": {"scanner": 0, "logger": 0, "clients": 12},
     "last_error": null
 }
 ```
 
-`status` is `"running"` when connected to CAN, `"idle"` otherwise. `last_error` contains the error message if CAN was auto-disconnected due to a bus fault. `can_bitrate` is the bitrate Cynitor opened the adapter at, or `null` for SocketCAN, whose bitrate the kernel sets.
+`dropped` counts decoded messages discarded since the CAN connection opened because a queue was full: `scanner` before reaching anything, `logger` missing from the 24 h history and from recordings, `clients` missing from some dashboard's live view (each open dashboard has its own 100-event queue). `null` when not connected to CAN. The dashboard shows the total next to the CAN message rate.
 
-`available_interfaces` lists SocketCAN names only, as before. `available_adapters` lists everything the dashboard can offer: SocketCAN interfaces, adapters of vendor drivers python-can can enumerate (PEAK, Kvaser, Vector, IXXAT) and, off Linux, candleLight (`gs_usb`) and known slcan adapters. Pass an entry's `interface` to `POST /api/can/connect`, with a `bitrate` when `needs_bitrate` is true. The list is rescanned at most every 10 seconds, and not at all while connected.
+`status` is `"running"` when connected to CAN, `"idle"` otherwise. `last_error` contains the error message if CAN was auto-disconnected due to a bus fault. `can_bitrate` is the bitrate Cynitor opened the adapter at, or `null` for SocketCAN, whose bitrate the kernel sets. `can_data_bitrate` is the CAN FD data-phase bitrate it opened the adapter with, or `null` (Classic CAN, or SocketCAN). `can_fd` says whether the session runs Cyphal/CAN FD; for SocketCAN that follows the interface's own setup.
+
+`available_interfaces` lists SocketCAN names only, as before. `available_adapters` lists everything the dashboard can offer: SocketCAN interfaces, adapters of vendor drivers python-can can enumerate (PEAK, Kvaser, Vector, IXXAT) and, off Linux, candleLight (`gs_usb`) and known slcan adapters. Pass an entry's `interface` to `POST /api/can/connect`, with a `bitrate` when `needs_bitrate` is true. `supports_fd` says whether a session on it can run CAN FD: for an adapter Cynitor opens itself (`needs_bitrate` true), that it can be opened as CAN FD when given a `data_bitrate`; for SocketCAN, that the interface is set up for CAN FD, which Cynitor then uses without being asked. The list is rescanned at most every 10 seconds, and not at all while connected.
 
 **List CAN adapters:**
 ```bash
@@ -328,10 +353,18 @@ curl -X POST http://localhost:8080/api/can/connect \
 
 Response (success):
 ```json
-{"status": "running", "can_interface": "vcan0"}
+{"status": "running", "can_interface": "vcan0", "can_fd": false}
 ```
 
 `interface` is either a SocketCAN name, which must be one of `available_interfaces`, or a python-can spec such as `gs_usb:0` or `pcan:PCAN_USBBUS1`, which is opened without that check. `bitrate` (integer, 1–1000000 bit/s) is the bus speed, required for every adapter except SocketCAN, which ignores it. It may be left out only if the server was started with `--bitrate`, which then applies.
+
+`data_bitrate` (integer, 1–12000000 bit/s, optional) opens the adapter as CAN FD with that data-phase bitrate; left out, the session is Classic CAN unless the server was started with `--data-bitrate`. Only adapters whose `supports_fd` is true take it (PEAK, Kvaser, Vector, IXXAT); SocketCAN ignores it and runs CAN FD when the interface is set up for it. `can_fd` in the response says which it became.
+
+```bash
+curl -X POST http://localhost:8080/api/can/connect \
+  -H 'Content-Type: application/json' \
+  -d '{"interface":"pcan:PCAN_USBBUS1","bitrate":500000,"data_bitrate":2000000}'
+```
 
 ```bash
 curl -X POST http://localhost:8080/api/can/connect \
@@ -339,7 +372,7 @@ curl -X POST http://localhost:8080/api/can/connect \
   -d '{"interface":"gs_usb:0","bitrate":250000}'
 ```
 
-Returns `409` if already connected, `400` if a SocketCAN name is unknown or `bitrate` is missing or invalid.
+Returns `409` if already connected, `400` if a SocketCAN name is unknown, `bitrate` is missing or invalid, or `data_bitrate` is invalid or given for an adapter that cannot run CAN FD.
 
 **Disconnect from CAN:**
 ```bash
@@ -389,7 +422,11 @@ Response (connected):
 single-frame payload limit: 7 = Classic CAN, up to 63 = CAN FD). `link` is
 best-effort controller state parsed from `ip -details -statistics link show`;
 fields are `null` on virtual interfaces (vcan) or where the controller does not
-report them. The Debugging view polls this endpoint at ~1 Hz while active.
+report them. For an adapter Cynitor opens itself, `link` holds what the CAN hub
+counts instead: `bitrate`, `dbitrate` (the CAN FD data bitrate, or `null`),
+`adapter_frames_in`, `adapter_frames_out`, `adapter_send_failures` and
+`adapter_error_frames` (error frames, if the adapter's driver reports them).
+The Debugging view polls this endpoint at ~1 Hz while active.
 
 **Raw frame-capture snapshot (Debugging view frame monitor):**
 ```bash
@@ -725,8 +762,20 @@ Response (success):
 {
     "status": "ok",
     "latency_ms": 23,
-    "response": "GetInfo_1_0.Response(...)"
+    "response": "{\n  \"protocol_version\": {\n    \"major\": 1,\n    \"minor\": 0\n  },\n  ...\n}"
 }
+```
+
+`response` is the node's answer as JSON text (pycyphal's `to_builtin` form: numbers, strings, and objects for composite fields), so it reads well and a script can `json.loads` it.
+
+Request attributes are keyed by field name: `{"value": <v>}` for a plain field, and for a composite field `{"type": "<its type>", "value": {"<sub-field>": <v>, ...}}` with each sub-field to set; a single `value` there sets the composite's first field, as single-field wrappers such as `uavcan.primitive.String.1.0` need.
+
+`uavcan.node.ExecuteCommand` (service 435) is callable on every node that advertises it, registers or not. Restarting a node, for example (65535 is `COMMAND_RESTART`; the dashboard offers Restart and Factory reset as buttons):
+
+```bash
+curl -X POST http://localhost:8080/api/services/37/435/call \
+  -H 'Content-Type: application/json' \
+  -d '{"attributes": {"command": {"value": 65535}}}'
 ```
 
 Response (timeout, HTTP `504`):
@@ -827,11 +876,13 @@ Response:
             "node_id": 37,
             "timestamp_unix": 1741949445.123,
             "event_type": "health_change",
-            "detail": {"old_health": 0, "new_health": 2}
+            "detail": {"old": "NOMINAL", "new": "CAUTION"}
         }
     ]
 }
 ```
+
+Event types: `first_seen`, `reappeared`, `disappeared`, `restart_suspected` (the uptime dropped, then counted on), `health_change`, `mode_change`, `port_change`, `service_call`, `got_node_id`, `lost_node_id`, `node_id_migration`, `node_id_conflict` (heartbeats on this node-ID alternate between two uptimes: two nodes share it; reported at most once a minute) and `type_conflict` (the node publishes a subject with another type than the one it is decoded as, which an earlier publisher advertised).
 
 Returns `400` for invalid node_id or limit, `503` if the event logger is not available.
 
@@ -885,7 +936,7 @@ Response:
             "service_type": "uavcan.node.GetInfo_1_0",
             "status": "ok",
             "latency_ms": 23,
-            "response": "GetInfo_1_0.Response(...)",
+            "response": "{\n  \"protocol_version\": {\n    \"major\": 1,\n    \"minor\": 0\n  },\n  ...\n}",
             "node_name": "org.example.my_node",
             "node_unique_id": [215, 79, 139, ...]
         }
@@ -1085,7 +1136,7 @@ Events are automatically logged to `telemetry_events.db`. The `events` table has
 - `attributes` (JSON)
 - `created_at` (database timestamp)
 
-**Retention.** The global `events` table is pruned by **time-based retention** (default 24 hours). A hard event-count cap (`max_events`, default 5,000,000) acts as a safety net only — it bounds disk if rate × retention would otherwise blow past it. Pruning runs every 1000 writes; configure both via `EventLogger(retention_seconds=..., max_events=...)`.
+**Retention.** The global `events` table is pruned by **time-based retention** (default 24 hours). A hard event-count cap (`max_events`, default 5,000,000) acts as a safety net only — it bounds disk if rate × retention would otherwise blow past it. Events are written in transactions of up to 500 (about 20,000 events/s on an SSD). Pruning runs every 1000 writes; configure both via `EventLogger(retention_seconds=..., max_events=...)`.
 
 Per-recording event stores (`recording_events`) are **not** subject to retention — they only grow until the recording is deleted (with `?purge=true`) or stopped. Recording rows survive global retention by definition.
 
