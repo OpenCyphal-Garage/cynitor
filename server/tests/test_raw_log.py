@@ -40,11 +40,11 @@ class TestRawLogFile:
     def test_adapter_clock_is_replaced_by_wall_clock(self, tmp_path):
         # Some adapters stamp frames with seconds since power-up.
         log = RawLog(tmp_path / "cynitor-20260928-120000.log", channel="can0")
-        before = time.time()
         log.write(can.Message(timestamp=123.4, arbitration_id=0x1, data=b"\x00"))
         log.close()
         [msg] = can.LogReader(str(log.path))
-        assert msg.timestamp >= before
+        # The file keeps microseconds, so compare loosely, not against an exact instant.
+        assert abs(msg.timestamp - time.time()) < 60
 
     def test_write_after_close_is_ignored(self, tmp_path):
         log = RawLog(tmp_path / "cynitor-20260928-120000.log", channel="can0")
