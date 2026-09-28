@@ -173,6 +173,19 @@ const _refreshSelection = () => {
   _updateDiskHint();
 };
 
+// Tabulator's rowDblClick needs both clicks on one row element, but the pickers
+// rebuild their rows (every refresh, and a node click redraws them all), so a
+// double-click here is two clicks on the same row key in quick succession.
+const DOUBLE_CLICK_MS = 400;
+let _lastPickerClick = { key: null, at: 0 };
+
+const _isSecondClick = (key) => {
+  const now = Date.now();
+  const second = _lastPickerClick.key === key && now - _lastPickerClick.at < DOUBLE_CLICK_MS;
+  _lastPickerClick = second ? { key: null, at: 0 } : { key, at: now };
+  return second;
+};
+
 const _setHighlightedNode = (nodeId) => {
   const next = _highlightedNodeId === nodeId ? null : nodeId;
   if (next === _highlightedNodeId) return;
@@ -663,7 +676,9 @@ const _initPickers = () => {
       { title: 'Rate', field: 'rate', width: 70 },
     ],
   });
-  _subjectsPicker.on('rowDblClick', (e, row) => _addToSelection(row.getData()));
+  _subjectsPicker.on('rowClick', (e, row) => {
+    if (_isSecondClick(row.getData().key)) _addToSelection(row.getData());
+  });
 
   _nodesPicker = new Tabulator(nodesEl, {
     ...tallOpts,
@@ -679,8 +694,11 @@ const _initPickers = () => {
       { title: 'Srvs', field: 'servers', width: 70, sorter: 'number' },
     ],
   });
-  _nodesPicker.on('rowClick', (e, row) => _setHighlightedNode(row.getData().id));
-  _nodesPicker.on('rowDblClick', (e, row) => _addToSelection(row.getData()));
+  _nodesPicker.on('rowClick', (e, row) => {
+    const data = row.getData();
+    if (_isSecondClick(data.key)) _addToSelection(data);
+    else _setHighlightedNode(data.id);
+  });
 
   _selectionPicker = new Tabulator(selectionEl, {
     ...commonOpts,
