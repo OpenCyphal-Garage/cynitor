@@ -208,7 +208,7 @@ class TestConnectThroughHub:
         import main
         picks = []
 
-        def fake_pick(local_spec, exclude):
+        def fake_pick(local_spec, exclude, rng=None, fd=False):
             picks.append((local_spec, exclude))
             return 42
 
@@ -225,6 +225,31 @@ class TestConnectThroughHub:
         monkeypatch.setattr(main, "pick_free_node_id", lambda *a: pytest.fail("should not pick"))
         with pytest.raises(RuntimeError, match="stop"):
             await main.CANSession().connect("gs_usb:0", bitrate=500_000)
+        assert os.environ["UAVCAN__NODE__ID"] == "7"
+
+
+class TestNodeIdOnSocketcan:
+    """SocketCAN picks Cynitor's node-ID too, without yakut, and hears CAN FD while doing so."""
+
+    @pytest.mark.parametrize("fd", [False, True])
+    async def test_picked_from_heartbeats(self, captured, hubs, monkeypatch, fd):
+        import os
+        import main
+        picks = []
+        monkeypatch.setattr(main, "pick_free_node_id", lambda *args: picks.append(args) or 42)
+        monkeypatch.setattr(main, "socketcan_supports_fd", lambda device: fd)
+        monkeypatch.delenv("UAVCAN__NODE__ID")
+        with pytest.raises(RuntimeError, match="stop"):
+            await main.CANSession().connect("vcan0")
+        assert picks == [("socketcan:vcan0", frozenset({1}), None, fd)]
+        assert os.environ["UAVCAN__NODE__ID"] == "42"
+
+    async def test_preset_node_id_is_kept(self, captured, hubs, monkeypatch):
+        import os
+        import main
+        monkeypatch.setattr(main, "pick_free_node_id", lambda *a: pytest.fail("should not pick"))
+        with pytest.raises(RuntimeError, match="stop"):
+            await main.CANSession().connect("vcan0")
         assert os.environ["UAVCAN__NODE__ID"] == "7"
 
 

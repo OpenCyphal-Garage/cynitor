@@ -355,6 +355,14 @@ class TestPickFreeNodeId:
     def test_none_when_every_node_id_is_taken(self, channel):
         assert self._pick_while_publishing(channel, list(range(128))) is None
 
+    def test_can_fd_bus_is_opened_for_fd_frames(self, channel, monkeypatch):
+        # A SocketCAN socket gets no CAN FD frames unless asked for them.
+        opened = []
+        real_bus = can.Bus
+        monkeypatch.setattr(can_hub.can, "Bus", lambda **kw: opened.append(kw) or real_bus(interface="virtual", channel=channel))
+        pick_free_node_id(f"virtual:{channel}", rng=random.Random(0), fd=True)
+        assert opened[0]["fd"] is True
+
     def test_any_node_id_on_a_quiet_bus(self, channel):
         pick = pick_free_node_id(f"virtual:{channel}", rng=random.Random(0))
         assert 0 <= pick <= 127

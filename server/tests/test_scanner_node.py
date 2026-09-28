@@ -462,3 +462,23 @@ class TestExecuteCommand:
             [service] = node.get_service_schema(42)
         assert service["callable"] and service["full_type"] == "uavcan.node.ExecuteCommand_1_3"
         assert [f["name"] for f in service["request_fields"]] == ["command", "parameter"]
+
+
+
+class TestGetInfoNoAnswer:
+    @pytest.fixture
+    def node(self):
+        node = ScannerNode.__new__(ScannerNode)
+        client = MagicMock()
+        client.call = AsyncMock(return_value=None)  # pycyphal: no answer in time
+        node._node = MagicMock()
+        node._node.make_client.return_value = client
+        return node
+
+    @pytest.mark.parametrize("fd", [True, False])
+    async def test_says_so_and_hints_at_can_fd(self, node, caplog, fd):
+        node.get_transport_info = lambda: {"protocol": {"is_fd": fd}}
+        await node.getInfo(50)
+        assert "Node 50 does not answer GetInfo, though its heartbeats arrive" in caplog.text
+        assert ("Run it in CAN FD too" in caplog.text) == fd
+        assert "NoneType" not in caplog.text

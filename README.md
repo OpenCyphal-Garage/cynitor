@@ -43,7 +43,6 @@ and want to reload without restarting the backend.
 
 These extend functionality but are not required to run the dashboard — the code degrades gracefully when each is absent.
 
-- `pip install yakut` — needed for `yakut accommodate` (automatic node-ID assignment). Without it the backend logs a warning and starts with no auto-assigned ID.
 - **Linux:** `sudo apt install can-utils` — provides `canbusload` for the bus-utilization sparkline on SocketCAN interfaces. Without it utilization stays at 0%; everything else works. Other adapters (see [Platforms](#platforms)) need nothing: Cynitor measures their load itself.
 - **Windows / macOS:** install the `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) — see [Platforms](#platforms) for the transport-spec syntax.
 - `pip install -r server/requirements-dev.txt` — only if you want to run the backend test suite (adds `pytest` and `pytest-asyncio` on top of the runtime requirements).
@@ -163,7 +162,7 @@ On Windows, `pip install -r requirements.txt` also installs what candleLight ada
 
 Most such adapters can be opened by only one program at a time. Cynitor opens the adapter once and shares it between its own parts internally, so it works with them — but nothing else can use the adapter while Cynitor is connected. Stop other CAN tools first.
 
-The node-ID Cynitor uses for itself is picked the way `yakut accommodate` does it (listen to heartbeats, choose a free one), without needing yakut.
+On every platform, the node-ID Cynitor uses for itself is picked the way `yakut accommodate` does it (listen to heartbeats, choose a free one), without needing yakut. Set `UAVCAN__NODE__ID` to choose it yourself.
 
 For these adapters Cynitor measures bus load itself, from the frames passing through it, counted the way `canbusload` counts them by default (worst-case bit stuffing; for CAN FD, the data phase at the data rate). Error frames are counted too, when the adapter's driver reports them; they show in the Debugging view. It also notices a CANable being unplugged and disconnects, as it does when SocketCAN reports the interface gone; other adapters' drivers report that themselves. What it cannot see off SocketCAN are the controller's error counters and error-passive/bus-off state. The rest of the stack — REST/WebSocket server, DSDL Inspector, recordings, log panel, telemetry — works the same on all three OSes. Install whichever `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) and pass its transport string.
 
@@ -295,7 +294,9 @@ show how to narrow that to a dedicated user.
 
 **"Frontend Server Unavailable" overlay appears.** Only happens when the dashboard is served separately for frontend work: the static-file server on port 5500 stopped responding. Restart it with `cd website && python3 -m http.server 5500`. Cynitor reloads automatically once it's back. Served from the backend, this cannot occur.
 
-**Backend won't connect to CAN.** Check that the interface exists (`ip link show vcan0`) and that you have permission to open it. If `yakut accommodate` fails, the backend logs a warning but still starts — the node ID just won't be auto-assigned. Check `/api/logs` or stderr for the full error.
+**Backend won't connect to CAN.** Check that the interface exists (`ip link show vcan0`) and that you have permission to open it. Check `/api/logs` or stderr for the full error.
+
+**A node shows up but never answers (no name, no registers).** Its heartbeats reach Cynitor, but Cynitor's requests do not reach it. The log says so, and on a CAN FD bus names the usual cause: a node running Classic CAN receives none of Cynitor's CAN FD frames. Run every node in CAN FD, or set the interface to Classic CAN (see [CAN FD](#can-fd)).
 
 **No nodes appearing.** Confirm there are publishers on the bus (`yakut sub uavcan.node.Heartbeat.1.0`). On a virtual interface (`vcan0`) you also need a publisher on the same `vcan` interface — the backend doesn't generate traffic on its own.
 
