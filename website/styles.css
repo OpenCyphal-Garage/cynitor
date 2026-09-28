@@ -3171,6 +3171,51 @@ button:focus-visible,
   margin-bottom: 0.75rem;
 }
 
+.svc-firmware {
+  display: grid;
+  gap: 0.375rem;
+  margin-bottom: 0.75rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.75rem;
+}
+
+.svc-firmware[hidden] {
+  display: none;
+}
+
+.svc-firmware-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.svc-firmware-file {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.svc-firmware-meta {
+  font-family: var(--mono);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.svc-firmware-bar {
+  width: 100%;
+  height: 0.375rem;
+  accent-color: var(--accent);
+}
+
+.svc-firmware-state {
+  color: var(--muted);
+}
+
+.svc-firmware-state.is-stalled {
+  color: var(--warn);
+}
+
 .svc-btn-danger {
   color: var(--error);
   border-color: var(--error-muted);

@@ -18,6 +18,8 @@ Checks, in order:
   3. Cynitor's allocator gives the anonymous node a node-ID;
   4. bus load is measured by the hub, not canbusload;
      and a raw log of the frames reads back through python-can;
+  4a. a firmware update: node 50 accepts the command and reads the whole
+     file from Cynitor with uavcan.file.Read, as a bootloader does;
   5. an adapter that disappears ends the session with an error;
   6. the databases are written to the session's data folder.
 
@@ -123,6 +125,36 @@ async def run() -> None:
             await temperature.publish(uavcan.si.sample.temperature.Scalar_1_0(kelvin=300.0))
             await asyncio.sleep(0.1)
     temperature_task = asyncio.ensure_future(publish_temperature())
+
+    # Answers a software update the way a bootloader does: read the file,
+    # chunk by chunk, from the node that sent the command.
+    import uavcan.file
+    Command = uavcan.node.ExecuteCommand_1_3
+    downloaded: list[bytes] = []
+
+    async def download(server_node_id: int, path: str) -> None:
+        client = device.make_client(uavcan.file.Read_1_1, server_node_id)
+        image = b""
+        try:
+            while True:
+                result = await client.call(uavcan.file.Read_1_1.Request(
+                    offset=len(image), path=uavcan.file.Path_2_0(path)))
+                if result is None or result[0].error.value != 0:
+                    return
+                chunk = result[0].data.value.tobytes()
+                image += chunk
+                if len(chunk) < 256:
+                    downloaded.append(image)
+                    return
+        finally:
+            client.close()
+
+    async def on_command(request, meta):
+        if request.command != Command.Request.COMMAND_BEGIN_SOFTWARE_UPDATE:
+            return Command.Response(status=Command.Response.STATUS_BAD_COMMAND)
+        asyncio.ensure_future(download(meta.client_node_id, request.parameter.tobytes().decode()))
+        return Command.Response(status=Command.Response.STATUS_SUCCESS)
+    device.get_server(Command).serve_in_background(on_command)
     anonymous = pycyphal.presentation.Presentation(on_wire(None))
     allocatee = Allocatee(anonymous, bytes(range(16)))
 
@@ -186,6 +218,17 @@ async def run() -> None:
         check(from_device and own and all(m.is_fd == FD for m in from_device + own),
               f"raw log {log.path.name}: {len(logged)} frames, the device's and Cynitor's own "
               f"({'CAN FD' if FD else 'Classic CAN'}), read back by python-can")
+
+        image = os.urandom(3000)  # eleven full chunks and a short one
+        session.firmware_folder.mkdir()
+        (session.firmware_folder / "integration-2.0.app.bin").write_bytes(image)
+        update = await session.begin_firmware_update(DEVICE_NODE_ID, "integration-2.0.app.bin")
+        check(update["state"] == "requested", f"node {DEVICE_NODE_ID} accepted the update command")
+        done = await wait_for(lambda: downloaded)
+        check(done and downloaded[0] == image,
+              f"node {DEVICE_NODE_ID} read the whole firmware file from Cynitor ({len(image)} bytes)")
+        check(update["state"] == "transferred" and update["read"] == len(image),
+              f"the update's progress followed the reads: {update['state']}, {update['read']} bytes")
 
         session.hub._still_present = lambda: False  # the adapter goes away
         gone = await wait_for(lambda: not session.is_running, timeout=10.0)

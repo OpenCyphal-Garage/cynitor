@@ -1146,6 +1146,21 @@ When replay terminates — naturally at the end of the recording, or because a c
 - Only `kind='subject'` rows are replayed. `service_call` rows stay in storage for export but aren't played.
 - `/api/nodes` during replay is synthesised from the recording's publisher list — no GetInfo / health / mode / uptime / client port lists. The placeholder payload carries `_replay: true` on each node so consumers can flag the view as approximate.
 
+### Firmware updates
+
+A node with a Cyphal bootloader (e.g. Zubax Kocherga) updates itself from a file Cynitor serves. Cynitor sends it `uavcan.node.ExecuteCommand` `COMMAND_BEGIN_SOFTWARE_UPDATE` (65533) with the file name as the parameter; the node restarts into its bootloader and reads the file, 256 bytes at a time, with `uavcan.file.Read` from Cynitor's node-ID. Checking the image and starting it is the bootloader's job. Files live in the data folder under `firmware/`.
+
+```http
+GET    /api/firmware                → { files: [{name, bytes, modified_unix}], updates: { "<node_id>": update } }
+POST   /api/firmware?name=<name>    → 201 { name, bytes }   body: the file (application/octet-stream); replaces a file of that name
+DELETE /api/firmware/{name}         → { deleted }           (404 if no such file)
+POST   /api/nodes/{node_id}/firmware { file } → update      (404 no such file, 409 refused or nothing can be sent, 504 no answer)
+```
+
+An `update` is `{ file, bytes, read, state, started_unix, updated_unix, mode }`: `read` is how far the node has read the file, `state` is `requested` (the node accepted the command), `reading`, or `transferred` (it read the last, short chunk), and `mode` the mode in its latest heartbeat (`SOFTWARE_UPDATE` in the bootloader, `OPERATIONAL` once the new firmware runs), or null. Updates are kept per session and end with it.
+
+Names are plain file names (letters, digits, `.`, `_`, `-`; up to 128 characters); a file holds 1 byte to 32 MiB (400 empty, 413 larger). Only `uavcan.file.Read` is served, and only for these files: other nodes cannot list, write or delete files on this computer. Nothing is served while a raw log plays or when Cynitor has no node-ID; then the update is refused with 409.
+
 ### Event Logger (SQLite)
 
 Events are automatically logged to `telemetry_events.db`. The `events` table has fields:

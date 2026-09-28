@@ -1360,6 +1360,7 @@ class ScannerNode:
 
     HEALTH_NAMES = {0: "NOMINAL", 1: "ADVISORY", 2: "CAUTION", 3: "WARNING"}
     MODE_NAMES = {0: "OPERATIONAL", 1: "INITIALIZATION", 2: "MAINTENANCE", 3: "SOFTWARE_UPDATE"}
+    MODE_SOFTWARE_UPDATE = 3
 
     def _get_node_unique_id_hex(self, node_id: int) -> Optional[str]:
         node = self.all_nodes.get(node_id)
@@ -1467,6 +1468,8 @@ class ScannerNode:
                 "old": self.MODE_NAMES.get(prev_mode, str(prev_mode)),
                 "new": self.MODE_NAMES.get(mode_val, str(mode_val)),
             })
+            if prev_mode == self.MODE_SOFTWARE_UPDATE:  # new firmware runs: its version, at once
+                self._schedule_info_refresh(node_id, was_disappeared=False)
         self._prev_mode[node_id] = mode_val
 
         self._prev_uptime[node_id] = self._make_json_serializable(msg.uptime)
@@ -1732,6 +1735,11 @@ class ScannerNode:
 
     def close(self) -> None:
         self._node.close()
+
+    def node_mode(self, node_id: int) -> Optional[str]:
+        """The mode in the node's latest heartbeat (e.g. SOFTWARE_UPDATE), or None if none was seen."""
+        mode = self._prev_mode.get(node_id)
+        return None if mode is None else self.MODE_NAMES.get(mode, str(mode))
 
     @property
     def node(self):

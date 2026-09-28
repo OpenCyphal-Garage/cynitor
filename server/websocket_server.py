@@ -13,6 +13,7 @@ from aiohttp import web, WSCloseCode
 
 from can_config import is_explicit_spec, is_socketcan, resolve_bitrate, resolve_data_bitrate, socketcan_device
 from version import __version__
+from firmware import MAX_FIRMWARE_BYTES, firmware_path, list_firmware
 from raw_log import list_logs, log_path, sidecar_path
 
 
@@ -288,6 +289,10 @@ class WebSocketServer:
         self.app.router.add_get('/api/rawlogs/{name}', self._download_raw_log)
         self.app.router.add_delete('/api/rawlogs/{name}', self._delete_raw_log)
         self.app.router.add_post('/api/rawlogs/{name}/play', self._play_raw_log)
+        self.app.router.add_get('/api/firmware', self._get_firmware)
+        self.app.router.add_post('/api/firmware', self._upload_firmware)
+        self.app.router.add_delete('/api/firmware/{name}', self._delete_firmware)
+        self.app.router.add_post('/api/nodes/{node_id}/firmware', self._update_firmware)
 
         self.app.router.add_post('/api/replay/start', self._replay_start)
         self.app.router.add_post('/api/replay/control', self._replay_control)
@@ -507,6 +512,73 @@ class WebSocketServer:
             return web.json_response({"error": str(e)}, status=500)
         return web.json_response({"status": "running", "can_interface": f"rawlog:{name}",
                                   "can_fd": self.session.can_fd})
+
+    # ── Firmware updates (see firmware.py) ──
+
+    async def _get_firmware(self, request: web.Request) -> web.Response:
+        firmware, scanner = self.session.firmware, self.session.scanner
+        updates = {str(nid): {**u, "mode": scanner.node_mode(nid)}
+                   for nid, u in firmware.updates.items()} if firmware else {}
+        return web.json_response({"files": list_firmware(self.session.firmware_folder), "updates": updates})
+
+    async def _upload_firmware(self, request: web.Request) -> web.Response:
+        """The request body is the file; ?name= names it, replacing any file of that name."""
+        name = request.query.get("name", "")
+        path = firmware_path(self.session.firmware_folder, name)
+        if path is None:
+            return web.json_response(
+                {"error": "name must be a plain file name: letters, digits, '.', '_' or '-'"}, status=400)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        partial = path.with_name(f".{path.name}.part")  # not a firmware name until complete
+        size = 0
+        try:
+            with partial.open("wb") as f:
+                async for chunk in request.content.iter_chunked(64 * 1024):
+                    size += len(chunk)
+                    if size > MAX_FIRMWARE_BYTES:
+                        raise ValueError
+                    f.write(chunk)
+            if size == 0:
+                raise ValueError
+            partial.replace(path)
+        except ValueError:
+            partial.unlink(missing_ok=True)
+            return web.json_response(
+                {"error": f"A firmware file holds 1 byte to {MAX_FIRMWARE_BYTES // (1024 * 1024)} MiB"},
+                status=413 if size else 400)
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            raise
+        return web.json_response({"name": name, "bytes": size}, status=201)
+
+    async def _delete_firmware(self, request: web.Request) -> web.Response:
+        path = firmware_path(self.session.firmware_folder, request.match_info["name"])
+        if path is None or not path.is_file():
+            return web.json_response({"error": "No such firmware file"}, status=404)
+        path.unlink()
+        return web.json_response({"deleted": path.name})
+
+    async def _update_firmware(self, request: web.Request) -> web.Response:
+        """Tell a node to update its software from an uploaded file."""
+        node_id, err = _parse_int(request.match_info.get('node_id'), 'node_id', 0, MAX_NODE_ID)
+        if err:
+            return err
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON body"}, status=400)
+        name = body.get("file") if isinstance(body, dict) else None
+        if not isinstance(name, str):
+            return web.json_response({"error": "file is required"}, status=400)
+        try:
+            update = await self.session.begin_firmware_update(node_id, name)
+        except FileNotFoundError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        except TimeoutError as e:
+            return web.json_response({"error": str(e)}, status=504)
+        except RuntimeError as e:
+            return web.json_response({"error": str(e)}, status=409)
+        return web.json_response(update)
 
     async def _can_disconnect(self, request: web.Request) -> web.Response:
         from main import discover_can_interfaces

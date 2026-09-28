@@ -451,7 +451,11 @@ const renderNodeCommands = (services) => {
   const buttons = NODE_COMMANDS.map(({ command, label, danger }) => `
     <button type="button" class="svc-btn${danger ? ' svc-btn-danger' : ''}"
             data-node-command="${command}">${label}</button>`).join('');
-  return `<div class="svc-node-commands" role="group" aria-label="Node commands">${buttons}</div>`;
+  return `<div class="svc-node-commands" role="group" aria-label="Node commands">${buttons}
+      <button type="button" class="svc-btn" data-firmware-update>Update firmware…</button>
+      <input type="file" data-firmware-file aria-label="Firmware file" hidden>
+    </div>
+    <div class="svc-firmware" data-firmware-status hidden></div>`;
 };
 
 const sendNodeCommand = async (nodeId, command) => {
@@ -474,6 +478,91 @@ const sendNodeCommand = async (nodeId, command) => {
       ? `${label}: no answer from node ${nodeId} (it may already be restarting)`
       : `${label} failed: ${e?.data?.error || e.message}`, timedOut ? 'info' : 'error');
   }
+};
+
+// Firmware update: upload a file, tell the node to update from it, and follow
+// how far the node has read it (a bootloader reads it with uavcan.file.Read).
+const FIRMWARE_POLL_MS = 1000;
+const FIRMWARE_STALL_S = 30;  // no reads for this long: the node is not updating
+const FIRMWARE_STATE_LABEL = {
+  requested: 'command accepted, waiting for the node to read the file',
+  reading: 'the node is reading the file',
+  transferred: 'file read; the bootloader checks it and starts it',
+};
+let firmwarePollTimer = null;
+
+// The backend takes plain file names only.
+const firmwareFileName = (name) =>
+  name.replace(/[^A-Za-z0-9._-]/g, '_').replace(/^[^A-Za-z0-9]+/, '').slice(0, 128) || 'firmware.bin';
+
+// Shows `update` in `box`; true once there is nothing more to follow.
+const renderFirmwareStatus = (box, update) => {
+  box.hidden = !update;
+  if (!update) return true;
+  const percent = update.bytes ? Math.min(100, Math.round((update.read / update.bytes) * 100)) : 0;
+  const quiet = Date.now() / 1000 - update.updated_unix > FIRMWARE_STALL_S;
+  const done = update.state === 'transferred' && update.mode === 'OPERATIONAL';
+  const stalled = quiet && update.state !== 'transferred';
+  const label = done ? 'done: the node runs again'
+    : stalled ? `no reads for ${FIRMWARE_STALL_S} s: does the node have a Cyphal bootloader?`
+    : FIRMWARE_STATE_LABEL[update.state] ?? update.state;
+  box.innerHTML = `
+    <div class="svc-firmware-head">
+      <span class="svc-firmware-file">${escapeHtml(update.file)}</span>
+      <span class="svc-firmware-meta">${escapeHtml(formatBytes(update.read))} / ${escapeHtml(formatBytes(update.bytes))} · ${percent}%</span>
+    </div>
+    <progress class="svc-firmware-bar" max="100" value="${percent}" aria-label="Firmware read by the node"></progress>
+    <div class="svc-firmware-state${stalled ? ' is-stalled' : ''}">${escapeHtml(label)}${
+      update.mode ? ` · node mode ${escapeHtml(update.mode)}` : ''}</div>`;
+  return done || quiet;
+};
+
+const followFirmwareUpdate = (nodeId, box) => {
+  clearTimeout(firmwarePollTimer);
+  const poll = async () => {
+    if (!box.isConnected || state.selectedNodeId !== nodeId) return;
+    let finished = false;
+    try {
+      const data = await requestJson('/api/firmware');
+      finished = renderFirmwareStatus(box, data.updates?.[nodeId]);
+    } catch {
+      // backend briefly unreachable: try again
+    }
+    if (!finished) firmwarePollTimer = setTimeout(poll, FIRMWARE_POLL_MS);
+  };
+  poll();
+};
+
+const startFirmwareUpdate = async (nodeId, file, box) => {
+  const question = `Update node ${nodeId} with ${file.name} (${formatBytes(file.size)})?\n\n`
+    + 'It restarts into its bootloader, which must speak Cyphal, and reads the file from Cynitor.';
+  if (!window.confirm(question)) return;
+  const name = firmwareFileName(file.name);
+  try {
+    await requestJson(`/api/firmware?name=${encodeURIComponent(name)}`, {
+      method: 'POST', body: file, headers: { 'Content-Type': 'application/octet-stream' },
+    });
+    await requestJson(`/api/nodes/${nodeId}/firmware`, {
+      method: 'POST', body: JSON.stringify({ file: name }),
+    });
+    showToast(`Update firmware: node ${nodeId} accepted`, 'info');
+    followFirmwareUpdate(nodeId, box);
+  } catch (e) {
+    showToast(`Update firmware failed: ${e?.data?.error || e.message}`, 'error');
+  }
+};
+
+const bindFirmwareUpdate = (content, nodeId) => {
+  const box = content.querySelector('[data-firmware-status]');
+  const input = content.querySelector('[data-firmware-file]');
+  if (!box || !input) return;
+  content.querySelector('[data-firmware-update]').addEventListener('click', () => input.click());
+  input.addEventListener('change', () => {
+    const [file] = input.files;
+    input.value = '';  // picking the same file again fires change again
+    if (file) startFirmwareUpdate(nodeId, file, box);
+  });
+  followFirmwareUpdate(nodeId, box);  // an update started earlier
 };
 
 const renderServicesTab = async () => {
@@ -615,5 +704,6 @@ const renderServicesTab = async () => {
   content.querySelectorAll('[data-node-command]').forEach((btn) => {
     btn.addEventListener('click', () => sendNodeCommand(nodeId, Number(btn.dataset.nodeCommand)));
   });
+  bindFirmwareUpdate(content, nodeId);
   _loadPersistentHistory(content, nodeId);
 };

@@ -29,6 +29,7 @@ from can_config import (
 from can_discovery import AdapterCatalog, discover_adapters
 from can_hub import CANHub, HubBusLoad, pick_free_node_id
 from data_dir import ALLOCATOR_DB, EVENTS_DB, SCANNER_DB, prepare_data_dir, resolve_data_dir
+from firmware import COMMAND_STATUS, FIRMWARE_DIR, FirmwareServer, firmware_path, send_update_command
 from log_store import InMemoryLogStore, APILogHandler
 from raw_log import (RAW_LOG_DIR, LogPlayer, RawLog, SocketcanTap, log_has_fd_frames, log_path,
                      new_log_name, read_sidecar, write_sidecar)
@@ -223,6 +224,9 @@ class CANSession:
         # The raw frame log being written, if any, and its SocketCAN tap.
         self.raw_log: Optional[RawLog] = None
         self._raw_tap: Optional[SocketcanTap] = None
+        # Serves firmware files to nodes being updated; None when Cynitor has
+        # no node-ID or plays a raw log, since nothing can be sent then.
+        self.firmware: Optional[FirmwareServer] = None
         self.scanner = None
         self.telemetry = None
         self.allocator_manager = None
@@ -318,6 +322,9 @@ class CANSession:
                 logger.info("Initializing ScannerNode...")
                 self.scanner = ScannerNode(register_file=str(self.data_dir / SCANNER_DB))
                 self.scanner.offline = offline
+                if offline is None and self.scanner.node.id is not None:
+                    self.firmware = FirmwareServer(self.firmware_folder)
+                    self.firmware.serve_on(self.scanner.node)
 
                 logger.info("Initializing TelemetryManager...")
                 self.telemetry = TelemetryManager(self.scanner)
@@ -436,6 +443,39 @@ class CANSession:
     @property
     def raw_log_folder(self) -> Path:
         return self.data_dir / RAW_LOG_DIR
+
+    @property
+    def firmware_folder(self) -> Path:
+        return self.data_dir / FIRMWARE_DIR
+
+    async def begin_firmware_update(self, node_id: int, name: str) -> dict:
+        """Tell ``node_id`` to update its software from the uploaded file ``name``.
+
+        FileNotFoundError for an unknown file; RuntimeError if nothing can be
+        sent or the node refuses (its ExecuteCommand status); TimeoutError if
+        it does not answer.
+        """
+        path = firmware_path(self.firmware_folder, name)
+        if path is None or not path.is_file():
+            raise FileNotFoundError(f"No firmware file {name}")
+        if not self.is_running:
+            raise RuntimeError("CAN is not connected")
+        if self.firmware is None:
+            raise RuntimeError("Cynitor cannot send here: a raw log is playing, or it has no node-ID")
+        # Followed from before the command: the node may start reading at once.
+        update = self.firmware.begin(node_id, name, path.stat().st_size)
+        try:
+            status = await send_update_command(self.scanner.node, node_id, name)
+            if status is None:
+                raise TimeoutError(f"Node {node_id} did not answer the update command")
+            if status != 0:
+                reason = COMMAND_STATUS[status] if status < len(COMMAND_STATUS) else f"status {status}"
+                raise RuntimeError(f"Node {node_id} refused the update: {reason}")
+        except BaseException:
+            self.firmware.updates.pop(node_id, None)
+            raise
+        logger.info("Node %d is updating from %s (%d bytes)", node_id, name, update["bytes"])
+        return update
 
     def start_raw_log(self) -> RawLog:
         """Start logging every frame on the bus to a new candump .log file.
@@ -625,6 +665,7 @@ class CANSession:
             self.allocator_manager = None
         # Capture ends implicitly when the transport closes in scanner.close().
         self.frame_capture = None
+        self.firmware = None  # its server closes with the scanner's node
         if self.scanner:
             self.scanner.close()
             self.scanner = None
