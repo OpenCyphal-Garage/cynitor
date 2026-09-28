@@ -26,6 +26,7 @@ const state = {
   // Last bitrate used per interface spec, so the list preselects it next
   // time. Never a guess: an adapter not connected before starts unselected.
   canBitrates: {},
+  canDataBitrates: {},   // CAN FD data bitrate last used per adapter; absent = Classic CAN
   customCanSpec: '',
   favouriteNodeIds: new Set(),
   hiddenNodeIds: new Set(),
@@ -53,6 +54,7 @@ const state = {
   wsThroughput: 0,
   lastWsMessageMs: 0,
   busUtilization: null,
+  droppedEvents: null,   // {scanner, logger, clients} from /api/status, null when not on CAN
   busLoadHistory: [],
   _busFullArmed: true,
   tableSort: { key: 'id', dir: 'asc' },
@@ -311,6 +313,32 @@ const diffUpdateTable = (tabulator, data, keyField) => {
   if (newRows.length) tabulator.addData(newRows);
 };
 
+// Put fresh content into `target`, replacing only the nodes that changed and
+// going deeper where an element kept its tag and attributes. A periodic
+// refresh then leaves unchanged buttons in place: a click is lost when its
+// button is swapped out between press and release.
+const _sameAttributes = (a, b) => a.attributes.length === b.attributes.length
+  && [...a.attributes].every((attr) => b.getAttribute(attr.name) === attr.value);
+
+const patchChildren = (target, fresh) => {
+  const oldKids = [...target.childNodes];
+  const newKids = [...fresh.childNodes];
+  if (oldKids.length !== newKids.length) {
+    target.replaceChildren(...newKids);
+    return;
+  }
+  newKids.forEach((kid, i) => {
+    const old = oldKids[i];
+    if (kid.isEqualNode(old)) return;
+    if (kid.nodeType === Node.ELEMENT_NODE && old.nodeType === Node.ELEMENT_NODE
+        && kid.tagName === old.tagName && _sameAttributes(kid, old)) {
+      patchChildren(old, kid);
+    } else {
+      old.replaceWith(kid);
+    }
+  });
+};
+
 const positionPopover = (popover, anchorEl) => {
   const rect = anchorEl.getBoundingClientRect();
   popover.style.top = (rect.bottom + 4) + 'px';
@@ -400,16 +428,17 @@ const setAuthToken = (token) => {
   } catch (_) {}
 };
 
-// Build a wsBase that carries the auth token as a query param when set —
-// browsers don't let JS attach custom headers to WebSocket handshakes, so
-// query string is the only path for the WS auth check.
-const wsUrlWithToken = (path) => {
-  const base = `${wsBase()}${path}`;
+// Append the auth token as a query parameter, for requests that cannot carry
+// an Authorization header: WebSocket handshakes, and downloads the browser
+// makes itself (links, window.location).
+const withTokenParam = (url) => {
   const token = getAuthToken();
-  if (!token) return base;
-  const sep = base.includes('?') ? '&' : '?';
-  return `${base}${sep}token=${encodeURIComponent(token)}`;
+  if (!token) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}token=${encodeURIComponent(token)}`;
 };
+
+const wsUrlWithToken = (path) => withTokenParam(`${wsBase()}${path}`);
 
 const withSmartJsonHeaders = (options = {}) => {
   const method = String(options.method || 'GET').toUpperCase();
@@ -568,6 +597,7 @@ const _writeSettingsNow = () => {
     apiBase: el('apiBase').value.trim(),
     canInterface: interfacesSelect ? interfacesSelect.value : '',
     canBitrates: state.canBitrates,
+    canDataBitrates: state.canDataBitrates,
     customCanSpec: state.customCanSpec,
     dashboardConnected: state.dashboardConnected,
     selectedDetailTab: state.selectedDetailTab,
@@ -698,13 +728,16 @@ const loadSettings = () => {
   }
   if (settings.theme === 'dark') {
     document.documentElement.setAttribute('data-theme', 'dark');
-    el('themeLabel').textContent = 'Dark';
+    el('themeToggle').setAttribute('aria-checked', 'true');
   }
   if (typeof settings.canInterface === 'string') {
     state.preferredCanInterface = settings.canInterface;
   }
   if (settings.canBitrates && typeof settings.canBitrates === 'object') {
     state.canBitrates = settings.canBitrates;
+  }
+  if (settings.canDataBitrates && typeof settings.canDataBitrates === 'object') {
+    state.canDataBitrates = settings.canDataBitrates;
   }
   if (typeof settings.customCanSpec === 'string') {
     state.customCanSpec = settings.customCanSpec;

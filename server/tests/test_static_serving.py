@@ -22,6 +22,10 @@ def _make_session():
     s.telemetry = None
     s.bus_load = None
     s.last_error = None
+    s.dropped_events.return_value = None
+    s.default_data_bitrate = None
+    s.can_data_bitrate = None
+    s.can_fd = False
     s.replay = None
     s.event_logger = None
     s.connect = AsyncMock()
@@ -37,6 +41,8 @@ def website(tmp_path):
     (d / "index.html").write_text("<title>Cynitor</title>")
     (d / "state.js").write_text("// app code")
     (d / "config.js").write_text("// placeholder\n")
+    (d / "vendor").mkdir()
+    (d / "vendor" / "lib.min.js").write_text("// vendored library")
     return d
 
 
@@ -73,6 +79,19 @@ class TestServesDashboard:
         assert "app code" in await resp.text()
 
     @pytest.mark.asyncio
+    async def test_serves_vendored_libraries(self, client):
+        # D3 and Tabulator ship in website/vendor/ so the page works offline.
+        resp = await client.get("/vendor/lib.min.js")
+        assert resp.status == 200
+        assert "vendored library" in await resp.text()
+
+    @pytest.mark.asyncio
+    async def test_dashboard_files_are_not_origin_restricted(self, client):
+        # Only the API and event stream are guarded; the page's files are public.
+        resp = await client.get("/state.js", headers={"Origin": "https://elsewhere.example"})
+        assert resp.status == 200
+
+    @pytest.mark.asyncio
     async def test_config_js_reports_request_origin(self, client):
         # Whatever host the user reached us on is where the API lives, which
         # is the whole point: the built-in localhost default is wrong once the
@@ -83,6 +102,13 @@ class TestServesDashboard:
         assert "window.__CYNITOR" in body
         assert '"apiBase"' in body
         assert str(client.server.port) in body
+
+    @pytest.mark.asyncio
+    async def test_config_js_names_the_version(self, client):
+        # The dashboard's footer shows it; it lives only in version.py.
+        from version import __version__
+        body = await (await client.get("/config.js")).text()
+        assert f'"version": "{__version__}"' in body
 
     @pytest.mark.asyncio
     async def test_generated_config_overrides_the_placeholder(self, client):

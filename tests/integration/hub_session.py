@@ -12,18 +12,24 @@ On the simulated bus:
 
 Checks, in order:
   1. the session connects through the hub, and Cynitor picks itself a node-ID;
-  2. the scanner sees node 50 and its GetInfo name;
+  2. the scanner sees node 50 and its GetInfo name, and decodes the
+     uavcan.diagnostic.Record it publishes on the fixed subject-ID (no
+     register names it, as with most firmware);
   3. Cynitor's allocator gives the anonymous node a node-ID;
   4. bus load is measured by the hub, not canbusload;
+     and a raw log of the frames reads back through python-can;
   5. an adapter that disappears ends the session with an error;
   6. the databases are written to the session's data folder.
+
+With --fd the device and Cynitor run Cyphal/CAN FD (500 kbit/s, 2 Mbit/s data
+phase), and Cynitor's own frames on the wire must be CAN FD frames.
 
 Prerequisites (from the repository root):
     pip install -r server/requirements.txt
     python server/startup_setup.py --recompile     # compiled DSDL
 
 Usage:
-    python tests/integration/hub_session.py
+    python tests/integration/hub_session.py [--fd]
 
 Exits non-zero on the first failed check. Runs in a temporary directory, so
 the databases a session writes do not land in the checkout.
@@ -41,6 +47,8 @@ sys.path[:0] = [str(ROOT / "server"), str(ROOT / "python_compiled_messages")]
 
 WIRE = "integration-wire"
 BITRATE = 500_000
+FD = "--fd" in sys.argv[1:]
+DATA_BITRATE = 2_000_000 if FD else None
 DEVICE_NODE_ID = 50
 TIMEOUT = 30.0
 
@@ -61,6 +69,16 @@ async def wait_for(predicate, timeout: float = TIMEOUT) -> bool:
     return predicate()
 
 
+async def first_frame_from(tap, node_id: int, timeout: float = 10.0):
+    """The next frame on the wire sent by ``node_id``, or None."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        msg = await asyncio.to_thread(tap.recv, 0.2)  # blocking; keep the loop running
+        if msg is not None and msg.is_extended_id and msg.arbitration_id & 0x7F == node_id:
+            return msg
+    return None
+
+
 async def run() -> None:
     try:
         import uavcan.node  # noqa: F401  (compiled DSDL)
@@ -68,6 +86,7 @@ async def run() -> None:
         print("Compiled DSDL not found. Run: python server/startup_setup.py --recompile")
         sys.exit(2)
 
+    import can
     import pycyphal.application
     import pycyphal.presentation
     import uavcan.node
@@ -79,7 +98,11 @@ async def run() -> None:
     from main import CANSession
 
     def on_wire(node_id):
-        return CANTransport(PythonCANMedia(f"virtual:{WIRE}", BITRATE), local_node_id=node_id)
+        if FD:
+            media = PythonCANMedia(f"virtual:{WIRE}", (BITRATE, DATA_BITRATE), 64)
+        else:
+            media = PythonCANMedia(f"virtual:{WIRE}", BITRATE)
+        return CANTransport(media, local_node_id=node_id)
 
     device = pycyphal.application.make_node(
         uavcan.node.GetInfo_1_0.Response(name="integration.device"),
@@ -93,17 +116,44 @@ async def run() -> None:
     data = Path.cwd() / "data"
     data.mkdir()
     session = CANSession(data_dir=data)
+    tap = can.Bus(interface="virtual", channel=WIRE)  # what an analyzer on the bus would see
     try:
-        await session.connect(f"virtual:{WIRE}", bitrate=BITRATE)
+        await session.connect(f"virtual:{WIRE}", bitrate=BITRATE, data_bitrate=DATA_BITRATE)
         check(session.is_running and session.hub is not None, "connected through the CAN hub")
         own_id = os.environ.get("UAVCAN__NODE__ID")
         check(own_id is not None and int(own_id) not in (1, DEVICE_NODE_ID),
               f"picked its own node-ID ({own_id}), clear of the allocator and the device")
+        check(session.can_fd == FD, f"session runs {'CAN FD' if FD else 'Classic CAN'}")
+        own_frame = await first_frame_from(tap, int(own_id))
+        check(own_frame is not None and own_frame.is_fd == FD,
+              f"Cynitor's own frames on the wire are {'CAN FD' if FD else 'Classic CAN'}")
 
         seen = await wait_for(lambda: session.scanner.all_nodes[DEVICE_NODE_ID].has_responded_to_getInfo)
         check(seen, f"scanner sees node {DEVICE_NODE_ID} and its GetInfo")
         name = session.scanner.all_nodes[DEVICE_NODE_ID].info_response.name.tobytes().decode()
         check(name == "integration.device", f"GetInfo name is {name!r}")
+
+        import uavcan.diagnostic
+        record = uavcan.diagnostic.Record_1_1(
+            severity=uavcan.diagnostic.Severity_1_0(uavcan.diagnostic.Severity_1_0.WARNING),
+            text="integration diagnostic",
+        )
+        diagnostics = device.make_publisher(uavcan.diagnostic.Record_1_1)
+
+        async def diagnostic_arrived():
+            deadline = time.monotonic() + TIMEOUT
+            while time.monotonic() < deadline:
+                await diagnostics.publish(record)
+                event = session.telemetry.latest_by_subject.get(8184)
+                if event:
+                    return {a["attribute"]: a["value"] for a in event["attributes"]}
+                await asyncio.sleep(0.5)
+            return None
+
+        attributes = await diagnostic_arrived()
+        check(attributes is not None and attributes.get("severity") == 4
+              and attributes.get("text") == "integration diagnostic",
+              f"diagnostic record decoded from its fixed subject: {attributes}")
 
         allocated = await wait_for(lambda: allocatee.get_result() is not None)
         check(allocated, f"anonymous node was allocated node-ID {allocatee.get_result()}")
@@ -111,6 +161,16 @@ async def run() -> None:
         check(isinstance(session.bus_load, HubBusLoad), "bus load comes from the hub")
         loaded = await wait_for(lambda: session.bus_load.utilization > 0, timeout=5.0)
         check(loaded, f"bus load measured ({session.bus_load.utilization} %)")
+
+        log = session.start_raw_log()
+        await asyncio.sleep(3)  # a few heartbeats each way
+        session.stop_raw_log()
+        logged = list(can.LogReader(str(log.path)))
+        from_device = [m for m in logged if m.is_rx and m.arbitration_id & 0x7F == DEVICE_NODE_ID]
+        own = [m for m in logged if not m.is_rx and m.arbitration_id & 0x7F == int(own_id)]
+        check(from_device and own and all(m.is_fd == FD for m in from_device + own),
+              f"raw log {log.path.name}: {len(logged)} frames, the device's and Cynitor's own "
+              f"({'CAN FD' if FD else 'Classic CAN'}), read back by python-can")
 
         session.hub._still_present = lambda: False  # the adapter goes away
         gone = await wait_for(lambda: not session.is_running, timeout=10.0)
@@ -124,6 +184,7 @@ async def run() -> None:
     finally:
         if session.is_running:
             await session.disconnect()
+        tap.shutdown()
         allocatee.close()
         anonymous.close()
         device.close()

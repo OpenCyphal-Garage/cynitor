@@ -138,11 +138,23 @@ const updateSemaphores = () => {
       const rate = getTotalMessageRate();
       const util = state.busUtilization;
       const utilStr = util != null ? ` · ${util}% load` : '';
-      canInfo.textContent = `${rate.toFixed(1)} msg/s${utilStr}`;
+      const dropped = state.droppedEvents;
+      const droppedTotal = dropped ? dropped.scanner + dropped.logger + dropped.clients : 0;
+      const dropStr = droppedTotal > 0 ? ` · ${droppedTotal} dropped` : '';
+      canInfo.textContent = `${rate.toFixed(1)} msg/s${utilStr}${dropStr}`;
+      canInfo.title = droppedTotal > 0
+        ? `Messages lost because the backend could not keep up — before decoding: ${dropped.scanner}, `
+          + `from history/recordings: ${dropped.logger}, from dashboard views: ${dropped.clients}`
+        : '';
       canInfo.classList.remove('hidden');
       canInfo.classList.remove('load-ok', 'load-warn', 'load-err', 'load-crit');
       if (util != null) {
         canInfo.classList.add(util > 100 ? 'load-crit' : util >= 80 ? 'load-err' : util >= 50 ? 'load-warn' : 'load-ok');
+      }
+      // Lost data outranks a healthy load reading.
+      if (droppedTotal > 0 && (util == null || util < 50)) {
+        canInfo.classList.remove('load-ok');
+        canInfo.classList.add('load-warn');
       }
     } else {
       canInfo.classList.add('hidden');
@@ -370,23 +382,44 @@ const canSpecNeedsBitrate = (spec) => {
   return value.includes(':') && !value.toLowerCase().startsWith('socketcan:');
 };
 
+// python-can interfaces the backend can open as CAN FD; keep in step with
+// FD_INTERFACES in server/can_config.py. Listed adapters carry supports_fd.
+const FD_CAN_INTERFACES = ['pcan', 'kvaser', 'vector', 'ixxat', 'virtual'];
+
+const canSpecSupportsFd = (spec) => FD_CAN_INTERFACES.includes(
+  spec.trim().replace(/^pythoncan:/i, '').split(':')[0].toLowerCase());
+
 const formatBitrate = (bitrate) => (bitrate >= 1000000
   ? `${bitrate / 1000000} Mbit/s`
   : `${bitrate / 1000} kbit/s`);
 
-// What Connect would open: the interface spec, and whether it needs a bitrate.
+// "500 kbit/s · FD 2 Mbit/s", "500 kbit/s", "CAN FD" (SocketCAN sets its own rates), or ''.
+const formatCanRates = (bitrate, dataBitrate, fd) => {
+  const parts = [];
+  if (bitrate) parts.push(formatBitrate(bitrate));
+  if (dataBitrate) parts.push(`FD ${formatBitrate(dataBitrate)}`);
+  else if (fd) parts.push('CAN FD');
+  return parts.join(' · ');
+};
+
+// What Connect would open: the interface spec, whether it needs a bitrate,
+// and whether it can be opened as CAN FD with a data bitrate.
 const selectedCanTarget = () => {
   const selected = el('interfacesSelect').value;
   if (selected === OTHER_CAN_INTERFACE) {
     const spec = el('canSpecInput').value.trim();
-    return { interface: spec, needsBitrate: canSpecNeedsBitrate(spec) };
+    return { interface: spec, needsBitrate: canSpecNeedsBitrate(spec), supportsFd: canSpecSupportsFd(spec) };
   }
   const adapter = state.canAdapters.find((a) => a.interface === selected);
   return {
     interface: selected,
     needsBitrate: adapter ? adapter.needs_bitrate : canSpecNeedsBitrate(selected),
+    supportsFd: adapter ? !!adapter.supports_fd : canSpecSupportsFd(selected),
   };
 };
+
+// The chosen CAN FD data bitrate in bit/s, or null for Classic CAN.
+const selectedCanDataBitrate = () => Number(el('canDataBitrateSelect').value) || null;
 
 // The chosen bitrate in bit/s, or null if none is chosen or the custom one is invalid.
 const selectedCanBitrate = () => {
@@ -408,25 +441,30 @@ const updateCanForm = ({ restoreBitrate = false } = {}) => {
   const isOther = el('interfacesSelect').value === OTHER_CAN_INTERFACE;
   el('canSpecInput').classList.toggle('hidden', !(idle && isOther));
   el('canBitrateRow').classList.toggle('hidden', !(idle && target.needsBitrate));
+  el('canDataBitrateRow').classList.toggle('hidden', !(idle && target.needsBitrate && target.supportsFd));
   if (restoreBitrate) {
     const select = el('canBitrateSelect');
     const remembered = state.canBitrates[target.interface];
     const listed = !!remembered && [...select.options].some((o) => o.value === String(remembered));
     select.value = remembered ? (listed ? String(remembered) : 'custom') : '';
     el('canBitrateCustom').value = remembered && !listed ? String(remembered) : '';
+    const dataSelect = el('canDataBitrateSelect');
+    const rememberedData = String(state.canDataBitrates[target.interface] || '');
+    dataSelect.value = [...dataSelect.options].some((o) => o.value === rememberedData) ? rememberedData : '';
   }
   el('canBitrateCustom').classList.toggle('hidden', el('canBitrateSelect').value !== 'custom');
   updateCanConnectButton();
 };
 
-// While connected, the list shows only the interface in use, with its bitrate.
-const showConnectedCanInterface = (iface, bitrate) => {
+// While connected, the list shows only the interface in use, with its rates.
+const showConnectedCanInterface = (iface, bitrate, dataBitrate = null, fd = false) => {
   const select = el('interfacesSelect');
   const adapter = state.canAdapters.find((a) => a.interface === iface);
   select.innerHTML = '';
   const option = document.createElement('option');
   option.value = iface;
-  option.textContent = (adapter ? adapter.label : iface) + (bitrate ? ` · ${formatBitrate(bitrate)}` : '');
+  const rates = formatCanRates(bitrate, dataBitrate, fd);
+  option.textContent = (adapter ? adapter.label : iface) + (rates ? ` · ${rates}` : '');
   select.appendChild(option);
   select.value = iface;
   updateCanForm();
@@ -508,6 +546,10 @@ const selectInterface = async () => {
       showToast('Choose the bus bitrate first', 'error');
       return null;
     }
+    const dataBitrate = target.supportsFd ? selectedCanDataBitrate() : null;
+    if (dataBitrate) {
+      body.data_bitrate = dataBitrate;
+    }
   }
 
   try {
@@ -518,8 +560,13 @@ const selectInterface = async () => {
     state.preferredCanInterface = el('interfacesSelect').value;
     if (body.bitrate) {
       state.canBitrates[target.interface] = body.bitrate;
+      if (body.data_bitrate) {
+        state.canDataBitrates[target.interface] = body.data_bitrate;
+      } else {
+        delete state.canDataBitrates[target.interface];
+      }
     }
-    showConnectedCanInterface(target.interface, body.bitrate);
+    showConnectedCanInterface(target.interface, body.bitrate, body.data_bitrate, data?.can_fd);
     saveSettings();
     return data;
   } catch (error) {
@@ -532,6 +579,7 @@ const disconnectAll = ({ persist = true } = {}) => {
   state.dashboardConnected = false;
   state.canConnected = false;
   state.busUtilization = null;
+  state.droppedEvents = null;
   state.busLoadHistory.length = 0;
   drawBusLoadSparkline();
   state.latestBySubject.clear();
@@ -579,13 +627,14 @@ const pollStatus = async () => {
   }
 
   state.busUtilization = data.bus_utilization ?? null;
+  state.droppedEvents = data.dropped ?? null;
 
   const backendCanRunning = data.status === 'running' && !!data.can_interface;
 
   if (backendCanRunning && !state.canConnected) {
     // Another client connected CAN
     state.canConnected = true;
-    showConnectedCanInterface(data.can_interface, data.can_bitrate);
+    showConnectedCanInterface(data.can_interface, data.can_bitrate, data.can_data_bitrate, data.can_fd);
     state.preferredCanInterface = data.can_interface;
     updateCanConnectButton();
     stopInterfacePolling();
@@ -595,6 +644,7 @@ const pollStatus = async () => {
     // CAN disconnected (by another client or due to error)
     state.canConnected = false;
     state.busUtilization = null;
+    state.droppedEvents = null;
     REG_CACHE.clear();
     updateCanConnectButton();
     stopCanStartupDelay();
@@ -727,7 +777,8 @@ const connectDashboard = async () => {
   if (statusData.status === 'running' && statusData.can_interface) {
     state.canAdapters = statusData.available_adapters || [];
     state.canConnected = true;
-    showConnectedCanInterface(statusData.can_interface, statusData.can_bitrate);
+    showConnectedCanInterface(statusData.can_interface, statusData.can_bitrate,
+      statusData.can_data_bitrate, statusData.can_fd);
     state.preferredCanInterface = statusData.can_interface;
     updateCanConnectButton();
     stopInterfacePolling();

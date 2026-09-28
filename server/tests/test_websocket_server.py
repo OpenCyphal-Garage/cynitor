@@ -21,6 +21,10 @@ def _make_session(is_running=False, can_interface=None):
     session.telemetry = None
     session.bus_load = None
     session.last_error = None
+    session.dropped_events.return_value = None
+    session.default_data_bitrate = None
+    session.can_data_bitrate = None
+    session.can_fd = False
     session.replay = None
     session.event_logger = None
     session.connect = AsyncMock()
@@ -179,7 +183,7 @@ class TestCANConnectSpecsAndBitrate:
         with patch("main.discover_can_interfaces", return_value=["vcan0"]):
             resp = await client.post("/api/can/connect", json={"interface": "vcan0"})
         assert resp.status == 200
-        session.connect.assert_awaited_once_with("vcan0", bitrate=None)
+        session.connect.assert_awaited_once_with("vcan0", bitrate=None, data_bitrate=None)
 
     @pytest.mark.asyncio
     async def test_explicit_spec_skips_discovery(self, client, session):
@@ -191,7 +195,7 @@ class TestCANConnectSpecsAndBitrate:
             )
         assert resp.status == 200
         discover.assert_not_called()
-        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=250000)
+        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=250000, data_bitrate=None)
 
     @pytest.mark.asyncio
     async def test_adapter_without_bitrate_is_refused(self, client, session):
@@ -206,7 +210,34 @@ class TestCANConnectSpecsAndBitrate:
         session.default_bitrate = 250_000
         resp = await client.post("/api/can/connect", json={"interface": "gs_usb:0"})
         assert resp.status == 200
-        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=None)
+        session.connect.assert_awaited_once_with("gs_usb:0", bitrate=None, data_bitrate=None)
+
+    @pytest.mark.asyncio
+    async def test_data_bitrate_opens_can_fd(self, client, session):
+        resp = await client.post("/api/can/connect", json={
+            "interface": "pcan:PCAN_USBBUS1", "bitrate": 500000, "data_bitrate": 2000000,
+        })
+        assert resp.status == 200
+        session.connect.assert_awaited_once_with("pcan:PCAN_USBBUS1", bitrate=500000, data_bitrate=2000000)
+        assert (await resp.json())["can_fd"] is False  # what the (mock) session reports
+
+    @pytest.mark.asyncio
+    async def test_data_bitrate_refused_for_adapter_without_can_fd(self, client, session):
+        resp = await client.post("/api/can/connect", json={
+            "interface": "gs_usb:0", "bitrate": 500000, "data_bitrate": 2000000,
+        })
+        assert resp.status == 400
+        assert "cannot run CAN FD" in (await resp.json())["error"]
+        session.connect.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("data_bitrate", [0, 50_000_000, "2000000"])
+    async def test_rejects_invalid_data_bitrate(self, client, session, data_bitrate):
+        resp = await client.post("/api/can/connect", json={
+            "interface": "kvaser:0", "bitrate": 500000, "data_bitrate": data_bitrate,
+        })
+        assert resp.status == 400
+        session.connect.assert_not_awaited()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("bitrate", [0, 5_000_000, "500000", True])
@@ -392,15 +423,96 @@ class TestWebSocket:
 class TestCORS:
 
     @pytest.mark.asyncio
-    async def test_cors_headers(self, client):
+    async def test_dev_server_origin_is_allowed(self, client):
+        # The dashboard served separately for frontend work, on this machine.
+        resp = await client.get("/api", headers={"Origin": "http://localhost:5500"})
+        assert resp.status == 200
+        assert resp.headers.get("Access-Control-Allow-Origin") == "http://localhost:5500"
+        assert "Origin" in resp.headers.get("Vary", "")
+
+    @pytest.mark.asyncio
+    async def test_no_wildcard_origin(self, client):
         resp = await client.get("/api")
-        assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+        assert "Access-Control-Allow-Origin" not in resp.headers
 
     @pytest.mark.asyncio
     async def test_options_preflight(self, client):
-        resp = await client.options("/api")
+        resp = await client.options("/api", headers={"Origin": "http://127.0.0.1:5500"})
         assert resp.status == 200
         assert "Access-Control-Allow-Methods" in resp.headers
+
+
+class TestCrossSiteRequests:
+    """A page on another site must not be able to use the API through the
+    browser of whoever has Cynitor running: it would command nodes on the bus."""
+
+    @pytest.mark.asyncio
+    async def test_foreign_site_post_is_refused_before_it_runs(self, client, session):
+        # text/plain is a "simple" request: the browser sends it without a
+        # preflight, so a CORS header alone would not stop it from running.
+        with patch("main.discover_can_interfaces", return_value=["vcan0"]):
+            resp = await client.post(
+                "/api/can/connect", data='{"interface": "vcan0"}',
+                headers={"Origin": "https://evil.example", "Content-Type": "text/plain"},
+            )
+        assert resp.status == 403
+        session.connect.assert_not_awaited()
+        assert "Access-Control-Allow-Origin" not in resp.headers
+
+    @pytest.mark.asyncio
+    async def test_foreign_site_preflight_is_refused(self, client):
+        resp = await client.options("/api/can/connect", headers={"Origin": "https://evil.example"})
+        assert resp.status == 403
+        assert "Access-Control-Allow-Origin" not in resp.headers
+
+    @pytest.mark.asyncio
+    async def test_foreign_site_websocket_is_refused(self, client):
+        # WebSockets are not covered by CORS at all.
+        from aiohttp import WSServerHandshakeError
+        with pytest.raises(WSServerHandshakeError) as err:
+            await client.ws_connect("/ws", headers={"Origin": "https://evil.example"})
+        assert err.value.status == 403
+
+    @pytest.mark.asyncio
+    async def test_sandboxed_null_origin_is_refused(self, client):
+        resp = await client.get("/api/status", headers={"Origin": "null"})
+        assert resp.status == 403
+
+    @pytest.mark.asyncio
+    async def test_dns_rebinding_is_refused(self, client):
+        # evil.example re-resolved to 127.0.0.1: same-origin to the browser,
+        # but a loopback-only server is never legitimately called that.
+        resp = await client.get("/api/status", headers={
+            "Host": "evil.example:8080", "Origin": "http://evil.example:8080",
+        })
+        assert resp.status == 403
+
+    @pytest.mark.asyncio
+    async def test_request_without_origin_is_allowed(self, client):
+        # curl, scripts and other non-browser clients send no Origin.
+        resp = await client.get("/api")
+        assert resp.status == 200
+
+    @pytest.mark.asyncio
+    async def test_same_origin_dashboard_is_allowed(self, client):
+        # The dashboard this server serves: Origin names the server itself.
+        host = f"127.0.0.1:{client.port}"
+        resp = await client.post("/api/can/disconnect", headers={"Origin": f"http://{host}"})
+        assert resp.status != 403
+
+    @pytest.mark.asyncio
+    async def test_network_bound_server_accepts_its_own_origin(self, session, log_store):
+        # Bound beyond loopback, it is reached by the machine's address or name.
+        server = WebSocketServer(session=session, host="0.0.0.0", port=0, log_store=log_store)
+        async with TestClient(TestServer(server.app)) as c:
+            resp = await c.get("/api", headers={
+                "Host": "192.168.1.5:8080", "Origin": "http://192.168.1.5:8080",
+            })
+            assert resp.status == 200
+            resp = await c.get("/api", headers={
+                "Host": "192.168.1.5:8080", "Origin": "https://evil.example",
+            })
+            assert resp.status == 403
 
 
 class TestGetServices:
@@ -806,9 +918,17 @@ class TestAdapterListing:
             data = await (await listing_client.get("/api/status")).json()
         assert data["available_interfaces"] == ["vcan0"]  # unchanged for old clients
         assert data["available_adapters"][1] == {
-            "interface": "gs_usb:0", "label": "CANable 0", "needs_bitrate": True,
+            "interface": "gs_usb:0", "label": "CANable 0", "needs_bitrate": True, "supports_fd": False,
         }
         assert data["can_bitrate"] is None
+        assert data["can_data_bitrate"] is None and data["can_fd"] is False
+
+    @pytest.mark.asyncio
+    async def test_status_reports_dropped_events(self, listing_client, session):
+        session.dropped_events.return_value = {"scanner": 0, "logger": 4, "clients": 1}
+        with patch("main.discover_can_interfaces", return_value=[]):
+            data = await (await listing_client.get("/api/status")).json()
+        assert data["dropped"] == {"scanner": 0, "logger": 4, "clients": 1}
 
     @pytest.mark.asyncio
     async def test_refresh_query_forces_a_rescan(self, listing_client, catalog):

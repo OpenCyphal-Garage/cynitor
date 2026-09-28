@@ -8,9 +8,12 @@ import sqlite3
 import time
 from pathlib import Path
 from typing import Optional, Set, Any
+from urllib.parse import urlsplit
 from aiohttp import web, WSCloseCode
 
-from can_config import is_explicit_spec, is_socketcan, resolve_bitrate, socketcan_device
+from can_config import is_explicit_spec, is_socketcan, resolve_bitrate, resolve_data_bitrate, socketcan_device
+from version import __version__
+from raw_log import list_logs, log_path
 
 
 def _csv_escape(value: Any) -> str:
@@ -96,6 +99,8 @@ class WebSocketServer:
     # Paths the auth middleware always lets through. /api/health is the only
     # truly open endpoint (used by load balancers and uptime checks).
     _AUTH_OPEN_PATHS = frozenset({"/api/health"})
+
+    _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
     def __init__(
         self,
@@ -195,8 +200,35 @@ class WebSocketServer:
             response.headers.setdefault("Cache-Control", "no-cache")
         return response
 
+    def _browser_request_allowed(self, request: web.Request) -> bool:
+        """Whether a request may come from the browser page that sent it.
+
+        The API commands nodes on the bus, and a page on any website can send
+        requests to localhost through its visitor's browser. Browsers name the
+        sending page in the Origin header; allowed are the dashboard this server
+        serves (same origin) and pages served from this machine, such as the
+        frontend dev server on :5500. Tools like curl send no Origin.
+
+        A site can also re-point its own name at 127.0.0.1 (DNS rebinding) so
+        that its requests look same-origin. A server listening on loopback only
+        is never legitimately called by another name, so there the Host header
+        must name loopback too.
+        """
+        host = (urlsplit(f"//{request.host}").hostname or "").lower()
+        if self.host in self._LOOPBACK_HOSTS and host not in self._LOOPBACK_HOSTS:
+            return False
+        origin = request.headers.get("Origin")
+        if origin is None:
+            return True
+        parts = urlsplit(origin)  # "null" (sandboxed frames, file://) has no host
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            return False
+        return parts.netloc.lower() == request.host.lower() or parts.hostname in self._LOOPBACK_HOSTS
+
     @web.middleware
     async def _cors_middleware(self, request: web.Request, handler: Any) -> web.StreamResponse:
+        if self._is_protected_path(request.path) and not self._browser_request_allowed(request):
+            return web.json_response({"error": "cross-origin request refused"}, status=403)
         if request.method == "OPTIONS":
             response = web.Response()
         else:
@@ -204,9 +236,12 @@ class WebSocketServer:
                 response = await handler(request)
             except web.HTTPException as ex:
                 response = ex
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Headers"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+        origin = request.headers.get("Origin")
+        if origin is not None and self._is_protected_path(request.path):
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Headers"] = "*"
+            response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+            response.headers.add("Vary", "Origin")
         return response
 
     def _setup_routes(self) -> None:
@@ -247,6 +282,12 @@ class WebSocketServer:
         self.app.router.add_post('/api/recordings/{rec_id}/stop', self._post_recording_stop)
         self.app.router.add_get('/api/recordings/{rec_id}/export', self._export_recording)
 
+        self.app.router.add_get('/api/rawlogs', self._get_raw_logs)
+        self.app.router.add_post('/api/rawlogs', self._start_raw_log)
+        self.app.router.add_post('/api/rawlogs/stop', self._stop_raw_log)
+        self.app.router.add_get('/api/rawlogs/{name}', self._download_raw_log)
+        self.app.router.add_delete('/api/rawlogs/{name}', self._delete_raw_log)
+
         self.app.router.add_post('/api/replay/start', self._replay_start)
         self.app.router.add_post('/api/replay/control', self._replay_control)
         self.app.router.add_post('/api/replay/seek', self._replay_seek)
@@ -284,7 +325,7 @@ class WebSocketServer:
         placeholder so the development flow keeps the built-in default.
         """
         origin = f"{request.scheme}://{request.host}"
-        body = f"window.__CYNITOR = {json.dumps({'apiBase': origin})};\n"
+        body = f"window.__CYNITOR = {json.dumps({'apiBase': origin, 'version': __version__})};\n"
         return web.Response(text=body, content_type="application/javascript")
 
     async def start(self) -> None:
@@ -335,9 +376,14 @@ class WebSocketServer:
             "can_interface": self.session.can_interface,
             # None for SocketCAN, whose bitrate the kernel sets.
             "can_bitrate": self.session.can_bitrate,
+            # The CAN FD data bitrate Cynitor opened the adapter with, or None.
+            "can_data_bitrate": self.session.can_data_bitrate,
+            # Whether the session runs CAN FD (for SocketCAN, as the interface is set up).
+            "can_fd": self.session.can_fd,
             "available_interfaces": available,
             "available_adapters": await self._list_adapters(),
             "bus_utilization": bus_load.utilization if bus_load else None,
+            "dropped": self.session.dropped_events(),
             "last_error": self.session.last_error,
         })
 
@@ -359,8 +405,11 @@ class WebSocketServer:
         # Required for every adapter except SocketCAN; the server's --bitrate,
         # if it was started with one, stands in when the request has none.
         bitrate = payload.get("bitrate")
+        # Optional; opens the adapter as CAN FD. --data-bitrate stands in likewise.
+        data_bitrate = payload.get("data_bitrate")
         try:
             resolve_bitrate(iface, self.session.default_bitrate if bitrate is None else bitrate)
+            resolve_data_bitrate(iface, self.session.default_data_bitrate if data_bitrate is None else data_bitrate)
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=400)
 
@@ -379,11 +428,60 @@ class WebSocketServer:
                 )
 
         try:
-            await self.session.connect(iface, bitrate=bitrate)
-            return web.json_response({"status": "running", "can_interface": iface})
+            await self.session.connect(iface, bitrate=bitrate, data_bitrate=data_bitrate)
+            return web.json_response({"status": "running", "can_interface": iface,
+                                      "can_fd": self.session.can_fd})
         except Exception as e:
             logger.error(f"Failed to connect CAN: {e}", exc_info=True)
             return web.json_response({"error": str(e)}, status=500)
+
+    # ── Raw CAN logs (candump .log files; see raw_log.py) ──
+
+    async def _get_raw_logs(self, request: web.Request) -> web.Response:
+        active = self.session.raw_log
+        return web.json_response({
+            "active": active.status() if active is not None else None,
+            "logs": list_logs(self.session.raw_log_folder),
+        })
+
+    async def _start_raw_log(self, request: web.Request) -> web.Response:
+        try:
+            log = self.session.start_raw_log()
+        except RuntimeError as e:
+            return web.json_response({"error": str(e)}, status=409)
+        except Exception as e:
+            logger.error(f"Failed to start raw log: {e}", exc_info=True)
+            return web.json_response({"error": str(e)}, status=500)
+        return web.json_response(log.status(), status=201)
+
+    async def _stop_raw_log(self, request: web.Request) -> web.Response:
+        log = self.session.stop_raw_log()
+        if log is None:
+            return web.json_response({"error": "No raw log is running"}, status=409)
+        return web.json_response(log.status())
+
+    def _raw_log_file(self, request: web.Request) -> Optional[Path]:
+        path = log_path(self.session.raw_log_folder, request.match_info["name"])
+        return path if path is not None and path.is_file() else None
+
+    async def _download_raw_log(self, request: web.Request) -> web.StreamResponse:
+        path = self._raw_log_file(request)
+        if path is None:
+            return web.json_response({"error": "No such raw log"}, status=404)
+        return web.FileResponse(path, headers={
+            "Content-Type": "text/plain; charset=utf-8",
+            "Content-Disposition": f'attachment; filename="{path.name}"',
+        })
+
+    async def _delete_raw_log(self, request: web.Request) -> web.Response:
+        path = self._raw_log_file(request)
+        if path is None:
+            return web.json_response({"error": "No such raw log"}, status=404)
+        active = self.session.raw_log
+        if active is not None and active.path == path:
+            return web.json_response({"error": "Stop the raw log before deleting it"}, status=409)
+        path.unlink()
+        return web.json_response({"deleted": path.name})
 
     async def _can_disconnect(self, request: web.Request) -> web.Response:
         from main import discover_can_interfaces

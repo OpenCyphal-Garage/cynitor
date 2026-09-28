@@ -10,9 +10,16 @@ from pathlib import Path
 
 from can_config import (
     BITRATE_ENV,
+    CLASSIC_MTU,
+    FD_MTU,
+    MTU_ENV,
     bitrate_env_value,
+    is_socketcan,
     normalize_can_iface,
     resolve_bitrate,
+    resolve_data_bitrate,
+    socketcan_device,
+    socketcan_supports_fd,
 )
 
 logger = logging.getLogger(__name__)
@@ -127,7 +134,8 @@ def ensure_libusb_on_path() -> None:
 
 
 def prepare_runtime(can_iface: str = "can0", force_compile: bool = False,
-                    bitrate: int | None = None, auto_node_id: bool = True) -> None:
+                    bitrate: int | None = None, auto_node_id: bool = True,
+                    data_bitrate: int | None = None) -> None:
     """Prepare environment variables, sys.path, and optional DSDL compilation for runtime.
 
     `auto_node_id` runs `yakut accommodate` when UAVCAN__NODE__ID is unset. It
@@ -137,8 +145,16 @@ def prepare_runtime(can_iface: str = "can0", force_compile: bool = False,
     `bitrate` is required for every interface except SocketCAN, whose bitrate
     is set with `ip link`; ValueError is raised before anything changes if it
     is missing or invalid.
+
+    CAN FD is used on SocketCAN when the interface is set up for it, and on
+    anything else when `data_bitrate` is given; Classic CAN otherwise.
     """
     bitrate = resolve_bitrate(can_iface, bitrate)
+    data_bitrate = resolve_data_bitrate(can_iface, data_bitrate)
+    if is_socketcan(can_iface):
+        fd = socketcan_supports_fd(socketcan_device(can_iface))
+    else:
+        fd = data_bitrate is not None
     project_root = resolve_project_root()
     dsdl_dir = project_root / "dsdl_messages"
     public_types_dir = dsdl_dir / "public_regulated_data_types"
@@ -182,7 +198,11 @@ def prepare_runtime(can_iface: str = "can0", force_compile: bool = False,
     # A full transport spec (e.g. "gs_usb:0", "pcan:PCAN_USBBUS1") is used as
     # given; a bare name such as "vcan0" means Linux SocketCAN.
     os.environ["UAVCAN__CAN__IFACE"] = normalize_can_iface(can_iface)
-    os.environ["UAVCAN__CAN__MTU"] = "8"
+    # pycyphal sends every frame as CAN FD at the FD MTU, which an interface
+    # not set up for CAN FD rejects, so the MTU must follow the bus.
+    os.environ[MTU_ENV] = str(FD_MTU if fd else CLASSIC_MTU)
+    if fd:
+        logger.info("Using CAN FD on %s", can_iface)
     # Published before `yakut accommodate` runs, so that it too opens the
     # interface at this bitrate rather than pycyphal's 1 Mbit/s default.
     # Cleared for SocketCAN, where the kernel's setting applies, so that a
@@ -190,7 +210,7 @@ def prepare_runtime(can_iface: str = "can0", force_compile: bool = False,
     if bitrate is None:
         os.environ.pop(BITRATE_ENV, None)
     else:
-        os.environ[BITRATE_ENV] = bitrate_env_value(bitrate)
+        os.environ[BITRATE_ENV] = bitrate_env_value(bitrate, data_bitrate)
     ensure_libusb_on_path()
 
     if auto_node_id and "UAVCAN__NODE__ID" not in os.environ:

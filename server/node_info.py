@@ -70,7 +70,8 @@ class NodeInfo:
         self.has_servers = False
         self.server_ServiceIDs = []
         self.publishers_info = {}
-        self.last_info_time: Optional[datetime.datetime] = None
+        self.last_info_time: Optional[datetime.datetime] = None      # last GetInfo answered
+        self.last_info_attempt: Optional[datetime.datetime] = None   # last GetInfo sent
         self._last_seen_mono: float = 0.0
 
     def mark_appeared(self, first_seen: datetime.datetime):
@@ -133,15 +134,32 @@ class NodeInfo:
         self.port_list = port_list
         self._register_ids()
 
+    def _subject_ids(self, subject_id_list, kind: str) -> list:
+        """Subject-IDs in a uavcan.node.port.SubjectIDList union.
+
+        Nodes send a sparse list when they have few ports and a bitmask when
+        they have many; both mean the same. ``total`` ("every subject") has no
+        list to give, so it yields none, as before.
+        """
+        sparse = subject_id_list.sparse_list
+        if sparse is not None:
+            return list(sparse) if sparse.size > 0 else []
+        mask = subject_id_list.mask
+        if mask is not None:
+            return [int(subject_id) for subject_id in numpy.flatnonzero(mask)]
+        logging.debug(f"Node {self.node_id} {kind} all subjects")
+        return []
+
     def _register_publisher_ids(self) -> None:
         if self.has_published_port_list:
-            publishers = self.port_list.publishers.sparse_list
-            if publishers is not None and publishers.size > 0:
+            publishers = self._subject_ids(self.port_list.publishers, "publishes")
+            if publishers:
                 self.has_publishers = True
                 for subject_id in publishers:
                     logging.debug(f"Node {self.node_id} has a publisher with Subject-ID {subject_id}")
                     self.publisher_SubjectIDs.append(subject_id)
-                    self.publishers_info[subject_id.value] = PublisherInfo(subject_id=subject_id.value)
+                    value = getattr(subject_id, "value", subject_id)
+                    self.publishers_info[value] = PublisherInfo(subject_id=value)
             else:
                 self.has_publishers = False
         else:
@@ -149,8 +167,8 @@ class NodeInfo:
 
     def _register_subscriber_ids(self) -> None:
         if self.has_published_port_list:
-            subscribers = self.port_list.subscribers.sparse_list
-            if subscribers is not None and subscribers.size > 0:
+            subscribers = self._subject_ids(self.port_list.subscribers, "subscribes to")
+            if subscribers:
                 self.has_subscribers = True
                 for subject_id in subscribers:
                     logging.debug(f"Node {self.node_id} has a subscriber with Subject-ID {subject_id}")

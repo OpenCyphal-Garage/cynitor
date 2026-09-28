@@ -223,6 +223,27 @@ class TestSetPortList:
         assert 200 in node.server_ServiceIDs
         assert 300 in node.server_ServiceIDs
 
+    def test_publishers_sent_as_mask(self):
+        # Nodes with many ports send a bitmask instead of a sparse list.
+        node = NodeInfo(node_id=1)
+        port_list = self._make_port_list()
+        mask = numpy.zeros(8192, dtype=bool)
+        mask[[100, 7509]] = True
+        port_list.publishers.sparse_list = None
+        port_list.publishers.mask = mask
+        node.set_port_list(port_list)
+        assert node.has_publishers is True
+        assert node.publisher_SubjectIDs == [100, 7509]
+        assert set(node.publishers_info) == {100, 7509}
+
+    def test_subscribers_total_yields_no_list(self):
+        node = NodeInfo(node_id=1)
+        port_list = self._make_port_list()
+        port_list.subscribers.sparse_list = None
+        port_list.subscribers.mask = None
+        node.set_port_list(port_list)
+        assert node.has_subscribers is False
+
     def test_empty_ports(self):
         node = NodeInfo(node_id=1)
         port_list = self._make_port_list()

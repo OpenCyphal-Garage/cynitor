@@ -76,14 +76,15 @@ Then open `http://localhost:5500` instead. The address field defaults to
 - **Live node table** — sortable, filterable, with health, message rate, uptime, and per-row publisher/subscriber/server/client port lists. Pin favourites to the top with a star, hide offline nodes you don't care about.
 - **Subject browser** — a second view (toggle via sidebar tabs) that lists every subject and service on the network. Expand any service inline to send requests to specific nodes without leaving the subject-centric view.
 - **Per-subject inspection** — click a node, then a subject card in the detail panel, to see live message attributes and a 60-second history.
-- **Service interaction** — invoke services on remote nodes with auto-discovered request schemas, expandable composite fields, and a persistent call history (stored in SQLite, survives restarts).
-- **Node history** — lifecycle tracking with health/mode changes, service calls, and per-subject telemetry summaries. Retained for 30 days.
+- **Service interaction** — invoke services on remote nodes with auto-discovered request schemas, expandable composite fields, and a persistent call history (stored in SQLite, survives restarts). Nodes that serve `uavcan.node.ExecuteCommand` get Restart and Factory reset buttons.
+- **Node history** — lifecycle tracking with health/mode changes, restarts, service calls, and per-subject telemetry summaries. Two nodes sharing a node-ID, or publishing one subject with different types, are flagged there. Retained for 30 days.
 - **Network topology** — D3 force-directed graph of device and subject nodes with directional pub/sub links and animated live-traffic. Three view modes (nodes only / node-centric / subject-centric), drag-to-pin with persistent positions, adjacency highlighting, hide-system / hide-offline / per-node-or-subject hide with a restore badge, inline device rename, gravity bias by total links / channels / rate / payload, and per-link rate/payload overlays.
 - **Multi-attribute plots** — each numeric attribute gets its own panel with its own y-axis, so a fast-growing uptime doesn't squash a small voltage reading. Interactive three-zone legend pills for color, line style, and visibility.
 - **Hover crosshair + tooltip** with timestamp and per-series values that update in real time as data scrolls under the cursor. Click to pause, drag to pan, scroll to zoom, double-click to reset.
 - **Compare view** — independent graphs for side-by-side multi-series comparison with derived series (delta, ratio, moving average, min/max, rate of change), thresholds, timeline markers (Shift+click), freehand drawing (Alt+drag), crosshair sync across graphs, and workspace export/import.
 - **DSDL Inspector** — searchable tree of all loaded DSDL types with bus-activity indicators (which types are actually being seen on the wire), field-level search, and dependency navigation. Create, edit, compile and delete custom DSDL types, kept in the data folder (`dsdl/custom`, compiled into `dsdl/compiled`), with a compile-state lock. Compiling runs inside Cynitor, so it works in the packaged binaries too.
 - **Recordings** — capture filtered events into per-recording SQLite stores with `max_length` / `max_events` limits and `stop_on_limit`. Quick-save the last N seconds from the global buffer, duplicate a configuration with "New like this", edit limits on live recordings without stopping them, and export per recording as CSV or JSONL. Replay any recording through the live UI with play/pause/seek/speed controls.
+- **Raw CAN logs** — record every frame on the bus (Classic, CAN FD and error frames) to a candump `.log` file from the Record view, and download it: python-can, SavvyCAN and can-utils open it, and `log2asc` turns it into Vector ASC.
 - **Right log panel** — hidden by default, resizable; merges live `uavcan.diagnostic.Record` (subject 8184), any user-added text-bearing subject, and the backend's Python logs (polled from `/api/logs`) into one timeline. Per-source toggle pills with live count badges, severity floor across all sources, amber disconnect indicator when the backend is unreachable.
 - **Dark / light theme**, sidebar collapse, resizable detail panel.
 - **Auto-reconnect** on transient backend or frontend-server outages.
@@ -103,6 +104,7 @@ Other options:
 | Flag | Effect |
 |------|--------|
 | `--bitrate <n>` | Bus speed in bit/s. Required with `--can` for every adapter Cynitor opens itself (PCAN, gs_usb, slcan, …); there is no default, because a wrong guess disrupts the bus. Ignored for SocketCAN, whose bitrate is set with `ip link` |
+| `--data-bitrate <n>` | CAN FD data-phase speed in bit/s. Opens the adapter as CAN FD (PEAK, Kvaser, Vector, IXXAT); leave it out for Classic CAN. Ignored for SocketCAN, which runs CAN FD when the interface is set up for it (see [CAN FD](#can-fd)) |
 | `--bind <host>` | Listen on `<host>` (default `127.0.0.1`; `0.0.0.0` to expose on the network) |
 | `--port <n>` | Listen on `<n>` instead of 8080 |
 | `--data-dir <dir>` | Keep history, recordings and the allocator's node-ID table in `<dir>` instead of the default data folder (see [Where data is kept](#where-data-is-kept)) |
@@ -115,7 +117,7 @@ Other options:
 Bus history (24 h), node history (30 days), service-call history, recordings,
 remembered device names, and the allocator's table of which device got which
 node-ID are kept in SQLite files in one data folder, whatever folder Cynitor
-is started from:
+is started from. Raw CAN logs go in its `raw/` subfolder:
 
 | OS | Data folder |
 |----|-------------|
@@ -148,6 +150,8 @@ python3 main.py --can pcan:PCAN_USBBUS1 --bitrate 500000
 python3 main.py --can gs_usb:0 --bitrate 500000
 # CANable / slcan firmware
 python3 main.py --can slcan:COM5@115200 --bitrate 500000
+# PEAK PCAN-USB FD, CAN FD with a 2 Mbit/s data phase
+python3 main.py --can pcan:PCAN_USBBUS1 --bitrate 500000 --data-bitrate 2000000
 
 # Or connect a running backend
 curl -X POST http://localhost:8080/api/can/connect \
@@ -161,7 +165,26 @@ Most such adapters can be opened by only one program at a time. Cynitor opens th
 
 The node-ID Cynitor uses for itself is picked the way `yakut accommodate` does it (listen to heartbeats, choose a free one), without needing yakut.
 
-For these adapters Cynitor measures bus load itself, from the frames passing through it, counted the way `canbusload` counts them (no stuffing bits). It also notices a CANable being unplugged and disconnects, as it does when SocketCAN reports the interface gone; other adapters' drivers report that themselves. What it cannot see off SocketCAN are the controller's error counters and error-passive/bus-off state. The rest of the stack — REST/WebSocket server, DSDL Inspector, recordings, log panel, telemetry — works the same on all three OSes. Install whichever `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) and pass its transport string.
+For these adapters Cynitor measures bus load itself, from the frames passing through it, counted the way `canbusload` counts them by default (worst-case bit stuffing; for CAN FD, the data phase at the data rate). Error frames are counted too, when the adapter's driver reports them; they show in the Debugging view. It also notices a CANable being unplugged and disconnects, as it does when SocketCAN reports the interface gone; other adapters' drivers report that themselves. What it cannot see off SocketCAN are the controller's error counters and error-passive/bus-off state. The rest of the stack — REST/WebSocket server, DSDL Inspector, recordings, log panel, telemetry — works the same on all three OSes. Install whichever `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) and pass its transport string.
+
+### CAN FD
+
+Cyphal/CAN FD works on both paths:
+
+- **SocketCAN** (Linux): Cynitor follows the interface. Set it up for CAN FD before connecting and Cynitor uses it, with nothing to pass. The interface has to be down for the change:
+
+  ```bash
+  sudo ip link set can0 down
+  sudo ip link set can0 type can bitrate 500000 dbitrate 2000000 fd on
+  sudo ip link set can0 up
+  # a virtual interface only needs the CAN FD frame size:
+  sudo ip link set vcan0 down && sudo ip link set vcan0 mtu 72 && sudo ip link set vcan0 up
+  ```
+
+  Bus load then needs a `canbusload` from mid-2021 or later; older ones, such as Ubuntu 22.04's (2020.11), count Classic CAN frames only, so CAN FD load reads low.
+- **Adapters Cynitor opens itself**: give the data-phase bitrate with `--data-bitrate`, or pick it under the bitrate in the dashboard. PEAK, Kvaser, Vector and IXXAT can do this. candleLight (`gs_usb`) and slcan adapters cannot through python-can; on Linux, use them as SocketCAN for CAN FD.
+
+Every node on a CAN FD bus must be set up for CAN FD: Cynitor sends its own frames as CAN FD frames there, which a Classic-only controller answers with error frames.
 
 ## Deploying to a Server
 
@@ -180,7 +203,7 @@ chmod +x cynitor-server-*-x86_64.AppImage && ./cynitor-server-*-x86_64.AppImage
 ```
 
 On Windows, run the `.exe` from a terminal, e.g.
-`.\cynitor-server-0.8.0-windows-x86_64.exe`. It includes what candleLight
+`.\cynitor-server-0.9.0-windows-x86_64.exe`. It includes what candleLight
 adapters (CANable) need; other adapters need their vendor's driver
 installed (PEAK, Kvaser, Vector, IXXAT). Windows may warn about an
 unrecognised app the first time, as the executable is not code-signed.
@@ -202,6 +225,11 @@ the page it was served from, so nothing needs configuring per client.
 **Set a token whenever you bind beyond loopback.** Without one the API is open
 to anyone who can reach the port, and that API commands nodes on the bus. The
 server logs a warning if you bind to `0.0.0.0` with no token.
+
+Whatever the binding, web pages from other sites cannot use the API through a
+visitor's browser: requests they send are refused (see the browser origin
+policy in [WEBSOCKET_README.md](WEBSOCKET_README.md)). The dashboard needs no
+internet access either; its libraries are served by Cynitor itself.
 
 The dashboard's own files are served without a token, since a browser has to
 load the page before it can ask for one. Only the API and the event stream are

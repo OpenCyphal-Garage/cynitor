@@ -46,6 +46,10 @@ def _make_session_with_telemetry():
     session.telemetry = FakeTelemetry()
     session.bus_load = None
     session.last_error = None
+    session.dropped_events.return_value = None
+    session.default_data_bitrate = None
+    session.can_data_bitrate = None
+    session.can_fd = False
     session.replay = None
     session.event_logger = None
     session.connect = AsyncMock()

@@ -97,6 +97,8 @@ class TestEventLogger:
         logger._write_events_sync(events)
         count = logger._get_event_count_sync()
         assert count == 3
+        # It is the newest three that survive.
+        assert sorted(e["subject_id"] for e in logger._get_events_sync()) == [1002, 1003, 1004]
 
     @pytest.mark.asyncio
     async def test_time_based_pruning(self, db_path):
@@ -546,6 +548,19 @@ class TestEventLogger:
             await logger.stop()
 
     @pytest.mark.asyncio
+    async def test_recording_event_count_column_across_batches(self, logger):
+        # The count is written once per batch; it must still add up.
+        await logger.start()
+        try:
+            rec_id = await logger.create_recording(name="count", filter_spec={"subject_ids": [100]})
+            logger._write_events_sync([_sample_event(subject_id=100)] * 3 + [_sample_event(subject_id=200)])
+            logger._write_events_sync([_sample_event(subject_id=100)] * 2)
+            rec = await logger.get_recording(rec_id)
+            assert rec["event_count"] == 5
+        finally:
+            await logger.stop()
+
+    @pytest.mark.asyncio
     async def test_dedicated_recording_no_filter_captures_all(self, logger):
         await logger.start()
         try:
@@ -703,3 +718,28 @@ class TestEventLogger:
         assert "uid_async" in loaded
         assert loaded["uid_async"]["name"] == "async.node"
         assert loaded["uid_async"]["servers"] == [384, 385, 430]
+
+
+class TestLoggerThroughput:
+
+    @pytest.mark.asyncio
+    async def test_full_queue_counts_dropped_events(self, db_path):
+        el = EventLogger(db_path=db_path)
+        el._queue = asyncio.Queue(maxsize=2)
+        for i in range(5):
+            await el.log_event(_sample_event(subject_id=i))
+        assert el.dropped_events == 3
+
+    @pytest.mark.asyncio
+    async def test_queued_events_are_written_in_large_batches(self, db_path):
+        el = EventLogger(db_path=db_path)
+        el.init_db_sync()
+        batches = []
+        async def record(events):
+            batches.append(len(events))
+        el._write_events = record
+        for i in range(1200):
+            el._queue.put_nowait(_sample_event(subject_id=i))
+        el._running = False  # drain what is queued, then exit
+        await el._log_loop()
+        assert batches == [EventLogger.BATCH_SIZE, EventLogger.BATCH_SIZE, 200]

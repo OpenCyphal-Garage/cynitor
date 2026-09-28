@@ -8,9 +8,14 @@ from can_config import (
     is_explicit_spec,
     is_socketcan,
     media_bitrate,
+    media_mtu,
     normalize_can_iface,
     resolve_bitrate,
+    resolve_data_bitrate,
+    socketcan_supports_fd,
+    supports_fd,
     validate_bitrate,
+    validate_data_bitrate,
 )
 
 
@@ -123,3 +128,66 @@ class TestMediaBitrate:
         monkeypatch.delenv("UAVCAN__CAN__BITRATE", raising=False)
         with pytest.raises(RuntimeError):
             media_bitrate("gs_usb:0")
+
+
+class TestCanFd:
+    @pytest.mark.parametrize("data_bitrate", [1_000_000, 2_000_000, 5_000_000, 8_000_000])
+    def test_accepts_common_data_rates(self, data_bitrate):
+        assert validate_data_bitrate(data_bitrate) == data_bitrate
+
+    @pytest.mark.parametrize("data_bitrate", [0, -1, 50_000_000, "2000000", True, 2.0])
+    def test_rejects_bad_data_rates(self, data_bitrate):
+        with pytest.raises(ValueError):
+            validate_data_bitrate(data_bitrate)
+
+    def test_no_data_bitrate_means_classic(self):
+        assert resolve_data_bitrate("pcan:PCAN_USBBUS1", None) is None
+
+    @pytest.mark.parametrize("iface", ["pcan:PCAN_USBBUS1", "kvaser:0", "vector:0", "ixxat:0"])
+    def test_fd_capable_adapters(self, iface):
+        assert resolve_data_bitrate(iface, 2_000_000) == 2_000_000
+        assert supports_fd(iface)
+
+    @pytest.mark.parametrize("iface", ["gs_usb:0", "slcan:COM5"])
+    def test_adapters_without_can_fd_are_refused(self, iface):
+        with pytest.raises(ValueError, match="cannot run CAN FD"):
+            resolve_data_bitrate(iface, 2_000_000)
+        assert not supports_fd(iface)
+
+    def test_socketcan_ignores_a_data_bitrate(self):
+        # The kernel owns its rates; FD follows the interface's own setting.
+        assert resolve_data_bitrate("vcan0", 2_000_000) is None
+
+    def test_env_value_carries_both_phases(self):
+        assert bitrate_env_value(500_000, 2_000_000) == "500000 2000000"
+
+    def test_media_bitrate_is_a_pair_for_can_fd(self, monkeypatch):
+        monkeypatch.setenv("UAVCAN__CAN__BITRATE", "500000 2000000")
+        assert media_bitrate("virtual:hub") == (500_000, 2_000_000)
+        assert bitrate_from_env() == 500_000
+
+    def test_media_mtu_defaults_to_classic(self, monkeypatch):
+        monkeypatch.delenv("UAVCAN__CAN__MTU", raising=False)
+        assert media_mtu() == 8
+        monkeypatch.setenv("UAVCAN__CAN__MTU", "64")
+        assert media_mtu() == 64
+
+
+class TestSocketcanSupportsFd:
+    @pytest.fixture
+    def sysfs(self, tmp_path):
+        def interface(name, mtu):
+            (tmp_path / name).mkdir()
+            (tmp_path / name / "mtu").write_text(f"{mtu}\n")
+        interface("can0", 16)   # Classic CAN
+        interface("can1", 72)   # `fd on`, or `mtu 72` for vcan
+        return tmp_path
+
+    def test_classic_interface(self, sysfs):
+        assert not socketcan_supports_fd("can0", sysfs)
+
+    def test_fd_interface(self, sysfs):
+        assert socketcan_supports_fd("can1", sysfs)
+
+    def test_missing_interface(self, sysfs):
+        assert not socketcan_supports_fd("can9", sysfs)
