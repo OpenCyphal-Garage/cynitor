@@ -33,6 +33,33 @@ logger = logging.getLogger(__name__)
 _RECV_TIMEOUT = 0.1
 _channel_numbers = itertools.count(1)
 
+
+def _no_filters_on_virtual_channels() -> None:
+    """Stop pycyphal setting acceptance filters on python-can virtual channels.
+
+    python-can's ThreadSafeBus guards set_filters and recv with one lock, and
+    pycyphal's reader thread holds it through each recv, letting go only to
+    take it again at once. Every subscriber made or closed sets the filters,
+    from the event loop, which then waits for that lock: seconds, or minutes
+    on a busy machine, with the whole dashboard stalled.
+
+    On a virtual channel the filters gain nothing: the channel is software,
+    and pycyphal's transport sorts every frame into its sessions anyway.
+    Real adapters are opened by the hub itself, not through pycyphal, and
+    SocketCAN through pycyphal's own media, so neither is affected.
+    """
+    from pycyphal.transport.can.media.pythoncan import PythonCANMedia
+    configure = PythonCANMedia.configure_acceptance_filters
+
+    def configure_unless_virtual(media, configuration) -> None:
+        if not media.interface_name.startswith("virtual:"):
+            configure(media, configuration)
+
+    PythonCANMedia.configure_acceptance_filters = configure_unless_virtual
+
+
+_no_filters_on_virtual_channels()
+
 # Cyphal/CAN heartbeat, used to find a free node-ID the way `yakut accommodate`
 # does, but on the hub's channel: a child process cannot see an in-process one.
 HEARTBEAT_SUBJECT_ID = 7509

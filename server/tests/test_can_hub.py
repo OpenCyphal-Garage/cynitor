@@ -599,3 +599,27 @@ class TestFrameCallback:
         finally:
             a.shutdown()
             h.stop()
+
+
+class TestNoFiltersOnVirtualChannels:
+    """Setting filters waits on the lock pycyphal's reader holds; see _no_filters_on_virtual_channels."""
+
+    def test_skipped_on_a_virtual_channel(self):
+        from unittest.mock import MagicMock
+        from pycyphal.transport.can.media import FilterConfiguration
+        from pycyphal.transport.can.media.pythoncan import PythonCANMedia
+        media = PythonCANMedia("virtual:test-no-filters", 500_000)
+        try:
+            media._bus.set_filters = MagicMock()
+            media.configure_acceptance_filters([FilterConfiguration.new_promiscuous()])
+            media._bus.set_filters.assert_not_called()
+        finally:
+            media.close()
+
+    def test_kept_on_a_real_adapter(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        from pycyphal.transport.can.media.pythoncan import PythonCANMedia
+        adapter = SimpleNamespace(interface_name="pcan:PCAN_USBBUS1", _closed=False, _bus=MagicMock())
+        PythonCANMedia.configure_acceptance_filters(adapter, [])
+        adapter._bus.set_filters.assert_called_once_with([])
