@@ -1287,6 +1287,38 @@ button:focus-visible,
   width: 100%;
 }
 
+/* ── Subjects: the detail panel's plot and call card, side by side ── */
+.subjects-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.subjects-detail.has-plot.has-service {
+  grid-template-columns: minmax(0, 1fr) minmax(22rem, 34%);
+}
+
+.subjects-detail-plot,
+.subjects-detail-service {
+  min-width: 0;
+  min-height: 0;
+}
+
+.subjects-detail-service {
+  overflow-y: auto;
+}
+
+.subjects-detail.has-plot.has-service .subjects-detail-service {
+  border-left: 1px solid var(--border);
+  padding-left: 0.5rem;
+}
+
+.subjects-detail:not(.has-plot) .subjects-detail-plot,
+.subjects-detail:not(.has-service) .subjects-detail-service {
+  display: none;
+}
+
 /* ── Subjects: a service's call card, in the detail panel ── */
 .subject-service-card {
   padding: 0.5rem 0.75rem 0.75rem;

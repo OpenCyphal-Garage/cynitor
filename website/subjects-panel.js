@@ -387,48 +387,74 @@ const refreshSubjectsTable = () => {
   _highlightSubjectRow();
 };
 
-// The subjects view opens one thing at a time in the detail panel below
-// the table: a subject's plot, or a service's call card. Rows never move.
-const _subjectsDetailRowId = () => state._subjectsServiceRowId
-  ?? (state.selectedPlotSubject != null ? `sub:${state.selectedPlotSubject}` : null);
+// Below the Subjects table, the detail panel holds a subject's plot and a
+// service's call card, each on its own: side by side when both are open,
+// the whole width for one. Rows never move.
+const _detailSlots = () => {
+  const content = el('selectedNodeContent');
+  let root = content.querySelector(':scope > .subjects-detail');
+  if (!root) {
+    content.innerHTML = '<div class="subjects-detail"><div class="subjects-detail-plot"></div>'
+      + '<div class="subjects-detail-service"></div></div>';
+    root = content.firstElementChild;
+  }
+  return { root, plot: root.children[0], service: root.children[1] };
+};
 
-const _showSubjectsDetail = () => {
+// Shows or hides the panel and lays out the slots for what is open.
+const _updateSubjectsDetail = () => {
+  const hasPlot = state.selectedPlotSubject != null;
+  const hasService = state._subjectsServiceRowId != null;
   const detailPanel = el('detailPanel');
-  detailPanel.querySelector('.detail-tabs').classList.add('hidden');
-  el('detailResizeHandle').classList.remove('hidden');
-  detailPanel.classList.remove('hidden');
-  _restoreDetailPanelState('subjects');
+  const shown = !detailPanel.classList.contains('hidden');
+  if (hasPlot || hasService) {
+    const { root } = _detailSlots();
+    root.classList.toggle('has-plot', hasPlot);
+    root.classList.toggle('has-service', hasService);
+    if (!shown) {
+      detailPanel.querySelector('.detail-tabs').classList.add('hidden');
+      el('detailResizeHandle').classList.remove('hidden');
+      detailPanel.classList.remove('hidden');
+      _restoreDetailPanelState('subjects');
+    }
+  } else if (shown) {
+    _saveDetailPanelState('subjects');
+    el('detailResizeHandle').classList.add('hidden');
+    detailPanel.classList.add('hidden');
+    detailPanel.querySelector('.detail-tabs').classList.remove('hidden');
+  }
+  _highlightSubjectRow();
+};
+
+const closeSubjectPlot = () => {
+  state.selectedPlotSubject = null;
+  state._subjectsPlotSubject = null;
+  stopPlotAnim();
+  if (!el('detailPanel').classList.contains('hidden')) _detailSlots().plot.replaceChildren();
+  _updateSubjectsDetail();
+};
+
+const closeSubjectService = () => {
+  state._subjectsServiceRowId = null;
+  state._stashedServiceCard = null;
+  if (!el('detailPanel').classList.contains('hidden')) _detailSlots().service.replaceChildren();
+  _updateSubjectsDetail();
 };
 
 const closeSubjectsDetail = () => {
-  state.selectedPlotSubject = null;
-  state._subjectsPlotSubject = null;
-  state._subjectsServiceRowId = null;
-  state._stashedServiceCard = null;
-  stopPlotAnim();
-  const detailPanel = el('detailPanel');
-  if (detailPanel.classList.contains('hidden')) return;
-  _saveDetailPanelState('subjects');
-  el('detailResizeHandle').classList.add('hidden');
-  detailPanel.classList.add('hidden');
-  detailPanel.querySelector('.detail-tabs').classList.remove('hidden');
-  _highlightSubjectRow();
+  closeSubjectPlot();
+  closeSubjectService();
 };
 
 const openSubjectService = (rowData) => {
   const rowId = rowData._rowId;
   if (state._subjectsServiceRowId === rowId) {
-    closeSubjectsDetail();
+    closeSubjectService();
     return;
   }
-  stopPlotAnim();
-  state.selectedPlotSubject = null;
-  state._subjectsPlotSubject = null;
   state._subjectsServiceRowId = rowId;
-  _showSubjectsDetail();
-  _highlightSubjectRow();
-  const content = el('selectedNodeContent');
-  content.replaceChildren(_buildServiceCard(rowData));
+  _detailSlots().service.replaceChildren(_buildServiceCard(rowData));
+  _updateSubjectsDetail();
 };
 
 // The call card: which service, which node serves it, the request form.
@@ -445,7 +471,7 @@ const _buildServiceCard = (rowData) => {
         ${escapeHtml(rowData.messageType || `Service ${serviceId}`)}</span>
       <button type="button" class="subject-service-close" aria-label="Close service ${serviceId}" title="Close">✕</button>
     </div>`;
-  card.querySelector('.subject-service-close').addEventListener('click', closeSubjectsDetail);
+  card.querySelector('.subject-service-close').addEventListener('click', closeSubjectService);
   if (!serverNodes.length) {
     card.insertAdjacentHTML('beforeend', svcStateMsg('○', 'No server nodes', 'No nodes advertise this service.'));
     return card;
@@ -532,31 +558,31 @@ const renderSubjectServiceCard = (svc, nodeId) => {
 
 const openSubjectPlot = (rowData) => {
   const sid = rowData.id;
-  const content = el('selectedNodeContent');
-
   if (state.selectedPlotSubject === sid) {
-    closeSubjectsDetail();
+    closeSubjectPlot();
     return;
   }
 
   state.plotPaused = false;
   state.plotPausedAt = null;
-  state._subjectsServiceRowId = null;
-  state._stashedServiceCard = null;
   state.selectedPlotSubject = sid;
   state._subjectsPlotSubject = sid;
-  _showSubjectsDetail();
-  _highlightSubjectRow();
+  _updateSubjectsDetail();
+  _renderSubjectPlotSlot(sid);
+};
+
+const _renderSubjectPlotSlot = (sid) => {
+  const slot = _detailSlots().plot;
   if (isUntypedSubject(sid)) {
     openSubjectTypePanel(sid);
     return;
   }
   const typeBar = subjectTypeSource(sid) === 'user' ? renderUserTypeBar(sid) : '';
-  content.innerHTML = `${typeBar}<div class="detail-split">
+  slot.innerHTML = `${typeBar}<div class="detail-split">
     <div class="detail-plot-area"></div>
   </div>`;
-  content.querySelector('[data-type-change]')?.addEventListener('click', () => openSubjectTypePanel(sid));
-  content.querySelector('[data-type-clear]')?.addEventListener('click', () => clearSubjectType(sid));
+  slot.querySelector('[data-type-change]')?.addEventListener('click', () => openSubjectTypePanel(sid));
+  slot.querySelector('[data-type-clear]')?.addEventListener('click', () => clearSubjectType(sid));
   startPlotAnim();
 };
 
@@ -589,7 +615,7 @@ const fetchMessageTypeNames = async () => {
 
 const openSubjectTypePanel = (sid) => {
   stopPlotAnim();
-  const content = el('selectedNodeContent');
+  const content = _detailSlots().plot;
   content.innerHTML = `<div class="subject-type-panel">
     <h3 class="subject-type-title">Subject ${sid}: which type is it?</h3>
     <p class="subject-type-hint">No publisher names its type in registers, so Cynitor cannot decode it
@@ -665,8 +691,8 @@ const guessSubjectType = async (sid, box) => {
 
 // Reopens the subject once its type changed: its plot, or the type panel.
 const reopenSubject = (sid) => {
-  state.selectedPlotSubject = null;
-  openSubjectPlot({ id: sid });
+  _renderSubjectPlotSlot(sid);
+  _highlightSubjectRow();
 };
 
 const applySubjectType = async (sid, type) => {
@@ -695,12 +721,13 @@ const clearSubjectType = async (sid) => {
   reopenSubject(sid);
 };
 
-// Marks the row whose plot or call card is open.
+// Marks the rows whose plot and call card are open.
 const _highlightSubjectRow = () => {
   if (!subjectsTabulator) return;
-  const openId = _subjectsDetailRowId();
+  const open = new Set([state._subjectsServiceRowId,
+    state.selectedPlotSubject != null ? `sub:${state.selectedPlotSubject}` : null]);
   for (const row of subjectsTabulator.getRows()) {
-    row.getElement().classList.toggle('selected-row', row.getData()._rowId === openId);
+    row.getElement().classList.toggle('selected-row', open.has(row.getData()._rowId));
   }
 };
 
@@ -801,15 +828,15 @@ const switchView = (view) => {
     if (hasDetail) _restoreDetailPanelState('subjects');
     initSubjectsTable();
     refreshSubjectsTable();
-    const content = el('selectedNodeContent');
-    if (card) {
-      state._stashedServiceCard = null;
-      content.replaceChildren(card);
-    } else if (hasPlot) {
-      content.innerHTML = `<div class="detail-split">
-        <div class="detail-plot-area"></div>
-      </div>`;
-      startPlotAnim();
+    if (hasDetail) {
+      el('selectedNodeContent').replaceChildren();  // the nodes view's content
+      const slots = _detailSlots();
+      if (card) {
+        state._stashedServiceCard = null;
+        slots.service.replaceChildren(card);
+      }
+      if (hasPlot) _renderSubjectPlotSlot(state.selectedPlotSubject);
+      _updateSubjectsDetail();
     }
     _highlightSubjectRow();
   } else if (view === 'compare') {
