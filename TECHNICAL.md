@@ -298,6 +298,8 @@ cynitor/
     deb/                    control template, systemd unit, /etc/default file
     appimage/               AppRun, desktop entry, icon
   python_compiled_messages/ nnvg output (gitignored)
+  tools/
+    demo_nodes.py           Demo Cyphal nodes on a vcan, for trying Cynitor without hardware
   README.md                 User-facing intro
   TECHNICAL.md              This file
   WEBSOCKET_README.md       API contract reference
