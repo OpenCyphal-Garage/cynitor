@@ -22,7 +22,7 @@ const idsHeaderFilter = (headerValue, rowValue) => {
 
 const stateFormatter = (cell) => {
   const v = cell.getValue();
-  return `<span class="state-cell"><span class="state-dot ${escapeHtml(v)}"></span><span class="state-label">${escapeHtml(v)}</span></span>`;
+  return `<span class="state-cell ${escapeHtml(v)}"><span class="state-dot ${escapeHtml(v)}"></span><span class="state-label">${escapeHtml(v)}</span></span>`;
 };
 
 // Uptime of a live node; for an offline one, since when it has been gone,
@@ -47,12 +47,16 @@ const healthFormatter = (cell) => {
   return `<span class="health-text health-${escapeHtml(cls)}">${icon}${escapeHtml(v)}</span>`;
 };
 
-const portsFormatter = (cell) => {
+// A node's own ports first, the standard ones (fixed port-IDs) muted after
+// them: those every node has say least about it.
+const portsFormatter = (kind) => (cell) => {
   const text = cell.getValue() || '-';
-  const cls = text !== '-' ? 'has-ports' : '';
+  if (text === '-') return '<span class="port-ids">-</span>';
+  const ids = text.split(', ').map(Number);
+  const html = ids.map((id) => (isFixedPortId(kind, id)
+    ? `<span class="port-std">${id}</span>` : String(id))).join(', ');
   // Long lists scroll within the cell; the tooltip shows them whole.
-  const title = text !== '-' ? ` title="${escapeHtml(text)}"` : '';
-  return `<span class="port-ids ${cls}"${title}>${escapeHtml(text)}</span>`;
+  return `<span class="port-ids has-ports" title="${escapeHtml(text)}">${html}</span>`;
 };
 
 // Pass these to Tabulator as pre-joined strings, not fresh arrays. Each
@@ -61,12 +65,26 @@ const portsFormatter = (cell) => {
 // diff would treat the value as changed every time and re-render the
 // cell. That re-render briefly destroys the cell's overflow state and
 // makes the horizontal scrollbar blink. Strings compare by value.
-const portsToString = (arr) => (Array.isArray(arr) && arr.length ? arr.join(', ') : '-');
+const portsToString = (arr, kind) => {
+  if (!Array.isArray(arr) || !arr.length) return '-';
+  const own = arr.filter((id) => !isFixedPortId(kind, id)).sort((a, b) => a - b);
+  const std = arr.filter((id) => isFixedPortId(kind, id)).sort((a, b) => a - b);
+  return [...own, ...std].join(', ');
+};
 
+// A message rate; no messages (or an offline node) is no rate at all.
 const rateFormatter = (cell) => {
   const v = Number(cell.getValue());
-  if (v > 0 && v < 1) return '&lt;1 Hz';
+  if (!(v > 0)) return '<span class="text-muted">-</span>';
+  if (v < 1) return '&lt;1 Hz';
   return `${escapeHtml(v.toFixed(1))} Hz`;
+};
+
+// Mode as the heartbeat names it; OPERATIONAL, the usual one, is muted.
+const modeFormatter = (cell) => {
+  const v = cell.getValue() || '-';
+  const cls = v === 'OPERATIONAL' || v === '-' ? 'mode-usual' : 'mode-other';
+  return `<span class="mode-text ${cls}">${escapeHtml(v)}</span>`;
 };
 
 const favFormatter = (cell) => {
@@ -82,12 +100,16 @@ const nameFormatter = (cell) => {
     const node = nodes[row.id];
     return node?.name || null;
   })();
-  const display = alias || original || '-';
-  const tooltip = alias && original ? ` title="${escapeHtml(original)}"` : '';
   const editIcon = row._uid?.length
     ? '<span class="name-edit-icon" aria-hidden="true">✎</span>'
     : '';
-  return `<span class="name-cell">${editIcon}<span class="name-display"${tooltip}>${escapeHtml(display)}</span></span>`;
+  if (!alias && !original) {
+    // Heartbeats arrive, but GetInfo (which carries the name) does not answer.
+    const why = row._noInfo ? 'no name: GetInfo unanswered' : '-';
+    return `<span class="name-cell">${editIcon}<span class="name-display name-missing">${why}</span></span>`;
+  }
+  const tooltip = alias && original ? ` title="${escapeHtml(original)}"` : '';
+  return `<span class="name-cell">${editIcon}<span class="name-display"${tooltip}>${escapeHtml(alias || original)}</span></span>`;
 };
 
 const startNameEdit = (cell) => {
@@ -134,7 +156,7 @@ const EYE_ICON = '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24
 const EYE_OFF_ICON = '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
 
 const actionsFormatter = (cell) => {
-  const hide = `<button type="button" class="action-hide" aria-label="Hide node">${EYE_ICON}</button>`;
+  const hide = `<button type="button" class="action-hide" aria-label="Hide node" title="Hide">${EYE_OFF_ICON}</button>`;
   if (!cell.getRow().getData()._ghost) return hide;
   // An offline node that lost its node-ID can also be forgotten for good.
   return `${hide}<button type="button" class="ghost-delete-btn" aria-label="Remove offline node" title="Remove">✕</button>`;
@@ -307,15 +329,20 @@ const buildTableData = () => {
       _ghost: isGhost,
       _lastNodeId: isGhost ? node.last_node_id : null,
       _offline: offline,
-      name: alias || node.name || '-',
+      _noInfo: !isGhost && !node.has_responded_to_getinfo,
+      name: alias || node.name || '',
       state: nodeState,
-      health: (isGhost || node.has_disappeared) ? '-' : (getNodeHealthValue(node.node_id) || '-'),
-      rate: isGhost ? 0 : getNodeRate(node.node_id),
+      health: offline ? '-' : (getNodeHealthValue(node.node_id) || '-'),
+      mode: offline ? '-' : (getNodeModeValue(node.node_id) || '-'),
+      sw: node.software_version ? `${node.software_version.major}.${node.software_version.minor}` : '-',
+      rate: offline ? 0 : getNodeRate(node.node_id),
       uptime: offline ? (lastSeen !== '-' ? `last seen ${lastSeen}` : '-') : formatUptime(node.uptime),
-      publishers: portsToString(node.publishers),
-      subscribers: portsToString(node.subscribers),
-      servers: portsToString(node.servers),
-      clients: portsToString(node.clients),
+      // Sorting: seconds up, then the offline nodes.
+      _uptimeS: offline ? Infinity : Number(node.uptime ?? Infinity),
+      publishers: portsToString(node.publishers, 'subject'),
+      subscribers: portsToString(node.subscribers, 'subject'),
+      servers: portsToString(node.servers, 'service'),
+      clients: portsToString(node.clients, 'service'),
       _actions: nodeState,
     });
   }
@@ -341,13 +368,16 @@ const initNodesTable = () => {
   nodesTabulator = new Tabulator('#nodesTable', {
     data: [],
     layout: 'fitColumns',
+    // At narrow widths the least telling columns hide first (highest
+    // `responsive`), instead of every column shrinking until none reads.
+    responsiveLayout: 'hide',
     resizableColumns: true,
     selectable: 1,
     placeholder: tablePlaceholder(),
     initialSort,
     columns: [
-      { title: '', field: '_fav', formatter: favFormatter, width: 36, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-fav', cellClick: (_e, cell) => { toggleFavourite(cell.getRow().getData().id); } },
-      colDef('ID', '_sortId', { sorter: 'number', minWidth: 50, widthGrow: 0.5, headerFilterPlaceholder: 'id', cssClass: 'cell-scroll', formatter: (cell) => {
+      { title: '', field: '_fav', responsive: 0, formatter: favFormatter, width: 36, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-fav', cellClick: (_e, cell) => { toggleFavourite(cell.getRow().getData().id); } },
+      colDef('ID', '_sortId', { responsive: 0, sorter: 'number', minWidth: 50, widthGrow: 0.5, headerFilterPlaceholder: 'id', cssClass: 'cell-scroll', formatter: (cell) => {
         const row = cell.getRow().getData();
         if (!row._ghost) return escapeHtml(String(row.id));
         // An offline node that lost its node-ID: the one it last had.
@@ -356,16 +386,18 @@ const initNodesTable = () => {
         if (!headerValue) return true;
         return String(rowData._ghost ? (rowData._lastNodeId ?? '') : rowData.id).includes(headerValue);
       } }),
-      colDef('Name', 'name', { sorter: 'string', minWidth: 100, widthGrow: 2, formatter: nameFormatter, headerFilterPlaceholder: 'name', cssClass: 'cell-scroll cell-name', cellDblClick: (_e, cell) => { startNameEdit(cell); } }),
-      colDef('State', 'state', { sorter: 'string', minWidth: 40, widthGrow: 0.7, formatter: stateFormatter, headerFilterPlaceholder: 'state', cssClass: 'td-state' }),
-      colDef('Health', 'health', { sorter: 'string', minWidth: 70, widthGrow: 0.8, formatter: healthFormatter, headerFilterPlaceholder: 'health', cssClass: 'cell-scroll' }),
-      colDef('Rate', 'rate', { sorter: 'number', minWidth: 70, widthGrow: 0.7, formatter: rateFormatter, headerFilterPlaceholder: 'rate', cssClass: 'cell-scroll', headerFilterFunc: (headerValue, rowValue) => { if (!headerValue) return true; return Number(rowValue).toFixed(1).includes(headerValue); } }),
-      colDef('Uptime', 'uptime', { sorter: 'string', minWidth: 100, widthGrow: 1, formatter: uptimeFormatter, headerFilterPlaceholder: 'uptime', cssClass: 'cell-scroll' }),
-      colDef('Publishers', 'publishers', { minWidth: 80, widthGrow: 1, formatter: portsFormatter, headerFilterPlaceholder: 'pub', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
-      colDef('Subscribers', 'subscribers', { minWidth: 80, widthGrow: 1, formatter: portsFormatter, headerFilterPlaceholder: 'sub', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
-      colDef('Servers', 'servers', { minWidth: 80, widthGrow: 1, formatter: portsFormatter, headerFilterPlaceholder: 'srv', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
-      colDef('Clients', 'clients', { minWidth: 80, widthGrow: 1, formatter: portsFormatter, headerFilterPlaceholder: 'clt', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
-      { title: '', field: '_actions', formatter: actionsFormatter, width: 56, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-actions', titleFormatter: () => { const btn = document.createElement('button'); btn.type = 'button'; btn.id = 'hiddenNodesChip'; btn.className = 'hidden-chip hidden'; btn.setAttribute('aria-label', 'Show hidden nodes'); btn.addEventListener('click', (e) => { e.stopPropagation(); toggleHiddenPopover(); }); return btn; }, cellClick: (e, cell) => {
+      colDef('Name', 'name', { responsive: 0, sorter: 'string', minWidth: 120, widthGrow: 2, formatter: nameFormatter, headerFilterPlaceholder: 'name', cssClass: 'cell-scroll cell-name', cellDblClick: (_e, cell) => { startNameEdit(cell); } }),
+      colDef('State', 'state', { responsive: 0, sorter: 'string', minWidth: 90, widthGrow: 0.7, formatter: stateFormatter, headerFilterPlaceholder: 'state', cssClass: 'td-state' }),
+      colDef('Health', 'health', { responsive: 1, sorter: 'string', minWidth: 100, widthGrow: 0.8, formatter: healthFormatter, headerFilterPlaceholder: 'health', cssClass: 'cell-scroll' }),
+      colDef('Mode', 'mode', { responsive: 5, sorter: 'string', minWidth: 110, widthGrow: 0.8, formatter: modeFormatter, headerFilterPlaceholder: 'mode', cssClass: 'cell-scroll' }),
+      colDef('SW', 'sw', { responsive: 6, sorter: 'string', minWidth: 56, widthGrow: 0.4, headerFilterPlaceholder: 'sw', cssClass: 'cell-scroll', headerTooltip: 'Software version' }),
+      colDef('Rate', 'rate', { responsive: 2, sorter: 'number', minWidth: 70, widthGrow: 0.7, formatter: rateFormatter, headerFilterPlaceholder: 'rate', cssClass: 'cell-scroll', headerFilterFunc: (headerValue, rowValue) => { if (!headerValue) return true; return Number(rowValue).toFixed(1).includes(headerValue); } }),
+      colDef('Uptime', 'uptime', { responsive: 3, sorter: (_a, _b, aRow, bRow) => { const a = aRow.getData()._uptimeS, b = bRow.getData()._uptimeS; return a === b ? 0 : a - b; }, minWidth: 110, widthGrow: 1, formatter: uptimeFormatter, headerFilterPlaceholder: 'uptime', cssClass: 'cell-scroll' }),
+      colDef('Publishers', 'publishers', { responsive: 4, minWidth: 80, widthGrow: 1, formatter: portsFormatter('subject'), headerFilterPlaceholder: 'pub', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
+      colDef('Subscribers', 'subscribers', { responsive: 8, minWidth: 80, widthGrow: 1, formatter: portsFormatter('subject'), headerFilterPlaceholder: 'sub', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
+      colDef('Servers', 'servers', { responsive: 7, minWidth: 80, widthGrow: 1, formatter: portsFormatter('service'), headerFilterPlaceholder: 'srv', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
+      colDef('Clients', 'clients', { responsive: 9, minWidth: 80, widthGrow: 1, formatter: portsFormatter('service'), headerFilterPlaceholder: 'clt', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
+      { title: '', field: '_actions', responsive: 0, formatter: actionsFormatter, width: 56, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-actions', titleFormatter: () => { const btn = document.createElement('button'); btn.type = 'button'; btn.id = 'hiddenNodesChip'; btn.className = 'hidden-chip hidden'; btn.setAttribute('aria-label', 'Show hidden nodes'); btn.addEventListener('click', (e) => { e.stopPropagation(); toggleHiddenPopover(); }); return btn; }, cellClick: (e, cell) => {
         e.stopPropagation();
         const row = cell.getRow().getData();
         if (e.target.closest('.ghost-delete-btn')) {

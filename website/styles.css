@@ -2899,10 +2899,17 @@ button:focus-visible,
   vertical-align: middle;
 }
 
+/* Colour says what needs a look: caution and warning (Cyphal health), and
+   green for a node that talks. Idle and offline are quiet; offline hollow. */
 .state-dot.active { background: var(--ok); }
-.state-dot.idle { background: var(--warn); }
-.state-dot.offline { background: var(--error); }
-.state-dot.error { background: var(--error); }
+.state-dot.idle { background: var(--muted); }
+.state-dot.caution { background: var(--warn); }
+.state-dot.warning { background: var(--error); }
+.state-dot.offline { background: transparent; border: 1px solid var(--muted); }
+.state-cell.idle .state-label,
+.state-cell.offline .state-label { color: var(--muted); }
+.state-cell.caution .state-label { color: var(--warn); }
+.state-cell.warning .state-label { color: var(--error); }
 
 
 /* ── Favourite star & actions column ── */
@@ -3005,7 +3012,7 @@ button:focus-visible,
   font-size: 0.8125rem;
 }
 
-.health-nominal { color: var(--ok); }
+.health-nominal { color: var(--muted); }  /* the usual: only the others need colour */
 .health-advisory { color: var(--warn); }
 .health-caution { color: var(--warn); }
 .health-warning { color: var(--error); }
@@ -3024,6 +3031,58 @@ button:focus-visible,
 
 .port-ids.has-ports {
   color: var(--text);
+}
+
+/* Standard ports (fixed port-IDs), after the node's own. */
+.port-ids .port-std {
+  color: var(--muted);
+}
+
+.mode-text {
+  font-size: 0.75rem;
+}
+
+.mode-usual { color: var(--muted); }
+.mode-other { color: var(--warn); }
+
+/* ── Subjects table ── */
+
+.kind-badge {
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.kind-badge.kind-service {
+  color: var(--accent);
+}
+
+/* A subject nothing names the type of: not a type name, but a thing to do. */
+.type-unknown {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.type-set-hint {
+  margin-left: 0.5rem;
+  color: var(--accent);
+  font-size: 0.6875rem;
+}
+
+.type-user {
+  margin-left: 0.5rem;
+  padding: 0 0.3125rem;
+  border: 1px solid var(--border);
+  border-radius: 0.1875rem;
+  color: var(--muted);
+  font-size: 0.625rem;
+}
+
+.name-display.name-missing {
+  color: var(--muted);
+  font-style: italic;
 }
 
 .hidden {

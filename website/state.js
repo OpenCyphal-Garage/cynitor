@@ -220,11 +220,12 @@ const formatUptime = (seconds) => {
   if (seconds == null) return '-';
   const s = Number(seconds);
   if (!Number.isFinite(s) || s < 0) return '-';
-  const d = Math.floor(s / 86400);
-  const h = Math.floor((s % 86400) / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = Math.floor(s % 60);
-  return `${d}d ${h}h ${m}m ${sec}s`;
+  // The two largest units: enough to read at a glance, short enough to fit.
+  const parts = [[Math.floor(s / 86400), 'd'], [Math.floor((s % 86400) / 3600), 'h'],
+    [Math.floor((s % 3600) / 60), 'm'], [Math.floor(s % 60), 's']];
+  const first = parts.findIndex(([n]) => n > 0);
+  if (first < 0) return '0s';
+  return parts.slice(first, first + 2).map(([n, unit]) => `${n}${unit}`).join(' ');
 };
 
 const formatLastSeen = (lastSeen) => {

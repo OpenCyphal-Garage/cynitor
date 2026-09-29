@@ -42,10 +42,52 @@ const _fetchMissingServiceSchemas = () => {
   }
 };
 
-const subjectTypeLabel = (sid, event) => {
-  if (isUntypedSubject(sid)) return 'type unknown · click to set';
-  const type = event?.message_type || state.latestNodesPayload?.subject_types?.[sid]?.type || '-';
-  return subjectTypeSource(sid) === 'user' ? `${type} (set by you)` : type;
+// A subject's full type name: the one it is decoded as, else the class of
+// its last message, else the standard type on its fixed port-ID.
+const subjectTypeName = (sid, event) => {
+  if (isUntypedSubject(sid)) return 'type unknown';
+  const decodedAs = state.latestNodesPayload?.subject_types?.[sid]?.type;
+  if (decodedAs) return decodedAs;
+  const standard = STANDARD_SUBJECT_TYPES[sid];
+  const cls = event?.message_type;  // e.g. "Heartbeat_1_0": the class, versioned
+  if (standard && cls) return `${standard.slice(0, standard.lastIndexOf('.') + 1)}${cls}`;
+  return cls || standard || '-';
+};
+
+const subjectTypeFormatter = (cell) => {
+  const row = cell.getRow().getData();
+  if (row._untyped) {
+    return '<span class="type-unknown">type unknown</span><span class="type-set-hint">click to set</span>';
+  }
+  const setByUser = row._userType ? '<span class="type-user">set by you</span>' : '';
+  return `${escapeHtml(cell.getValue())}${setByUser}`;
+};
+
+const kindFormatter = (cell) =>
+  `<span class="kind-badge kind-${cell.getValue() === 'Service' ? 'service' : 'subject'}">${escapeHtml(cell.getValue())}</span>`;
+
+const subjectRateFormatter = (cell) => {
+  const v = Number(cell.getValue());
+  if (!(v > 0)) return '<span class="text-muted">-</span>';
+  return v < 1 ? '&lt;1 Hz' : `${v.toFixed(1)} Hz`;
+};
+
+// When, and from whom: the time only, today; the date too, before.
+const lastSeenFormatter = (cell) => {
+  const t = cell.getValue();
+  if (!t) return '<span class="text-muted">-</span>';
+  const row = cell.getRow().getData();
+  const today = new Date().toDateString() === new Date(t * 1000).toDateString();
+  const when = today ? formatPlotTime(t) : `${_fmtDate(t)} ${formatPlotTime(t)}`;
+  const who = row._lastNode != null ? `node ${row._lastNode} ${nodeDisplayName(row._lastNode)}`.trim() : '';
+  const title = `${_fmtDate(t)} ${formatPlotTime(t)}${who ? `, ${who}` : ''}`;
+  return `<span title="${escapeHtml(title)}">${escapeHtml(when)}</span>`;
+};
+
+const nodeIdsFormatter = (cell) => {
+  const text = cell.getValue() || '-';
+  return text === '-' ? '<span class="text-muted">-</span>'
+    : `<span title="${escapeHtml(nodeIdsTitle(text))}">${escapeHtml(text)}</span>`;
 };
 
 const buildSubjectsRows = () => {
@@ -82,17 +124,18 @@ const buildSubjectsRows = () => {
   for (const [sid, info] of subjectMap) {
     if (state.hiddenSubjectIds.has(sid)) continue;
     const event = state.latestBySubject.get(sid);
-    const pubNode = event?.publisher_node_id != null ? `Node ${event.publisher_node_id}` : '';
     rows.push({
       _rowId: `sub:${sid}`,
       id: sid,
       kind: 'Subject',
-      messageType: subjectTypeLabel(sid, event),
-      publishers: info.publishers.sort((a, b) => a - b).join(', '),
-      subscribers: info.subscribers.sort((a, b) => a - b).join(', '),
+      messageType: subjectTypeName(sid, event),
+      _untyped: isUntypedSubject(sid),
+      _userType: subjectTypeSource(sid) === 'user',
+      publishers: info.publishers.sort((a, b) => a - b).join(', ') || '-',
+      subscribers: info.subscribers.sort((a, b) => a - b).join(', ') || '-',
       rate: getSubjectRate(event),
-      lastTime: event?.timestamp_unix ? `${formatPlotTime(event.timestamp_unix)} ${pubNode}` : '-',
-      lastDate: event?.timestamp_unix ? _fmtDate(event.timestamp_unix) : '-',
+      lastTime: event?.timestamp_unix || null,
+      _lastNode: event?.publisher_node_id ?? null,
       _fav: state.favouriteSubjectIds.has(sid),
     });
   }
@@ -100,18 +143,17 @@ const buildSubjectsRows = () => {
   for (const [sid, info] of serviceMap) {
     if (state.hiddenSubjectIds.has(`svc:${sid}`)) continue;
     const lastCall = state.serviceCallHistory.find((h) => h.serviceId === sid);
-    const lastTs = lastCall ? lastCall.timestamp / 1000 : 0;
-    const calledNode = lastCall ? `Node ${lastCall.nodeId}` : '-';
+    const lookedUp = _lookupServiceType(sid);
     rows.push({
       _rowId: `svc:${sid}`,
       id: sid,
       kind: 'Service',
-      messageType: _lookupServiceType(sid),
-      publishers: info.servers.sort((a, b) => a - b).join(', '),
-      subscribers: info.clients.sort((a, b) => a - b).join(', '),
-      rate: 0,
-      lastTime: lastTs ? `${formatPlotTime(lastTs)} ${calledNode}` : '-',
-      lastDate: lastTs ? _fmtDate(lastTs) : '-',
+      messageType: lookedUp !== '-' ? lookedUp : STANDARD_SERVICE_TYPES[sid] || '-',
+      publishers: info.servers.sort((a, b) => a - b).join(', ') || '-',
+      subscribers: info.clients.sort((a, b) => a - b).join(', ') || '-',
+      rate: null,  // a service has calls, not a message rate
+      lastTime: lastCall ? lastCall.timestamp / 1000 : null,
+      _lastNode: lastCall ? lastCall.nodeId : null,
       _fav: state.favouriteSubjectIds.has(`svc:${sid}`),
     });
   }
@@ -127,7 +169,7 @@ const subjectFavFormatter = (cell) => {
 };
 
 const subjectActionsFormatter = () => {
-  return `<button type="button" class="action-hide" aria-label="Hide subject">${EYE_ICON}</button>`;
+  return `<button type="button" class="action-hide" aria-label="Hide subject" title="Hide">${EYE_OFF_ICON}</button>`;
 };
 
 const toggleSubjectFavourite = (row) => {
@@ -265,13 +307,12 @@ const initSubjectsTable = () => {
     columns: [
       { title: '', field: '_fav', formatter: subjectFavFormatter, width: 36, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-fav', cellClick: (_e, cell) => { toggleSubjectFavourite(cell.getRow().getData()); } },
       col('ID', 'id', { sorter: 'number', minWidth: 50, widthGrow: 0.4, headerFilterPlaceholder: 'id' }),
-      col('Kind', 'kind', { minWidth: 60, widthGrow: 0.4, headerFilterPlaceholder: 'kind' }),
-      col('Message / Service Type', 'messageType', { minWidth: 140, widthGrow: 3, headerFilterPlaceholder: 'type', cssClass: 'cell-scroll' }),
-      col('Publishers / Servers', 'publishers', { minWidth: 80, widthGrow: 1, headerFilterPlaceholder: 'pub/srv', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
-      col('Subscribers / Clients', 'subscribers', { minWidth: 80, widthGrow: 1, headerFilterPlaceholder: 'sub/clt', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
-      col('Rate', 'rate', { sorter: 'number', minWidth: 60, widthGrow: 0.4, headerFilterPlaceholder: 'rate', formatter: (cell) => { const v = cell.getValue(); if (v == null) return '<span class="text-muted">-</span>'; return v < 1 ? '&lt;1 Hz' : `${v.toFixed(1)} Hz`; } }),
-      col('Last seen/called', 'lastTime', { minWidth: 100, widthGrow: 0.8, headerFilterPlaceholder: 'time' }),
-      col('', 'lastDate', { minWidth: 75, widthGrow: 0.4, headerFilterPlaceholder: 'date' }),
+      col('Kind', 'kind', { minWidth: 88, widthGrow: 0.3, headerFilterPlaceholder: 'kind', formatter: kindFormatter }),
+      col('Message / Service Type', 'messageType', { minWidth: 160, widthGrow: 2.2, headerFilterPlaceholder: 'type', cssClass: 'cell-scroll', formatter: subjectTypeFormatter }),
+      col('Publishers / Servers', 'publishers', { minWidth: 90, widthGrow: 1, headerFilterPlaceholder: 'pub/srv', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll', formatter: nodeIdsFormatter }),
+      col('Subscribers / Clients', 'subscribers', { minWidth: 90, widthGrow: 1, headerFilterPlaceholder: 'sub/clt', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll', formatter: nodeIdsFormatter }),
+      col('Rate', 'rate', { sorter: 'number', minWidth: 70, widthGrow: 0.4, headerFilterPlaceholder: 'rate', formatter: subjectRateFormatter }),
+      col('Last seen', 'lastTime', { sorter: 'number', minWidth: 90, widthGrow: 0.6, headerFilter: false, formatter: lastSeenFormatter, headerTooltip: 'Last message, or last call from this dashboard' }),
       { title: '', field: '_actions', formatter: subjectActionsFormatter, width: 56, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-actions', titleFormatter: () => { const btn = document.createElement('button'); btn.type = 'button'; btn.id = 'hiddenSubjectsChip'; btn.className = 'hidden-chip hidden'; btn.setAttribute('aria-label', 'Show hidden subjects'); btn.addEventListener('click', (e) => { e.stopPropagation(); toggleHiddenSubjectsPopover(); }); return btn; }, cellClick: (e, cell) => { e.stopPropagation(); hideSubject(cell.getRow().getData()); } },
     ],
   });
@@ -297,8 +338,9 @@ const initSubjectsTable = () => {
   subjectsTabulator.on('tableBuilt', () => {
     _subjectsTableReady = true;
     const savedFilters = settings.subjectsHeaderFilters || {};
+    const fields = new Set(subjectsTabulator.getColumns().map((c) => c.getField()));
     for (const [field, value] of Object.entries(savedFilters)) {
-      if (value) subjectsTabulator.setHeaderFilterValue(field, value);
+      if (value && fields.has(field)) subjectsTabulator.setHeaderFilterValue(field, value);  // old settings may name gone columns
     }
     // Popover for hidden subjects
     if (!document.getElementById('hiddenSubjectsPopover')) {
