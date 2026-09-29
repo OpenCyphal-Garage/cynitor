@@ -83,7 +83,9 @@ python3 tools/demo_nodes.py --iface vcan0     # add --fd on a CAN FD vcan (mtu 7
 Then connect Cynitor to `vcan0`. Node 50 (`demo.sensor`) publishes a
 temperature named in its registers (decoded and plotted), a velocity no
 register names (click subject 1700 in Subjects to have its type guessed),
-and diagnostics every 3 s (the log panel). Its Services tab restarts it, and
+its state as text on subject 1800 (add it to the log panel with its **+**),
+and diagnostics every 3 s at every severity from DEBUG to CRITICAL (the log
+panel). Its Services tab restarts it, and
 **Update firmware…** makes it act like a bootloader reading the file from
 Cynitor. `--conflict` adds a second node on the same node-ID after 10 s.
 
@@ -101,7 +103,7 @@ Cynitor. `--conflict` adds a second node on the same node-ID after 10 s.
 - **DSDL Inspector** — searchable tree of all loaded DSDL types with bus-activity indicators (which types are actually being seen on the wire), field-level search, and dependency navigation. Create, edit, compile and delete custom DSDL types, kept in the data folder (`dsdl/custom`, compiled into `dsdl/compiled`), with a compile-state lock. Compiling runs inside Cynitor, so it works in the packaged binaries too.
 - **Recordings** — capture filtered events into per-recording SQLite stores with `max_length` / `max_events` limits and `stop_on_limit`. Quick-save the last N seconds from the global buffer, duplicate a configuration with "New like this", edit limits on live recordings without stopping them, and export per recording as CSV or JSONL. Replay any recording through the live UI with play/pause/seek/speed controls.
 - **Raw CAN logs** — record every frame on the bus (Classic, CAN FD and error frames) to a candump `.log` file from the Record view, and download it: python-can, SavvyCAN and can-utils open it, and `log2asc` turns it into Vector ASC. Play a saved log back (1×, 10×, 100×, or as fast as possible) with CAN disconnected, and the dashboard shows it as if it were the live bus.
-- **Right log panel** — hidden by default, resizable; merges live `uavcan.diagnostic.Record` (subject 8184), any user-added text-bearing subject, and the backend's Python logs (polled from `/api/logs`) into one timeline. Per-source toggle pills with live count badges, severity floor across all sources, amber disconnect indicator when the backend is unreachable.
+- **Right log panel** — hidden by default, resizable; merges live `uavcan.diagnostic.Record` (subject 8184), any subject you add that carries text, and the backend's Python logs (polled from `/api/logs`) into one timeline in time order. Each row shows its time, severity and who said it (the node's ID and name, or the backend logger); warnings and errors are marked at the row's edge. Per-source toggle pills with live count badges, a minimum severity across all sources, a text filter, and an amber disconnect indicator when the backend is unreachable.
 - **Dark / light theme**, sidebar collapse, resizable detail panel.
 - **Auto-reconnect** on transient backend or frontend-server outages.
 - **Persisted layout** — connection state, table sort, column widths, filters, theme, panel sizes all restored on reload from `localStorage`.

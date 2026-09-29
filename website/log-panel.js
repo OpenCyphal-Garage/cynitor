@@ -18,6 +18,8 @@ const SERVER_LOG_FETCH_LIMIT = 200;
 
 const SEVERITY_LABELS = ['TRACE', 'DEBUG', 'INFO', 'NOTICE', 'WARNING', 'ERROR', 'CRITICAL', 'ALERT'];
 const SEVERITY_CSS = ['trace', 'debug', 'info', 'notice', 'warning', 'error', 'critical', 'alert'];
+// What the severity column shows: short enough for one narrow column.
+const SEVERITY_SHORT = ['TRACE', 'DEBUG', 'INFO', 'NOTICE', 'WARN', 'ERROR', 'CRIT', 'ALERT'];
 
 const SERVER_LEVEL_TO_SEVERITY = {
   DEBUG: 1, INFO: 2, WARNING: 4, ERROR: 5, CRITICAL: 6,
@@ -156,42 +158,43 @@ const isAtBottom = (container) => {
   return container.scrollHeight - container.scrollTop - container.clientHeight <= AUTOSCROLL_STICKY_PX;
 };
 
+// A node by its alias or GetInfo name, when the dashboard knows one.
+const logNodeName = (nodeId) => {
+  const node = state.latestNodesPayload?.nodes?.[nodeId];
+  return node ? getNodeAlias(node.unique_id) || node.name || '' : '';
+};
+
+// Who a row comes from: [html, plain text for the filter, tooltip].
+const logRowSource = (entry) => {
+  if (entry.source === 'server') {
+    const logger = entry.loggerName || 'server';
+    return [escapeHtml(logger), logger, `backend logger: ${logger}`];
+  }
+  if (entry.nodeId == null) return ['', '', ''];
+  const name = logNodeName(entry.nodeId);
+  const html = `<span class="log-row-nid">${entry.nodeId}</span>${name ? ` ${escapeHtml(name)}` : ''}`;
+  return [html, `${entry.nodeId} ${name}`, `node ${entry.nodeId}${name ? ` (${name})` : ''}`];
+};
+
+// time · severity · message, the source leading the message: one layout for
+// both sources, so the columns line up and the message keeps the width.
 const renderLogRow = (entry) => {
   const row = document.createElement('div');
-  const sevClass = entry.severity != null ? `log-row-sev-${SEVERITY_CSS[entry.severity]}` : 'log-row-sev-none';
-  const kindClass = entry.kind ? ` log-row-kind-${entry.kind}` : '';
-  row.className = `log-row ${sevClass} log-row-src-${entry.source}${kindClass}`;
-  row.dataset.severity = String(entry.severity ?? -1);
+  const sev = entry.severity;
+  row.className = `log-row log-row-sev-${sev != null ? SEVERITY_CSS[sev] : 'none'} log-row-src-${entry.source}`;
+  row.dataset.severity = String(sev ?? -1);
   row.dataset.source = entry.source;
-  const time = escapeHtml(formatLogTime(entry.t));
-  const text = escapeHtml(entry.text);
-
-  if (entry.source === 'cyphal') {
-    const nodeStr = entry.nodeId != null ? `n${entry.nodeId}` : '—';
-    const subjectStr = entry.subjectId != null ? `s${entry.subjectId}` : '—';
-    const msgType = entry.subjectName || '—';
-    const typeTitle = entry.subjectId != null
-      ? `subject ${entry.subjectId} (${entry.subjectName || ''})`
-      : '';
-    row.innerHTML = `
-      <span class="log-row-time">${time}</span>
-      <span class="log-row-node">${escapeHtml(nodeStr)}</span>
-      <span class="log-row-subj">${escapeHtml(subjectStr)}</span>
-      <span class="log-row-type" title="${escapeHtml(typeTitle)}">${escapeHtml(msgType)}</span>
-      <span class="log-row-text">${text}</span>
-    `;
-  } else {
-    // server
-    const label = entry.level || '—';
-    const logger = entry.loggerName || 'server';
-    const loggerTitle = entry.loggerName ? `logger: ${entry.loggerName}` : '';
-    row.innerHTML = `
-      <span class="log-row-time">${time}</span>
-      <span class="log-row-sev">${escapeHtml(label)}</span>
-      <span class="log-row-node" title="${escapeHtml(loggerTitle)}">${escapeHtml(logger)}</span>
-      <span class="log-row-text">${text}</span>
-    `;
-  }
+  row.dataset.t = String(entry.t);
+  const [srcHtml, srcText, srcTitle] = logRowSource(entry);
+  const subject = entry.kind === 'subject' ? `s${entry.subjectId}` : '';
+  row.dataset.search = `${srcText} ${subject} ${entry.text}`.toLowerCase();
+  row.innerHTML = `
+    <span class="log-row-time">${escapeHtml(formatLogTime(entry.t))}</span>
+    <span class="log-row-sev" title="${escapeHtml(sev != null ? SEVERITY_LABELS[sev] : 'no severity')}">${
+      sev != null ? SEVERITY_SHORT[sev] : '—'}</span>
+    <span class="log-row-text">${srcHtml ? `<span class="log-row-src" title="${escapeHtml(srcTitle)}">${srcHtml}</span> ` : ''}${
+      subject ? `<span class="log-row-tag" title="${escapeHtml(entry.subjectName)}">${subject}</span> ` : ''}${
+      escapeHtml(entry.text)}</span>`;
   return row;
 };
 
@@ -208,13 +211,15 @@ const applyAllFiltersToRow = (row) => {
   const floor = state.logSeverityFloor;
   const sevPasses = sev < 0 ? true : sev >= floor;
   const srcPasses = _sourceIsShown(row.dataset.source);
-  row.classList.toggle('hidden', !(sevPasses && srcPasses));
+  const textPasses = !state.logTextFilter || row.dataset.search.includes(state.logTextFilter);
+  row.classList.toggle('hidden', !(sevPasses && srcPasses && textPasses));
 };
 
 const reapplyFiltersToAllRows = () => {
   const list = el('logList');
   if (!list) return;
   for (const row of list.children) applyAllFiltersToRow(row);
+  updateEmptyHint();
 };
 
 const updateEmptyHint = () => {
@@ -228,6 +233,9 @@ const updateEmptyHint = () => {
   } else if (noEntries) {
     empty.textContent = 'Waiting for log messages…';
     empty.classList.remove('hidden');
+  } else if (!el('logList')?.querySelector('.log-row:not(.hidden)')) {
+    empty.textContent = 'No messages match the filters.';
+    empty.classList.remove('hidden');
   } else {
     empty.classList.add('hidden');
   }
@@ -235,8 +243,25 @@ const updateEmptyHint = () => {
 
 // ── Ingest (push entry into buffer + DOM) ───────────────────────────
 
+// Where an entry with time ``t`` goes in the time-ordered buffer. Entries
+// mostly arrive in order; the server's backlog arrives late, in one batch.
+const _bufferIndexFor = (t) => {
+  let i = state.logBuffer.length;
+  while (i > 0 && state.logBuffer[i - 1].t > t) i--;
+  return i;
+};
+
+// The row to insert a row with time ``t`` before: null to append, undefined
+// if it is older than every row shown while the list is full.
+const _rowAfter = (list, t) => {
+  let after = null;
+  for (let r = list.lastElementChild; r && Number(r.dataset.t) > t; r = r.previousElementSibling) after = r;
+  if (after === list.firstElementChild && after && list.childElementCount >= LOG_DOM_CAP) return undefined;
+  return after;
+};
+
 const _pushEntry = (entry) => {
-  state.logBuffer.push(entry);
+  state.logBuffer.splice(_bufferIndexFor(entry.t), 0, entry);
   if (entry.source in _srcCounts) _srcCounts[entry.source]++;
   if (state.logBuffer.length > LOG_BUFFER_CAP) {
     const excess = state.logBuffer.length - LOG_BUFFER_CAP;
@@ -250,9 +275,12 @@ const _pushEntry = (entry) => {
   const list = el('logList');
   if (!list) return;
   const wasAtBottom = isAtBottom(list.parentElement);
-  const row = renderLogRow(entry);
-  applyAllFiltersToRow(row);
-  list.appendChild(row);
+  const after = _rowAfter(list, entry.t);
+  if (after !== undefined) {
+    const row = renderLogRow(entry);
+    applyAllFiltersToRow(row);
+    list.insertBefore(row, after);
+  }
   while (list.childElementCount > LOG_DOM_CAP) {
     list.removeChild(list.firstElementChild);
   }
@@ -300,7 +328,9 @@ const rebuildLogList = () => {
 const getCandidateSubjects = () => {
   const out = [];
   for (const [sid, event] of state.latestBySubject) {
-    if (sid === DIAGNOSTIC_SUBJECT_ID) continue;
+    // Fixed subject-IDs are the standard messages (heartbeat, port list,
+    // diagnostics): their strings are enum names, not text to log.
+    if (sid >= FIRST_FIXED_SUBJECT_ID) continue;
     if (!hasStringAttribute(event)) continue;
     out.push({
       subjectId: sid,
@@ -333,7 +363,7 @@ const renderLogPickerPopover = () => {
 
   let listHtml = '';
   if (candidates.length === 0) {
-    listHtml = '<div class="log-subject-empty">No text-bearing subjects seen yet.</div>';
+    listHtml = '<div class="log-subject-empty">No subject with a text field seen yet.</div>';
   } else {
     listHtml = '<div class="hidden-popover-list">';
     for (const c of candidates) {
@@ -342,6 +372,7 @@ const renderLogPickerPopover = () => {
       listHtml += `
         <label class="log-subject-row" title="${escapeHtml(title)}">
           <span class="hidden-popover-id">${escapeHtml(String(c.subjectId))}</span>
+          <span class="log-subject-type">${escapeHtml(c.messageType || '—')}</span>
           <input type="checkbox" class="log-subject-checkbox" data-subject-id="${c.subjectId}" ${checked ? 'checked' : ''}>
         </label>
       `;
@@ -351,7 +382,7 @@ const renderLogPickerPopover = () => {
 
   popover.innerHTML = `
     <div class="hidden-popover-header">
-      <span>Subjects</span>
+      <span>Log subjects with text</span>
     </div>
     ${listHtml}
   `;
@@ -384,6 +415,7 @@ const toggleLogPickerPopover = () => {
 
 let _serverPollTimer = null;
 let _serverLastSeenTs = '';
+let _serverKeysAtLastTs = new Set();  // entries already taken at that timestamp
 
 const _serverEntryKey = (e) => `${e.timestamp}|${e.logger}|${e.message}`;
 
@@ -393,15 +425,20 @@ const _fetchServerLogsOnce = async () => {
   try {
     const data = await requestJson(`/api/logs?limit=${SERVER_LOG_FETCH_LIMIT}`);
     const logs = Array.isArray(data.logs) ? data.logs : [];
-    let newestTs = _serverLastSeenTs;
+    // Oldest first. Several entries can share a timestamp, so one equal to the
+    // newest seen is new unless that very entry was taken.
     for (const e of logs) {
       const ts = e?.timestamp || '';
-      if (!ts) continue;
-      if (_serverLastSeenTs && ts <= _serverLastSeenTs) continue;
+      if (!ts || ts < _serverLastSeenTs) continue;
+      const key = _serverEntryKey(e);
+      if (ts === _serverLastSeenTs && _serverKeysAtLastTs.has(key)) continue;
       ingestServerEntry(e);
-      if (ts > newestTs) newestTs = ts;
+      if (ts > _serverLastSeenTs) {
+        _serverLastSeenTs = ts;
+        _serverKeysAtLastTs = new Set();
+      }
+      _serverKeysAtLastTs.add(key);
     }
-    _serverLastSeenTs = newestTs;
   } catch {
     // Backend may be unreachable mid-session — silent, retry on next tick.
   }
@@ -531,6 +568,14 @@ const initLogPanel = () => {
       state.logSeverityFloor = Number.isInteger(v) ? Math.max(0, Math.min(7, v)) : 0;
       reapplyFiltersToAllRows();
       saveSettings();
+    });
+  }
+
+  const filterInput = el('logFilterInput');
+  if (filterInput) {
+    filterInput.addEventListener('input', () => {
+      state.logTextFilter = filterInput.value.trim().toLowerCase();
+      reapplyFiltersToAllRows();
     });
   }
 

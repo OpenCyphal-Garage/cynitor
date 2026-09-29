@@ -184,19 +184,57 @@ async def _(page):
     assert count >= 4, f"Expected at least 4 sortable columns, got {count}"
 
 
+async def open_log_panel(page):
+    if "collapsed" in (await page.locator("#logPanel").get_attribute("class") or ""):
+        await page.locator("#logPanelCollapseBtn").click()
+    await page.locator("#logPanel:not(.collapsed)").wait_for(state="attached", timeout=WAIT_MS)
+
+
+# The same path a node's uavcan.diagnostic.Record takes from the WebSocket.
+INGEST_DIAGNOSTIC = """([ago, severity, text]) => ingestLogEvent({
+    subject_id: 8184, message_type: 'Record_1_1', publisher_node_id: 50,
+    timestamp_unix: Date.now() / 1000 - ago,
+    attributes: [{attribute: 'severity', value: severity}, {attribute: 'text', value: text}]})"""
+
+
+@test("Log panel shows diagnostics' severity, in time order")
+async def _(page):
+    await open_log_panel(page)
+    await page.evaluate(INGEST_DIAGNOSTIC, [1, 5, "e2e newer error"])
+    await page.evaluate(INGEST_DIAGNOSTIC, [5, 4, "e2e older warning"])  # arrives late
+    rows = page.locator("#logList .log-row", has_text="e2e ")
+    texts = [" ".join(t.split()) for t in await rows.all_inner_texts()]
+    assert len(texts) == 2, f"Expected 2 rows, got {texts}"
+    assert "WARN" in texts[0] and "older warning" in texts[0], f"Older row should come first: {texts}"
+    assert "ERROR" in texts[1] and "newer error" in texts[1], f"Newer row should come last: {texts}"
+
+
+@test("Log filter hides other rows and says when none match")
+async def _(page):
+    await open_log_panel(page)
+    await page.locator("#logFilterInput").fill("older warning")
+    visible = await page.locator("#logList .log-row:not(.hidden)").all_inner_texts()
+    assert len(visible) == 1 and "older warning" in visible[0], f"Filter left: {visible}"
+    await page.locator("#logFilterInput").fill("no such message")
+    hint = page.locator("#logEmpty")
+    assert await hint.is_visible(), "No hint when the filter matches nothing"
+    assert "match" in (await hint.text_content()).lower(), f"Unexpected hint: {await hint.text_content()}"
+    await page.locator("#logFilterInput").fill("")
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
     own_host = urlparse(BASE_URL).hostname
-    external_scripts = []
+    external = []  # scripts, stylesheets and fonts asked of other hosts
 
     async def offline(route):
         request = route.request
         if urlparse(request.url).hostname == own_host:
             await route.continue_()
             return
-        if request.resource_type == "script":
-            external_scripts.append(request.url)
+        if request.resource_type in ("script", "stylesheet", "font"):
+            external.append(request.url)
         await route.abort("internetdisconnected")
 
     await page.route("**/*", offline)
@@ -205,7 +243,7 @@ async def _(page):
         await page.wait_for_selector(".tabulator-col-title", timeout=5000)
         loaded = await page.evaluate("typeof d3 === 'object' && typeof Tabulator === 'function'")
         assert loaded, "D3 or Tabulator did not load without internet access"
-        assert not external_scripts, f"Scripts requested from other hosts: {external_scripts}"
+        assert not external, f"Requested from other hosts: {external}"
     finally:
         await page.unroute("**/*", offline)
 

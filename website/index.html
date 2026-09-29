@@ -190,7 +190,7 @@
       </div>
     </main>
 
-    <!-- ── Right log panel (Phase 1 shell) ── -->
+    <!-- ── Right log panel ── -->
     <aside class="log-panel collapsed" id="logPanel" aria-label="Log panel">
       <div class="log-panel-resize-handle" id="logPanelResizeHandle" aria-hidden="true"></div>
       <div class="log-panel-header">
@@ -205,6 +205,8 @@
           </button>
         </div>
         <div class="log-panel-controls">
+          <input type="search" id="logFilterInput" class="log-filter-input" placeholder="Filter"
+                 aria-label="Filter log messages" autocomplete="off" spellcheck="false">
           <label class="log-severity-wrap">
             <span class="log-severity-label">Min</span>
             <select id="logSeveritySelect" class="log-severity-select" aria-label="Minimum severity">
@@ -242,7 +244,7 @@
       </div>
       <div class="log-panel-body" id="logPanelBody">
         <div class="log-empty" id="logEmpty">Waiting for log messages…</div>
-        <div class="log-list" id="logList" role="log" aria-live="polite"></div>
+        <div class="log-list" id="logList" role="log" aria-live="off"></div>
       </div>
     </aside>
 

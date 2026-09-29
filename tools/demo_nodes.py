@@ -16,7 +16,10 @@ Node 50, "demo.sensor":
   - publishes uavcan.si.unit.velocity.Vector3.1.0 on subject 1700 at 5 Hz with
     no register naming it, so Cynitor cannot decode it until you set its type
     (Subjects view: click it, and pick from the types its messages fit);
-  - publishes a uavcan.diagnostic.Record every 3 s (Cynitor's log panel);
+  - publishes uavcan.primitive.String.1.0 on subject 1800, its state as text
+    every 2 s, named in its registers: add it to the log panel with its +;
+  - publishes a uavcan.diagnostic.Record every 3 s, going through every
+    severity from DEBUG to CRITICAL (the log panel);
   - serves uavcan.node.ExecuteCommand: Restart really restarts it (its uptime
     starts over), Factory reset only answers success, and Update firmware
     acts like a bootloader: it restarts in SOFTWARE_UPDATE mode, reads the
@@ -45,12 +48,28 @@ import pycyphal.application  # noqa: E402
 import uavcan.diagnostic  # noqa: E402
 import uavcan.file  # noqa: E402
 import uavcan.node  # noqa: E402
+import uavcan.primitive  # noqa: E402
 import uavcan.si.sample.temperature  # noqa: E402
 import uavcan.si.unit.velocity  # noqa: E402
 
 NODE_ID = 50
 TEMPERATURE_SUBJECT_ID = 1620
 UNNAMED_SUBJECT_ID = 1700
+STATUS_SUBJECT_ID = 1800
+STATES = ["idle", "heating", "holding", "cooling"]
+Severity = uavcan.diagnostic.Severity_1_0
+# (severity, message) in turn, one every 3 s: every level the log panel shows.
+DIAGNOSTICS = [
+    (Severity.INFO, "temperature {celsius:.1f} C"),
+    (Severity.DEBUG, "adc raw {adc}"),
+    (Severity.NOTICE, "calibration table loaded"),
+    (Severity.INFO, "temperature {celsius:.1f} C"),
+    (Severity.WARNING, "supply voltage low: 4.6 V"),
+    (Severity.INFO, "temperature {celsius:.1f} C"),
+    (Severity.ERROR, "I2C timeout on bus 1, retrying"),
+    (Severity.INFO, "I2C bus 1 recovered"),
+    (Severity.CRITICAL, "heater overcurrent, heater off for 5 s"),
+]
 Command = uavcan.node.ExecuteCommand_1_3
 
 
@@ -60,6 +79,7 @@ def make_node(name: str, iface: str, fd: bool, minor: int = 0) -> pycyphal.appli
         "UAVCAN__CAN__MTU": "64" if fd else "8",
         "UAVCAN__NODE__ID": str(NODE_ID),
         "UAVCAN__PUB__TEMPERATURE__ID": str(TEMPERATURE_SUBJECT_ID),
+        "UAVCAN__PUB__STATUS__ID": str(STATUS_SUBJECT_ID),
     }
     info = uavcan.node.GetInfo_1_0.Response(name=name, software_version=uavcan.node.Version_1_0(major=1, minor=minor))
     node = pycyphal.application.make_node(info, pycyphal.application.make_registry(None, environment_variables=env))
@@ -102,6 +122,7 @@ async def run_sensor(iface: str, fd: bool) -> None:
         node = make_node("demo.sensor", iface, fd, minor)
         temperature = node.make_publisher(uavcan.si.sample.temperature.Scalar_1_0, "temperature")
         diagnostics = node.make_publisher(uavcan.diagnostic.Record_1_1)
+        status = node.make_publisher(uavcan.primitive.String_1_0, "status")
         # Straight through the presentation layer: no register names its type.
         velocity = node.presentation.make_publisher(uavcan.si.unit.velocity.Vector3_1_0, UNNAMED_SUBJECT_ID)
         restart = asyncio.Event()
@@ -129,11 +150,14 @@ async def run_sensor(iface: str, fd: bool) -> None:
                 t = time.monotonic()
                 await velocity.publish(uavcan.si.unit.velocity.Vector3_1_0(
                     meter_per_second=[math.cos(t), math.sin(t), 0.5]))
+            if tick % 20 == 0:
+                state = STATES[tick // 20 % len(STATES)]
+                await status.publish(uavcan.primitive.String_1_0(f"state: {state}, {kelvin - 273.15:.1f} C"))
             if tick % 30 == 0:
-                severity = uavcan.diagnostic.Severity_1_0.WARNING if tick % 60 else uavcan.diagnostic.Severity_1_0.INFO
+                severity, text = DIAGNOSTICS[tick // 30 % len(DIAGNOSTICS)]
                 await diagnostics.publish(uavcan.diagnostic.Record_1_1(
-                    severity=uavcan.diagnostic.Severity_1_0(severity),
-                    text=f"demo.sensor: {kelvin - 273.15:.1f} C",
+                    severity=Severity(severity),
+                    text=text.format(celsius=kelvin - 273.15, adc=int(kelvin * 10) % 4096),
                 ))
             tick += 1
             await asyncio.sleep(0.1)
