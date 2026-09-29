@@ -159,6 +159,18 @@ const isUntypedSubject = (subjectId) => {
     && !state.latestBySubject.get(subjectId)?.message_type;
 };
 
+// A subject's full type name: the one it is decoded as, else the class of
+// its last message, else the standard type on its fixed port-ID.
+const subjectTypeName = (sid, event) => {
+  if (isUntypedSubject(sid)) return 'type unknown';
+  const decodedAs = state.latestNodesPayload?.subject_types?.[sid]?.type;
+  if (decodedAs) return decodedAs;
+  const standard = STANDARD_SUBJECT_TYPES[sid];
+  const cls = event?.message_type;  // e.g. "Heartbeat_1_0": the class, versioned
+  if (standard && cls) return `${standard.slice(0, standard.lastIndexOf('.') + 1)}${cls}`;
+  return cls || standard || '-';
+};
+
 const buildSubjectDetailData = (subjectIds, nodeId) => {
   if (!Array.isArray(subjectIds) || !subjectIds.length) {
     return [];
@@ -169,9 +181,10 @@ const buildSubjectDetailData = (subjectIds, nodeId) => {
     const nodeEvent = perNodeEvents?.get(subjectId);
     const networkEvent = state.latestBySubject.get(subjectId);
     const event = nodeEvent || networkEvent;
+    const typeName = subjectTypeName(subjectId, event);
     return {
       subjectId,
-      messageType: event?.message_type || null,
+      messageType: typeName === '-' || typeName === 'type unknown' ? null : typeName,
       untyped: isUntypedSubject(subjectId),
       rate: event?.rate ?? null,
       attributes: Array.isArray(event?.attributes) ? event.attributes : [],

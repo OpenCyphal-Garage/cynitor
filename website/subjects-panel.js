@@ -41,18 +41,6 @@ const _fetchMissingServiceSchemas = () => {
   }
 };
 
-// A subject's full type name: the one it is decoded as, else the class of
-// its last message, else the standard type on its fixed port-ID.
-const subjectTypeName = (sid, event) => {
-  if (isUntypedSubject(sid)) return 'type unknown';
-  const decodedAs = state.latestNodesPayload?.subject_types?.[sid]?.type;
-  if (decodedAs) return decodedAs;
-  const standard = STANDARD_SUBJECT_TYPES[sid];
-  const cls = event?.message_type;  // e.g. "Heartbeat_1_0": the class, versioned
-  if (standard && cls) return `${standard.slice(0, standard.lastIndexOf('.') + 1)}${cls}`;
-  return cls || standard || '-';
-};
-
 const subjectTypeFormatter = (cell) => {
   const row = cell.getRow().getData();
   if (row._untyped) {

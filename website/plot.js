@@ -1927,11 +1927,8 @@ const renderPlot = (container) => {
 
   const titleEl = plotArea.querySelector('.plot-title');
   if (titleEl) {
-    let next = `Subject ${sid}`;
-    if (state.activeView === 'subjects') {
-      const event = state.latestBySubject.get(sid);
-      next += ` · ${event?.message_type || 'network'}`;
-    } else if (state.selectedDetailTab === 'subscribers') {
+    let next = `Subject ${sid} · ${subjectTypeName(sid, state.latestBySubject.get(sid))}`;
+    if (state.activeView !== 'subjects' && state.selectedDetailTab === 'subscribers') {
       next += ' · network broadcast';
     }
     if (titleEl.textContent !== next) titleEl.textContent = next;

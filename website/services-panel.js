@@ -688,7 +688,7 @@ const renderServicesTab = async () => {
   }
 
   // State 8: no services
-  const services = schema || [];
+  const services = [...(schema || [])].sort((a, b) => a.service_id - b.service_id);
   if (!services.length) {
     content.innerHTML = svcStateMsg(
       '○', `Node ${nodeId} has no services`,

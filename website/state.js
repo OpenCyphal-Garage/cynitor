@@ -358,12 +358,13 @@ const positionPopover = (popover, anchorEl) => {
 const getStatusClass = (attr, value) => {
   const v = String(value).toUpperCase();
   switch (attr) {
+    // Only what is not the usual gets a colour, as in the node table.
     case 'health':
+      if (v === 'NOMINAL' || v === '0') return '';
+      if (v === 'ADVISORY' || v === '1') return 'status-warn';
       return getHealthCssClass(value);
     case 'mode':
-      if (v === 'OPERATIONAL' || v === '0') return 'status-ok';
-      if (v === 'INITIALIZATION' || v === '1') return 'status-init';
-      return '';
+      return v === 'OPERATIONAL' || v === '0' ? '' : 'status-warn';
     default:
       return '';
   }

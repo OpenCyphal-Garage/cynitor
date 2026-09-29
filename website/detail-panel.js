@@ -23,13 +23,13 @@ const renderSubjectTable = (title, subjects) => {
       ? '<span class="live-dot"></span>' : '';
     const metrics = s.attributes.length
       ? `<div class="card-metrics">${s.attributes.map((a) => renderMetric(a, s.subjectId)).join('')}</div>`
-      : '<div class="card-metrics"><span class="metrics-empty">no telemetry data</span></div>';
+      : '<div class="card-metrics"><span class="metrics-empty">no message yet</span></div>';
 
     return `<div class="subject-card" data-subject="${s.subjectId}" tabindex="0" role="button">
       <div class="card-header">
         <span class="card-subject-id">${escapeHtml(String(s.subjectId))}</span>
         <span class="card-type" title="${escapeHtml(s.messageType || '')}">${escapeHtml(
-          s.messageType || (s.untyped ? 'type unknown · set it in Subjects' : 'awaiting data'))}</span>
+          s.messageType || (s.untyped ? 'type unknown · set it in Subjects' : 'type not known yet'))}</span>
         <span class="card-rate">${liveDot}${escapeHtml(rateStr)}</span>
       </div>
       ${metrics}
@@ -222,7 +222,8 @@ const renderSelectedNodeContent = () => {
     content.innerHTML = `${staleBanner}<div class="detail-split${isOffline ? ' svc-panel-stale' : ''}">
       <div class="detail-subject-list" style="flex:0 0 ${pct}%">${renderSubjectTable(title, subjects)}</div>
       <div class="detail-split-handle"></div>
-      <div class="detail-plot-area">${''}
+      <div class="detail-plot-area">${selected == null
+        ? '<div class="plot-empty">Click a subject to plot its data</div>' : ''}
       </div>
     </div>`;
     content.querySelectorAll('.subject-card').forEach((card) => {

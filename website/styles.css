@@ -2764,7 +2764,7 @@ button:focus-visible,
 .status-ok   { color: var(--ok); }
 .status-warn { color: var(--warn); }
 .status-err  { color: var(--error); }
-.status-init { color: #57606a; }
+.status-init { color: var(--warn); }
 
 [data-theme="dark"] .status-init { color: #8b949e; }
 
