@@ -73,7 +73,7 @@ Then open `http://localhost:5500` instead. The address field defaults to
 ## Features
 
 - **Live node table** — sortable, filterable, with health, message rate, uptime, and per-row publisher/subscriber/server/client port lists. Pin favourites to the top with a star, hide offline nodes you don't care about.
-- **Subject browser** — a second view (toggle via sidebar tabs) that lists every subject and service on the network. Expand any service inline to send requests to specific nodes without leaving the subject-centric view.
+- **Subject browser** — a second view (toggle via sidebar tabs) that lists every subject and service on the network. Expand any service inline to send requests to specific nodes without leaving the subject-centric view. A subject no register names the type of says so; click it, and Cynitor listens to it and lists the types its messages fit, each with the latest message decoded as it, custom DSDL types first. Pick one (or type any compiled type) and it decodes, plots and records like any other, in later sessions too.
 - **Per-subject inspection** — click a node, then a subject card in the detail panel, to see live message attributes and a 60-second history.
 - **Service interaction** — invoke services on remote nodes with auto-discovered request schemas, expandable composite fields, and a persistent call history (stored in SQLite, survives restarts). Nodes that serve `uavcan.node.ExecuteCommand` get Restart and Factory reset buttons, and **Update firmware…**: pick a `.bin` and Cynitor serves it to the node's Cyphal bootloader (e.g. Zubax Kocherga), with a progress bar as the node reads it.
 - **Node history** — lifecycle tracking with health/mode changes, restarts, service calls, and per-subject telemetry summaries. Two nodes sharing a node-ID, or publishing one subject with different types, are flagged there. Retained for 30 days.
@@ -116,7 +116,7 @@ Other options:
 Bus history (24 h), node history (30 days), service-call history, recordings,
 remembered device names, and the allocator's table of which device got which
 node-ID are kept in SQLite files in one data folder, whatever folder Cynitor
-is started from. Raw CAN logs go in its `raw/` subfolder, firmware files for updates in `firmware/`:
+is started from, as are the types you set for subjects. Raw CAN logs go in its `raw/` subfolder, firmware files for updates in `firmware/`:
 
 | OS | Data folder |
 |----|-------------|

@@ -289,6 +289,9 @@ class WebSocketServer:
         self.app.router.add_get('/api/rawlogs/{name}', self._download_raw_log)
         self.app.router.add_delete('/api/rawlogs/{name}', self._delete_raw_log)
         self.app.router.add_post('/api/rawlogs/{name}/play', self._play_raw_log)
+        self.app.router.add_put('/api/subjects/{subject_id}/type', self._set_subject_type)
+        self.app.router.add_delete('/api/subjects/{subject_id}/type', self._clear_subject_type)
+        self.app.router.add_get('/api/subjects/{subject_id}/type-guesses', self._guess_subject_type)
         self.app.router.add_get('/api/firmware', self._get_firmware)
         self.app.router.add_post('/api/firmware', self._upload_firmware)
         self.app.router.add_delete('/api/firmware/{name}', self._delete_firmware)
@@ -512,6 +515,50 @@ class WebSocketServer:
             return web.json_response({"error": str(e)}, status=500)
         return web.json_response({"status": "running", "can_interface": f"rawlog:{name}",
                                   "can_fd": self.session.can_fd})
+
+    # ── Subject types the user sets or has guessed (see type_guess.py) ──
+
+    async def _set_subject_type(self, request: web.Request) -> web.Response:
+        subject_id, err = _parse_int(request.match_info.get('subject_id'), 'subject_id', 0, MAX_SUBJECT_ID)
+        if err:
+            return err
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON body"}, status=400)
+        type_name = body.get("type") if isinstance(body, dict) else None
+        if not isinstance(type_name, str) or not type_name.strip():
+            return web.json_response({"error": "type is required, e.g. uavcan.primitive.scalar.Real32.1.0"},
+                                     status=400)
+        return self._subject_type_change(subject_id, type_name.strip())
+
+    async def _clear_subject_type(self, request: web.Request) -> web.Response:
+        subject_id, err = _parse_int(request.match_info.get('subject_id'), 'subject_id', 0, MAX_SUBJECT_ID)
+        if err:
+            return err
+        return self._subject_type_change(subject_id, None)
+
+    def _subject_type_change(self, subject_id: int, type_name: Optional[str]) -> web.Response:
+        try:
+            self.session.set_subject_type(subject_id, type_name)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        except RuntimeError as e:
+            return web.json_response({"error": str(e)}, status=409)
+        return web.json_response({"subject_id": subject_id, "type": type_name})
+
+    async def _guess_subject_type(self, request: web.Request) -> web.Response:
+        subject_id, err = _parse_int(request.match_info.get('subject_id'), 'subject_id', 0, MAX_SUBJECT_ID)
+        if err:
+            return err
+        if not self.dsdl_manager:
+            return web.json_response({"error": "DSDL manager not available"}, status=503)
+        types = await asyncio.to_thread(self.dsdl_manager.message_types)
+        try:
+            result = await self.session.guess_subject_type(subject_id, types)
+        except RuntimeError as e:
+            return web.json_response({"error": str(e)}, status=409)
+        return web.json_response(result)
 
     # ── Firmware updates (see firmware.py) ──
 

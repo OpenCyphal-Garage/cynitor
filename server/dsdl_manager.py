@@ -134,6 +134,22 @@ class DsdlManager:
         self._tree_cache = {"namespaces": tree}
         return self._tree_cache
 
+    def message_types(self) -> list[dict[str, Any]]:
+        """Every compiled message type: [{full_name, custom, fixed_port}]."""
+        found = []
+
+        def walk(node: dict) -> None:
+            for t in node["types"]:
+                if t["kind"] == "message" and t["compiled"]:
+                    found.append({"full_name": t["full_name"], "custom": t["source"] == "custom",
+                                  "fixed_port": t["fixed_port_id"] is not None})
+            for child in node["children"].values():
+                walk(child)
+
+        for root in self.get_namespaces()["namespaces"].values():
+            walk(root)
+        return found
+
     def get_type_detail(self, full_name: str) -> Optional[dict[str, Any]]:
         if not self._type_index:
             self.get_namespaces()

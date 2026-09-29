@@ -302,6 +302,7 @@ def make_event_node():
     node._prev_uptime = {}
     node._uptime_before_drop = {}
     node._node_id_conflict_reported = {}
+    node.user_subject_types, node._sampling = {}, set()
     node.events = []
     node._emit_node_event = lambda node_id, event_type, detail=None: node.events.append((event_type, detail))
     return node
@@ -505,3 +506,16 @@ class TestLeavingSoftwareUpdate:
         node._schedule_info_refresh.assert_not_called()
         await heartbeat(0)  # the new firmware runs
         node._schedule_info_refresh.assert_called_once_with(42, was_disappeared=False)
+
+
+class TestArrayAttributes:
+    def test_numbers_stay_numbers_and_bytes_are_text(self):
+        import numpy as np
+        node = ScannerNode.__new__(ScannerNode)
+        results = []
+        node._extract_value("meter_per_second", np.array([1.0, 2.0, 3.5], dtype=np.float32), results)
+        node._extract_value("counts", np.array([1, 300], dtype=np.uint16), results)
+        node._extract_value("text", np.frombuffer(b"hello", dtype=np.uint8), results)
+        assert results == [{"attribute": "meter_per_second", "value": [1.0, 2.0, 3.5]},
+                           {"attribute": "counts", "value": [1, 300]},
+                           {"attribute": "text", "value": "hello"}]

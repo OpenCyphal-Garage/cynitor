@@ -184,8 +184,15 @@ class TelemetryManager:
 
         return {
             "node_count": len(nodes_info),
-            "nodes": nodes_info
+            "nodes": nodes_info,
+            "subject_types": self._subject_types(),
         }
+
+    def _subject_types(self) -> dict[str, dict[str, str]]:
+        """How each decoded subject got its type: from registers, or set by the user."""
+        user = getattr(self.scanner, "user_subject_types", {})
+        return {str(sid): {"type": t, "set_by": "user" if sid in user else "registers"}
+                for sid, t in getattr(self.scanner, "subject_types", {}).items()}
 
     def get_service_schema(self, node_id: int) -> Optional[dict[str, Any]]:
         """Return service metadata and request field schema for a node."""

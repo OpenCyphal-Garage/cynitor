@@ -111,6 +111,9 @@ class ScannerNode:
         self._info_in_flight: set[int] = set()  # node_ids with a GetInfo running
         self._rate_timestamps: dict[tuple[int, int], collections.deque] = {}  # (subject_id, node_id) -> times
         self.subject_types: dict[int, str] = {}           # subject_id -> the type it is decoded as
+        # Those of subject_types the user set, for subjects no register names.
+        self.user_subject_types: dict[int, str] = {}
+        self._sampling: set[int] = set()                  # subjects sample_subject listens to
         self._uptime_before_drop: dict[int, int] = {}     # node_id -> uptime before a drop, until judged
         self._node_id_conflict_reported: dict[int, float] = {}  # node_id -> monotonic time of last report
         # While a raw log plays: its sidecar (see raw_log). Nodes then answer
@@ -380,12 +383,77 @@ class ScannerNode:
             if not namespace:
                 continue
 
+            if subject_id in self.user_subject_types:
+                self.set_subject_type(subject_id, None)  # a register's word over the user's guess
             subscribed = self.subject_types.get(subject_id)
             if subscribed is None:
                 data_type_class = getattr(importlib.import_module(namespace), data_type)
                 self._subscribe(subject_id, data_type_class, message_type)
             elif self._major_type(subscribed) != self._major_type(message_type):
                 self._report_type_conflict(subject_id, node_id, message_type, subscribed)
+
+    SAMPLE_EXTENT = 4096  # bytes kept of each payload sample_subject collects
+
+    def set_subject_type(self, subject_id: int, message_type: Optional[str]) -> None:
+        """Decode ``subject_id`` as ``message_type`` ("ns.Name_1_0"), chosen by the user; None stops that.
+
+        Only for subjects no publisher names in its registers: RuntimeError if
+        one does, or while sample_subject listens to the subject. ValueError
+        if ``message_type`` is not a compiled message type.
+        """
+        if subject_id in self.subject_types and subject_id not in self.user_subject_types:
+            raise RuntimeError(f"Subject {subject_id} is decoded as {self.subject_types[subject_id]}, "
+                               "as its publisher's registers say")
+        if subject_id in self._sampling:
+            raise RuntimeError(f"Subject {subject_id} is being listened to for a type guess; try again shortly")
+        if message_type is not None:
+            message_type = self._dsdl_type_to_module_name(message_type)  # "ns.Name.1.0" -> "ns.Name_1_0"
+        data_type_class = None if message_type is None else self._message_class(message_type)
+        if subject_id in self.user_subject_types:
+            self.publishers_subscribers.pop(subject_id).close()
+            self.subject_types.pop(subject_id, None)
+            del self.user_subject_types[subject_id]
+        if data_type_class is not None:
+            self._subscribe(subject_id, data_type_class, message_type)
+            self.user_subject_types[subject_id] = message_type
+
+    @staticmethod
+    def _message_class(message_type: str):
+        namespace, _, name = message_type.rpartition('.')
+        try:
+            data_type_class = getattr(importlib.import_module(namespace), name)
+        except (ImportError, AttributeError, ValueError):
+            raise ValueError(f"{message_type} is not a compiled DSDL type") from None
+        if hasattr(data_type_class, "Request"):
+            raise ValueError(f"{message_type} is a service type, not a message type")
+        return data_type_class
+
+    async def sample_subject(self, subject_id: int, duration: float, limit: int = 20) -> list[bytes]:
+        """The raw payloads published on an undecoded subject within ``duration`` seconds.
+
+        Listens at the transport level, as no type is known yet.
+        """
+        if subject_id in self.publishers_subscribers:
+            raise RuntimeError(f"Subject {subject_id} is already decoded")
+        if subject_id in self._sampling:
+            raise RuntimeError(f"Subject {subject_id} is already being listened to")
+        import pycyphal.transport as transport
+        spec = transport.InputSessionSpecifier(transport.MessageDataSpecifier(subject_id), None)
+        session = self._node.presentation.transport.get_input_session(
+            spec, transport.PayloadMetadata(self.SAMPLE_EXTENT))
+        self._sampling.add(subject_id)
+        payloads: list[bytes] = []
+        deadline = asyncio.get_running_loop().time() + duration
+        try:
+            while len(payloads) < limit:
+                received = await session.receive(deadline)
+                if received is None:
+                    break
+                payloads.append(b"".join(received.fragmented_payload))
+        finally:
+            session.close()
+            self._sampling.discard(subject_id)
+        return payloads
 
     def _subscribe(self, subject_id: int, data_type_class, message_type: str) -> None:
         """Decode ``subject_id`` as ``data_type_class`` from now on."""
@@ -1020,11 +1088,11 @@ class ScannerNode:
         # Byte arrays / strings
         if isinstance(val, (bytes, bytearray)):
             results.append({"attribute": name, "value": val.decode("utf-8", errors="ignore")})
+        # DSDL strings arrive as uint8 arrays; any other array is numbers.
+        elif isinstance(val, np.ndarray) and val.dtype == np.uint8:
+            results.append({"attribute": name, "value": bytes(val).decode("utf-8", errors="ignore")})
         elif isinstance(val, np.ndarray):
-            try:
-                results.append({"attribute": name, "value": bytes(val).decode("utf-8", errors="ignore")})
-            except Exception:
-                results.append({"attribute": name, "value": val.tolist()})
+            results.append({"attribute": name, "value": val.tolist()})
         # Primitives
         elif isinstance(val, (str, int, float, bool, np.integer, np.floating)):
             results.append({"attribute": name, "value": self._make_json_serializable(val)})
@@ -1327,8 +1395,10 @@ class ScannerNode:
             if node_id in nodes:
                 nodes.remove(node_id)
 
-            # The diagnostic subject is decoded for every node, whoever advertises it.
-            if not nodes and subject_id in self.publishers_subscribers and subject_id != self.DIAGNOSTIC_SUBJECT_ID:
+            # The diagnostic subject is decoded for every node, whoever advertises
+            # it, and a subject the user typed until the user says otherwise.
+            if not nodes and subject_id in self.publishers_subscribers \
+                    and subject_id != self.DIAGNOSTIC_SUBJECT_ID and subject_id not in self.user_subject_types:
                 logging.info(f"Unsubscribing from subject {subject_id}, no active publishers")
                 self.publishers_subscribers[subject_id].close()
                 del self.publishers_subscribers[subject_id]
