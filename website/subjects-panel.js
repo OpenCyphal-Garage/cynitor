@@ -3,7 +3,6 @@
 
 let subjectsTabulator = null;
 let _subjectsTableReady = false;
-let _suppressReattach = false;
 const _serviceTypeCache = new Map();
 
 const _fmtDate = (unix) => {
@@ -321,7 +320,7 @@ const initSubjectsTable = () => {
     if (_e.target.closest('.fav-star') || _e.target.closest('.action-hide')) return;
     const data = row.getData();
     if (data.kind === 'Service') {
-      openInlineServiceDetail(data);
+      openSubjectService(data);
       return;
     }
     openSubjectPlot(data);
@@ -332,7 +331,6 @@ const initSubjectsTable = () => {
       state.subjectsTableSort = { key: sorters[0].field, dir: sorters[0].dir };
       saveSettings();
     }
-    _reattachInlineDetail();
   });
 
   subjectsTabulator.on('tableBuilt', () => {
@@ -354,16 +352,10 @@ const initSubjectsTable = () => {
 
   subjectsTabulator.on('dataFiltered', () => {
     saveSettings();
-    _reattachInlineDetail();
   });
 
-  subjectsTabulator.on('renderStarted', () => {
-    _stashInlineDetail();
-  });
-
-  subjectsTabulator.on('renderComplete', () => {
-    if (!_suppressReattach) _reattachInlineDetail();
-  });
+  // Rows re-render on sorting, filtering and refreshes: mark the open one again.
+  subjectsTabulator.on('renderComplete', () => _highlightSubjectRow());
 };
 
 const getSubjectsHeaderFilters = () => {
@@ -384,151 +376,108 @@ const refreshSubjectsTable = () => {
   _fetchMissingServiceSchemas();
   const data = buildSubjectsRows();
   if (!data.length) {
-    _removeInlineDetail();
+    closeSubjectsDetail();
     subjectsTabulator.clearData();
     const ph = document.querySelector('#subjectsTable .tabulator-placeholder');
     if (ph) ph.innerHTML = subjectsPlaceholder();
     return;
   }
 
-  _suppressReattach = true;
-
   diffUpdateTable(subjectsTabulator, data, '_rowId');
-
-  _suppressReattach = false;
-  _unstashInlineDetail();
+  _highlightSubjectRow();
 };
 
-const _removeInlineDetail = () => {
-  if (state._expandedSubjectRowId && subjectsTabulator) {
-    const row = subjectsTabulator.getRow(state._expandedSubjectRowId);
-    if (row) row.getElement().classList.remove('selected-row');
-  }
-  const existing = document.getElementById('subjectInlineDetail');
-  if (existing) existing.remove();
-  state._expandedSubjectRowId = null;
-  state._stashedInlineDetail = null;
+// The subjects view opens one thing at a time in the detail panel below
+// the table: a subject's plot, or a service's call card. Rows never move.
+const _subjectsDetailRowId = () => state._subjectsServiceRowId
+  ?? (state.selectedPlotSubject != null ? `sub:${state.selectedPlotSubject}` : null);
+
+const _showSubjectsDetail = () => {
+  const detailPanel = el('detailPanel');
+  detailPanel.querySelector('.detail-tabs').classList.add('hidden');
+  el('detailResizeHandle').classList.remove('hidden');
+  detailPanel.classList.remove('hidden');
+  _restoreDetailPanelState('subjects');
 };
 
-const _stashInlineDetail = () => {
-  if (state._stashedInlineDetail) return;
-  const detail = document.getElementById('subjectInlineDetail');
-  if (detail) {
-    detail.remove();
-    state._stashedInlineDetail = detail;
-  }
+const closeSubjectsDetail = () => {
+  state.selectedPlotSubject = null;
+  state._subjectsPlotSubject = null;
+  state._subjectsServiceRowId = null;
+  state._stashedServiceCard = null;
+  stopPlotAnim();
+  const detailPanel = el('detailPanel');
+  if (detailPanel.classList.contains('hidden')) return;
+  _saveDetailPanelState('subjects');
+  el('detailResizeHandle').classList.add('hidden');
+  detailPanel.classList.add('hidden');
+  detailPanel.querySelector('.detail-tabs').classList.remove('hidden');
+  _highlightSubjectRow();
 };
 
-const _unstashInlineDetail = () => {
-  const detail = state._stashedInlineDetail;
-  if (!detail || !state._expandedSubjectRowId || !subjectsTabulator) return;
-  state._stashedInlineDetail = null;
-  const row = subjectsTabulator.getRow(state._expandedSubjectRowId);
-  if (row) {
-    const rowEl = row.getElement();
-    rowEl.after(detail);
-    rowEl.classList.add('selected-row');
-  } else {
-    state._expandedSubjectRowId = null;
-  }
-};
-
-const _reattachInlineDetail = () => {
-  if (_suppressReattach) return;
-  if (!state._expandedSubjectRowId || !subjectsTabulator) return;
-  const row = subjectsTabulator.getRow(state._expandedSubjectRowId);
-  if (!row) {
-    _removeInlineDetail();
-    return;
-  }
-  let detail = document.getElementById('subjectInlineDetail');
-  if (!detail && state._stashedInlineDetail) {
-    detail = state._stashedInlineDetail;
-    state._stashedInlineDetail = null;
-  }
-  if (!detail) {
-    const rowData = row.getData();
-    if (rowData.kind === 'Service') openInlineServiceDetail(rowData, true);
-    return;
-  }
-  const rowEl = row.getElement();
-  if (rowEl.nextElementSibling !== detail) {
-    rowEl.after(detail);
-  }
-};
-
-const openInlineServiceDetail = async (rowData, forceOpen = false) => {
+const openSubjectService = (rowData) => {
   const rowId = rowData._rowId;
-  if (!forceOpen && state._expandedSubjectRowId === rowId) {
-    _removeInlineDetail();
+  if (state._subjectsServiceRowId === rowId) {
+    closeSubjectsDetail();
     return;
   }
-  _removeInlineDetail();
+  stopPlotAnim();
+  state.selectedPlotSubject = null;
+  state._subjectsPlotSubject = null;
+  state._subjectsServiceRowId = rowId;
+  _showSubjectsDetail();
+  _highlightSubjectRow();
+  const content = el('selectedNodeContent');
+  content.replaceChildren(_buildServiceCard(rowData));
+};
 
-  state._expandedSubjectRowId = rowId;
+// The call card: which service, which node serves it, the request form.
+const _buildServiceCard = (rowData) => {
   const serviceId = rowData.id;
   const serverNodes = rowData.publishers
     ? rowData.publishers.split(',').map((s) => Number(s.trim())).filter(Number.isFinite)
     : [];
-
-  const row = subjectsTabulator.getRow(rowId);
-  if (!row) return;
-  const rowEl = row.getElement();
-  rowEl.classList.add('selected-row');
-
-  const detail = document.createElement('div');
-  detail.id = 'subjectInlineDetail';
-  detail.className = 'subject-inline-detail';
-  rowEl.after(detail);
-
+  const card = document.createElement('div');
+  card.className = 'subject-service-card';
+  card.innerHTML = `
+    <div class="subject-service-head">
+      <span class="subject-service-title"><span class="subject-service-id">${serviceId}</span>
+        ${escapeHtml(rowData.messageType || `Service ${serviceId}`)}</span>
+      <button type="button" class="subject-service-close" aria-label="Close service ${serviceId}" title="Close">✕</button>
+    </div>`;
+  card.querySelector('.subject-service-close').addEventListener('click', closeSubjectsDetail);
   if (!serverNodes.length) {
-    detail.innerHTML = svcStateMsg('○', 'No server nodes', 'No nodes advertise this service.');
-    return;
+    card.insertAdjacentHTML('beforeend', svcStateMsg('○', 'No server nodes', 'No nodes advertise this service.'));
+    return card;
   }
 
-  const header = document.createElement('div');
-  header.className = 'svc-detail-header';
-  detail.appendChild(header);
-
-  // Node selector
   const targetNodeId = state._subjectServiceNodeId && serverNodes.includes(state._subjectServiceNodeId)
     ? state._subjectServiceNodeId
     : serverNodes[0];
   state._subjectServiceNodeId = targetNodeId;
-
   if (serverNodes.length > 1) {
     const selector = document.createElement('div');
     selector.className = 'svc-node-selector';
     selector.innerHTML = '<span class="svc-node-selector-label">Target node:</span>' +
       serverNodes.map((nid) =>
-        `<button type="button" class="svc-node-btn${nid === targetNodeId ? ' active' : ''}" data-node-id="${nid}">${nid}</button>`
+        `<button type="button" class="svc-node-btn${nid === targetNodeId ? ' active' : ''}" data-node-id="${nid}"
+          title="${escapeHtml(nodeIdsTitle(String(nid)))}">${nid}</button>`
       ).join('');
-    header.appendChild(selector);
+    card.appendChild(selector);
     selector.querySelectorAll('.svc-node-btn').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const currentDetail = document.getElementById('subjectInlineDetail');
-        if (!currentDetail) return;
         state._subjectServiceNodeId = Number(btn.dataset.nodeId);
         state._subjectExpandedServiceId = serviceId;
         state._subjectServiceCallState = null;
-        _renderInlineServiceForm(currentDetail, serviceId, state._subjectServiceNodeId, serverNodes);
+        _renderInlineServiceForm(card, serviceId, state._subjectServiceNodeId, serverNodes);
       });
     });
   }
-
-  const collapseBar = document.createElement('button');
-  collapseBar.type = 'button';
-  collapseBar.className = 'svc-collapse-bar';
-  collapseBar.setAttribute('aria-label', 'Collapse service detail');
-  collapseBar.innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"></polyline></svg>';
-  collapseBar.addEventListener('click', () => _removeInlineDetail());
-  header.appendChild(collapseBar);
-
   state._subjectExpandedServiceId = serviceId;
   state._subjectServiceCallState = null;
-
-  await _renderInlineServiceForm(detail, serviceId, targetNodeId, serverNodes);
+  _renderInlineServiceForm(card, serviceId, targetNodeId, serverNodes);
+  return card;
 };
 
 const _renderInlineServiceForm = async (detail, serviceId, nodeId, serverNodes) => {
@@ -568,7 +517,7 @@ const _renderInlineServiceForm = async (detail, serviceId, nodeId, serverNodes) 
 
 
 const renderSubjectServiceCard = (svc, nodeId) => {
-  const detail = document.getElementById('subjectInlineDetail');
+  const detail = document.querySelector('#selectedNodeContent .subject-service-card');
   if (!detail) return;
   let formContainer = detail.querySelector('.svc-inline-form');
   if (!formContainer) {
@@ -583,33 +532,21 @@ const renderSubjectServiceCard = (svc, nodeId) => {
 
 const openSubjectPlot = (rowData) => {
   const sid = rowData.id;
-  const detailPanel = el('detailPanel');
-  const detailHandle = el('detailResizeHandle');
   const content = el('selectedNodeContent');
-  const tabs = detailPanel.querySelector('.detail-tabs');
 
   if (state.selectedPlotSubject === sid) {
-    state.selectedPlotSubject = null;
-    state._subjectsPlotSubject = null;
-    stopPlotAnim();
-    _saveDetailPanelState('subjects');
-    detailHandle.classList.add('hidden');
-    detailPanel.classList.add('hidden');
-    tabs.classList.remove('hidden');
-    _clearSubjectRowSelection();
+    closeSubjectsDetail();
     return;
   }
 
   state.plotPaused = false;
   state.plotPausedAt = null;
+  state._subjectsServiceRowId = null;
+  state._stashedServiceCard = null;
   state.selectedPlotSubject = sid;
   state._subjectsPlotSubject = sid;
-  tabs.classList.add('hidden');
-  detailHandle.classList.remove('hidden');
-  detailPanel.classList.remove('hidden');
-  _restoreDetailPanelState('subjects');
-
-  _highlightSubjectRow(sid);
+  _showSubjectsDetail();
+  _highlightSubjectRow();
   if (isUntypedSubject(sid)) {
     openSubjectTypePanel(sid);
     return;
@@ -758,23 +695,12 @@ const clearSubjectType = async (sid) => {
   reopenSubject(sid);
 };
 
-const _highlightSubjectRow = (sid) => {
+// Marks the row whose plot or call card is open.
+const _highlightSubjectRow = () => {
   if (!subjectsTabulator) return;
-  const keepId = state._expandedSubjectRowId;
+  const openId = _subjectsDetailRowId();
   for (const row of subjectsTabulator.getRows()) {
-    const d = row.getData();
-    if (keepId && d._rowId === keepId) continue;
-    const isSel = d.kind === 'Subject' && d.id === sid;
-    row.getElement().classList.toggle('selected-row', isSel);
-  }
-};
-
-const _clearSubjectRowSelection = () => {
-  if (!subjectsTabulator) return;
-  const keepId = state._expandedSubjectRowId;
-  for (const row of subjectsTabulator.getRows()) {
-    if (keepId && row.getData()._rowId === keepId) continue;
-    row.getElement().classList.remove('selected-row');
+    row.getElement().classList.toggle('selected-row', row.getData()._rowId === openId);
   }
 };
 
@@ -832,12 +758,11 @@ const switchView = (view) => {
   if (prevView === 'subjects') {
     state._subjectsPlotSubject = state.selectedPlotSubject;
     stopPlotAnim();
-    const inlineDetail = document.getElementById('subjectInlineDetail');
-    if (inlineDetail) {
-      state._stashedInlineDetail = inlineDetail;
-      inlineDetail.remove();
+    const card = document.querySelector('#selectedNodeContent .subject-service-card');
+    if (card) {
+      state._stashedServiceCard = card;
+      card.remove();
     }
-    _suppressReattach = true;
   } else if (prevView === 'nodes') {
     state._nodesPlotSubject = state.selectedPlotSubject;
   } else if (prevView === 'compare') {
@@ -863,26 +788,30 @@ const switchView = (view) => {
 
   // Activate target view
   if (view === 'subjects') {
-    _suppressReattach = false;
     state.selectedPlotSubject = state._subjectsPlotSubject ?? null;
     subjectsEl.classList.remove('hidden');
     stopPlotAnim();
+    const card = state._stashedServiceCard;
     const hasPlot = state.selectedPlotSubject != null;
-    detailHandle.classList.toggle('hidden', !hasPlot);
-    detailPanel.classList.toggle('hidden', !hasPlot);
+    const hasDetail = hasPlot || Boolean(card);
+    detailHandle.classList.toggle('hidden', !hasDetail);
+    detailPanel.classList.toggle('hidden', !hasDetail);
     const tabs = detailPanel.querySelector('.detail-tabs');
-    if (tabs) tabs.classList.toggle('hidden', hasPlot);
-    if (hasPlot) _restoreDetailPanelState('subjects');
+    if (tabs) tabs.classList.toggle('hidden', hasDetail);
+    if (hasDetail) _restoreDetailPanelState('subjects');
     initSubjectsTable();
     refreshSubjectsTable();
-    if (hasPlot) {
-      const content = el('selectedNodeContent');
+    const content = el('selectedNodeContent');
+    if (card) {
+      state._stashedServiceCard = null;
+      content.replaceChildren(card);
+    } else if (hasPlot) {
       content.innerHTML = `<div class="detail-split">
         <div class="detail-plot-area"></div>
       </div>`;
-      _highlightSubjectRow(state.selectedPlotSubject);
       startPlotAnim();
     }
+    _highlightSubjectRow();
   } else if (view === 'compare') {
     detailHandle.classList.add('hidden');
     detailPanel.classList.add('hidden');
