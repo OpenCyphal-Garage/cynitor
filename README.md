@@ -70,6 +70,23 @@ cd website && python3 -m http.server 5500
 Then open `http://localhost:5500` instead. The address field defaults to
 `http://localhost:8080`, which is where the backend is listening.
 
+### 3. No hardware? Try the demo nodes
+
+On Linux, a virtual CAN interface and `tools/demo_nodes.py` give Cynitor
+something to watch:
+
+```bash
+sudo ip link add dev vcan0 type vcan && sudo ip link set vcan0 up
+python3 tools/demo_nodes.py --iface vcan0     # add --fd on a CAN FD vcan (mtu 72)
+```
+
+Then connect Cynitor to `vcan0`. Node 50 (`demo.sensor`) publishes a
+temperature named in its registers (decoded and plotted), a velocity no
+register names (click subject 1700 in Subjects to have its type guessed),
+and diagnostics every 3 s (the log panel). Its Services tab restarts it, and
+**Update firmware…** makes it act like a bootloader reading the file from
+Cynitor. `--conflict` adds a second node on the same node-ID after 10 s.
+
 ## Features
 
 - **Live node table** — sortable, filterable, with health, message rate, uptime, and per-row publisher/subscriber/server/client port lists. Pin favourites to the top with a star, hide offline nodes you don't care about.
@@ -202,7 +219,7 @@ chmod +x cynitor-server-*-x86_64.AppImage && ./cynitor-server-*-x86_64.AppImage
 ```
 
 On Windows, run the `.exe` from a terminal, e.g.
-`.\cynitor-server-0.9.0-windows-x86_64.exe`. It includes what candleLight
+`.\cynitor-server-0.10.0-windows-x86_64.exe`. It includes what candleLight
 adapters (CANable) need; other adapters need their vendor's driver
 installed (PEAK, Kvaser, Vector, IXXAT). Windows may warn about an
 unrecognised app the first time, as the executable is not code-signed.
@@ -298,7 +315,7 @@ show how to narrow that to a dedicated user.
 
 **A node shows up but never answers (no name, no registers).** Its heartbeats reach Cynitor, but Cynitor's requests do not reach it. The log says so, and on a CAN FD bus names the usual cause: a node running Classic CAN receives none of Cynitor's CAN FD frames. Run every node in CAN FD, or set the interface to Classic CAN (see [CAN FD](#can-fd)).
 
-**No nodes appearing.** Confirm there are publishers on the bus (`yakut sub uavcan.node.Heartbeat.1.0`). On a virtual interface (`vcan0`) you also need a publisher on the same `vcan` interface — the backend doesn't generate traffic on its own.
+**No nodes appearing.** Confirm there are publishers on the bus (`yakut sub uavcan.node.Heartbeat.1.0`). On a virtual interface (`vcan0`) you also need a publisher on the same `vcan` interface — the backend doesn't generate traffic on its own. `tools/demo_nodes.py` is one (see [No hardware?](#3-no-hardware-try-the-demo-nodes)).
 
 
 **Port already in use.** For the backend, pass `--port 9099` (or any free port). For the separate frontend server used during development, run `python3 -m http.server 8088` and open the matching URL.
