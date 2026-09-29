@@ -108,6 +108,20 @@ const getTotalMessageRate = () => {
   return total;
 };
 
+// Where a subject's type comes from: 'registers', 'user' (set in Subjects),
+// or null. Subject-IDs from 6144 up are fixed ports, decoded by their own types.
+const FIRST_FIXED_SUBJECT_ID = 6144;
+const subjectTypeSource = (subjectId) =>
+  state.latestNodesPayload?.subject_types?.[subjectId]?.set_by ?? null;
+
+// A subject nothing names the type of, so it cannot be decoded. Only a live
+// session reports subject types; a replay's subjects decode regardless.
+const isUntypedSubject = (subjectId) => {
+  const types = state.latestNodesPayload?.subject_types;
+  return Boolean(types) && subjectId < FIRST_FIXED_SUBJECT_ID && !types[subjectId]
+    && !state.latestBySubject.get(subjectId)?.message_type;
+};
+
 const buildSubjectDetailData = (subjectIds, nodeId) => {
   if (!Array.isArray(subjectIds) || !subjectIds.length) {
     return [];
@@ -121,6 +135,7 @@ const buildSubjectDetailData = (subjectIds, nodeId) => {
     return {
       subjectId,
       messageType: event?.message_type || null,
+      untyped: isUntypedSubject(subjectId),
       rate: event?.rate ?? null,
       attributes: Array.isArray(event?.attributes) ? event.attributes : [],
     };

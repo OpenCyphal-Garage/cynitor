@@ -621,9 +621,15 @@ Response:
             "last_seen": ["2026-05-04T11:00:00.000000"],
             "_ghost": true
         }
+    },
+    "subject_types": {
+        "1235": {"type": "uavcan.si.unit.voltage.Scalar_1_0", "set_by": "registers"},
+        "1700": {"type": "uavcan.si.unit.velocity.Vector3.1.0", "set_by": "user"}
     }
 }
 ```
+
+`subject_types` holds every decoded subject's type and where it came from: a publisher's registers, or the user (see "Subject types" below). A subject a node publishes that is missing from it cannot be decoded until its type is set. It is absent during a replay.
 
 Ghost entries (key `uid:<hex>`) represent devices whose `unique_id` is known but whose node_id slot was taken by another device. `last_node_id` is the most recent node_id the device held. Ghost data comes from the last snapshot before displacement.
 
@@ -1145,6 +1151,20 @@ When replay terminates — naturally at the end of the recording, or because a c
 **MVP scope notes:**
 - Only `kind='subject'` rows are replayed. `service_call` rows stay in storage for export but aren't played.
 - `/api/nodes` during replay is synthesised from the recording's publisher list — no GetInfo / health / mode / uptime / client port lists. The placeholder payload carries `_replay: true` on each node so consumers can flag the view as approximate.
+
+### Subject types
+
+Cynitor decodes a subject when a publisher names its type in its registers (`uavcan.pub.<name>.type`) or the subject-ID is a fixed one. For any other subject the user can set the type; it is saved in the data folder (`subject_types.json`) and applied on every connect, raw-log playback included.
+
+```http
+PUT    /api/subjects/{subject_id}/type { type } → { subject_id, type }   (400 not a compiled message type, 409 registers name it or not connected)
+DELETE /api/subjects/{subject_id}/type          → { subject_id, type: null }
+GET    /api/subjects/{subject_id}/type-guesses  → { samples, matches, candidates: [{type, custom, preview}] }   (409 already decoded or not connected)
+```
+
+`type` is a DSDL name, `uavcan.si.unit.velocity.Vector3.1.0` (the compiled spelling `..._1_0` works too). The registers' word wins: once a publisher names the subject's type, the user's type stops applying.
+
+`type-guesses` listens to the subject for 3 s (up to 20 messages) and returns the compiled message types every payload fits: decoded and encoded again, it gives back exactly the same bytes (on CAN FD, plus the zeros that fill a frame up). Up to 100, best first: plausible values (no NaN, infinity, or float beyond 1e12 or below 1e-12), then custom types, then types without a fixed subject-ID of their own. `preview` is the latest payload decoded as that type. `samples` is 0 if nothing was published on the subject meanwhile.
 
 ### Firmware updates
 

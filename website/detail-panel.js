@@ -28,7 +28,8 @@ const renderSubjectTable = (title, subjects) => {
     return `<div class="subject-card" data-subject="${s.subjectId}" tabindex="0" role="button">
       <div class="card-header">
         <span class="card-subject-id">${escapeHtml(String(s.subjectId))}</span>
-        <span class="card-type" title="${escapeHtml(s.messageType || '')}">${escapeHtml(s.messageType || 'awaiting data')}</span>
+        <span class="card-type" title="${escapeHtml(s.messageType || '')}">${escapeHtml(
+          s.messageType || (s.untyped ? 'type unknown · set it in Subjects' : 'awaiting data'))}</span>
         <span class="card-rate">${liveDot}${escapeHtml(rateStr)}</span>
       </div>
       ${metrics}

@@ -20,6 +20,8 @@ Checks, in order:
      and a raw log of the frames reads back through python-can;
   4a. a firmware update: node 50 accepts the command and reads the whole
      file from Cynitor with uavcan.file.Read, as a bootloader does;
+  4b. a subject no register names is not decoded; guessing its type from
+     its payloads offers the right one, and setting it decodes the subject;
   5. an adapter that disappears ends the session with an error;
   6. the databases are written to the session's data folder.
 
@@ -53,6 +55,7 @@ FD = "--fd" in sys.argv[1:]
 DATA_BITRATE = 2_000_000 if FD else None
 DEVICE_NODE_ID = 50
 TEMPERATURE_SUBJECT_ID = 1620
+UNNAMED_SUBJECT_ID = 1700  # published with no register naming its type
 TIMEOUT = 30.0
 
 
@@ -125,6 +128,16 @@ async def run() -> None:
             await temperature.publish(uavcan.si.sample.temperature.Scalar_1_0(kelvin=300.0))
             await asyncio.sleep(0.1)
     temperature_task = asyncio.ensure_future(publish_temperature())
+    # Straight through the presentation layer, so no register names its type.
+    # Twelve bytes: on CAN FD, padded to a sixteen-byte frame.
+    import uavcan.si.unit.velocity
+    velocity = device.presentation.make_publisher(uavcan.si.unit.velocity.Vector3_1_0, UNNAMED_SUBJECT_ID)
+
+    async def publish_velocity():
+        while True:
+            await velocity.publish(uavcan.si.unit.velocity.Vector3_1_0(meter_per_second=[1.0, 2.0, 3.5]))
+            await asyncio.sleep(0.1)
+    velocity_task = asyncio.ensure_future(publish_velocity())
 
     # Answers a software update the way a bootloader does: read the file,
     # chunk by chunk, from the node that sent the command.
@@ -223,12 +236,32 @@ async def run() -> None:
         session.firmware_folder.mkdir()
         (session.firmware_folder / "integration-2.0.app.bin").write_bytes(image)
         update = await session.begin_firmware_update(DEVICE_NODE_ID, "integration-2.0.app.bin")
-        check(update["state"] == "requested", f"node {DEVICE_NODE_ID} accepted the update command")
+        # A fast node may be reading already: the update is followed from before the command.
+        check(update["state"] in ("requested", "reading", "transferred"),
+              f"node {DEVICE_NODE_ID} accepted the update command")
         done = await wait_for(lambda: downloaded)
         check(done and downloaded[0] == image,
               f"node {DEVICE_NODE_ID} read the whole firmware file from Cynitor ({len(image)} bytes)")
         check(update["state"] == "transferred" and update["read"] == len(image),
               f"the update's progress followed the reads: {update['state']}, {update['read']} bytes")
+
+        listed = await wait_for(lambda: UNNAMED_SUBJECT_ID in
+                                (session.telemetry.get_all_nodes_info()["nodes"][DEVICE_NODE_ID]["publishers"]))
+        check(listed and UNNAMED_SUBJECT_ID not in session.scanner.subject_types,
+              f"subject {UNNAMED_SUBJECT_ID} is in the device's port list, but no register names its type")
+        from dsdl_manager import DsdlManager
+        types = DsdlManager(ROOT, data_dir=data).message_types()
+        guess = await session.guess_subject_type(UNNAMED_SUBJECT_ID, types)
+        offered = {c["type"]: c["preview"] for c in guess["candidates"]}
+        right = "uavcan.si.unit.velocity.Vector3.1.0"
+        check(guess["samples"] > 0 and offered.get(right) == {"meter_per_second": [1.0, 2.0, 3.5]},
+              f"guessing from {guess['samples']} payloads offers {right} among {guess['matches']} fitting types")
+        check("uavcan.si.sample.velocity.Vector3.1.0" not in offered,
+              "a type of another size (the same with a timestamp) is not offered")
+        session.set_subject_type(UNNAMED_SUBJECT_ID, right)
+        decoded = await wait_for(lambda: UNNAMED_SUBJECT_ID in session.telemetry.latest_by_subject)
+        values = decoded and session.telemetry.latest_by_subject[UNNAMED_SUBJECT_ID]["attributes"][0]["value"]
+        check(values == [1.0, 2.0, 3.5], f"subject {UNNAMED_SUBJECT_ID} decodes once its type is set: {values}")
 
         session.hub._still_present = lambda: False  # the adapter goes away
         gone = await wait_for(lambda: not session.is_running, timeout=10.0)
@@ -256,6 +289,7 @@ async def run() -> None:
               f"playback ends with the log: {session.last_error!r}")
     finally:
         temperature_task.cancel()
+        velocity_task.cancel()
         if session.is_running:
             await session.disconnect()
         tap.shutdown()

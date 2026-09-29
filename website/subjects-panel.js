@@ -42,6 +42,12 @@ const _fetchMissingServiceSchemas = () => {
   }
 };
 
+const subjectTypeLabel = (sid, event) => {
+  if (isUntypedSubject(sid)) return 'type unknown · click to set';
+  const type = event?.message_type || state.latestNodesPayload?.subject_types?.[sid]?.type || '-';
+  return subjectTypeSource(sid) === 'user' ? `${type} (set by you)` : type;
+};
+
 const buildSubjectsRows = () => {
   const nodes = state.latestNodesPayload?.nodes;
   if (!nodes || typeof nodes !== 'object') return [];
@@ -81,7 +87,7 @@ const buildSubjectsRows = () => {
       _rowId: `sub:${sid}`,
       id: sid,
       kind: 'Subject',
-      messageType: event?.message_type || '-',
+      messageType: subjectTypeLabel(sid, event),
       publishers: info.publishers.sort((a, b) => a - b).join(', '),
       subscribers: info.subscribers.sort((a, b) => a - b).join(', '),
       rate: getSubjectRate(event),
@@ -561,14 +567,153 @@ const openSubjectPlot = (rowData) => {
   detailPanel.classList.remove('hidden');
   _restoreDetailPanelState('subjects');
 
-  const event = state.latestBySubject.get(sid);
-  const typeName = event?.message_type || `Subject ${sid}`;
-  content.innerHTML = `<div class="detail-split">
+  _highlightSubjectRow(sid);
+  if (isUntypedSubject(sid)) {
+    openSubjectTypePanel(sid);
+    return;
+  }
+  const typeBar = subjectTypeSource(sid) === 'user' ? renderUserTypeBar(sid) : '';
+  content.innerHTML = `${typeBar}<div class="detail-split">
     <div class="detail-plot-area"></div>
   </div>`;
-
-  _highlightSubjectRow(sid);
+  content.querySelector('[data-type-change]')?.addEventListener('click', () => openSubjectTypePanel(sid));
+  content.querySelector('[data-type-clear]')?.addEventListener('click', () => clearSubjectType(sid));
   startPlotAnim();
+};
+
+// ── Types for subjects no register names (see WEBSOCKET_README "Subject types") ──
+
+const GUESS_LISTEN_S = 3;
+
+const renderUserTypeBar = (sid) => {
+  const type = state.latestNodesPayload?.subject_types?.[sid]?.type || '';
+  return `<div class="subject-type-bar">
+    <span>Decoded as <code>${escapeHtml(type)}</code>, set by you</span>
+    <button type="button" class="svc-btn" data-type-change>Change</button>
+    <button type="button" class="svc-btn" data-type-clear>Clear</button>
+  </div>`;
+};
+
+// The compiled message types, for the type field's suggestions.
+const fetchMessageTypeNames = async () => {
+  const data = await requestJson('/api/dsdl/namespaces');
+  const names = [];
+  const walk = (node) => {
+    for (const t of node.types || []) {
+      if (t.kind === 'message' && t.compiled) names.push(t.full_name);
+    }
+    Object.values(node.children || {}).forEach(walk);
+  };
+  Object.values(data.namespaces || {}).forEach(walk);
+  return names.sort();
+};
+
+const openSubjectTypePanel = (sid) => {
+  stopPlotAnim();
+  const content = el('selectedNodeContent');
+  content.innerHTML = `<div class="subject-type-panel">
+    <h3 class="subject-type-title">Subject ${sid}: which type is it?</h3>
+    <p class="subject-type-hint">No publisher names its type in registers, so Cynitor cannot decode it
+      on its own. Choose from the types its messages fit, or enter one.</p>
+    <form class="subject-type-form" data-subject-type-form>
+      <input type="text" list="subjectTypeNames" data-subject-type-input autocomplete="off" required
+             aria-label="DSDL type" placeholder="e.g. uavcan.primitive.scalar.Real32.1.0">
+      <datalist id="subjectTypeNames"></datalist>
+      <button type="submit" class="svc-btn">Decode</button>
+    </form>
+    <div class="subject-type-guess" data-subject-type-guess aria-live="polite"></div>
+  </div>`;
+  const input = content.querySelector('[data-subject-type-input]');
+  content.querySelector('[data-subject-type-form]').addEventListener('submit', (e) => {
+    e.preventDefault();
+    applySubjectType(sid, input.value.trim());
+  });
+  fetchMessageTypeNames().then((names) => {
+    content.querySelector('#subjectTypeNames').innerHTML =
+      names.map((n) => `<option value="${escapeHtml(n)}"></option>`).join('');
+  }).catch(() => {});  // suggestions only
+  guessSubjectType(sid, content.querySelector('[data-subject-type-guess]'));
+};
+
+const renderTypeCandidates = (data) => `
+  <div class="subject-type-guess-head">
+    <span>${data.matches} type${data.matches === 1 ? '' : 's'} fit the ${data.samples} messages heard${
+      data.matches > data.candidates.length ? `; the best ${data.candidates.length} are shown` : ''}.
+      Each preview is the latest message decoded as that type.</span>
+    <input type="search" data-guess-filter aria-label="Filter types" placeholder="filter">
+  </div>
+  <ul class="subject-type-candidates">${data.candidates.map((c) => `
+    <li class="subject-type-candidate" data-type="${escapeHtml(c.type.toLowerCase())}">
+      <span class="subject-type-name">${escapeHtml(c.type)}${
+        c.custom ? ' <span class="subject-type-badge">custom</span>' : ''}</span>
+      <code class="subject-type-preview" title="${escapeHtml(JSON.stringify(c.preview))}">${
+        escapeHtml(JSON.stringify(c.preview))}</code>
+      <button type="button" class="svc-btn" data-use-type="${escapeHtml(c.type)}">Use</button>
+    </li>`).join('')}
+  </ul>`;
+
+const guessSubjectType = async (sid, box) => {
+  box.textContent = `Listening to subject ${sid} for ${GUESS_LISTEN_S} s…`;
+  let data;
+  try {
+    data = await requestJson(`/api/subjects/${sid}/type-guesses`);
+  } catch (e) {
+    data = { error: e?.data?.error || e.message };
+  }
+  if (!box.isConnected) return;
+  const again = '<button type="button" class="svc-btn" data-guess-again>Listen again</button>';
+  if (data.error) {
+    box.innerHTML = `<p>Could not listen: ${escapeHtml(data.error)}</p>${again}`;
+  } else if (!data.samples) {
+    box.innerHTML = `<p>Nothing was published on subject ${sid} in ${GUESS_LISTEN_S} s.</p>${again}`;
+  } else if (!data.candidates.length) {
+    box.innerHTML = `<p>${data.samples} messages heard, and no compiled type fits them exactly. If it is
+      your own type, add its DSDL in the DSDL view, compile it, and listen again.</p>${again}`;
+  } else {
+    box.innerHTML = renderTypeCandidates(data);
+    box.querySelector('[data-guess-filter]').addEventListener('input', (e) => {
+      const text = e.target.value.trim().toLowerCase();
+      box.querySelectorAll('.subject-type-candidate').forEach((li) => {
+        li.classList.toggle('hidden', !li.dataset.type.includes(text));
+      });
+    });
+    box.querySelectorAll('[data-use-type]').forEach((btn) => {
+      btn.addEventListener('click', () => applySubjectType(sid, btn.dataset.useType));
+    });
+  }
+  box.querySelector('[data-guess-again]')?.addEventListener('click', () => guessSubjectType(sid, box));
+};
+
+// Reopens the subject once its type changed: its plot, or the type panel.
+const reopenSubject = (sid) => {
+  state.selectedPlotSubject = null;
+  openSubjectPlot({ id: sid });
+};
+
+const applySubjectType = async (sid, type) => {
+  if (!type) return;
+  try {
+    await requestJson(`/api/subjects/${sid}/type`, { method: 'PUT', body: JSON.stringify({ type }) });
+  } catch (e) {
+    showToast(`Subject ${sid}: ${e?.data?.error || e.message}`, 'error');
+    return;
+  }
+  const types = state.latestNodesPayload?.subject_types;
+  if (types) types[sid] = { type, set_by: 'user' };  // until the next node poll says so
+  showToast(`Subject ${sid} is decoded as ${type}`, 'info');
+  reopenSubject(sid);
+};
+
+const clearSubjectType = async (sid) => {
+  try {
+    await requestJson(`/api/subjects/${sid}/type`, { method: 'DELETE' });
+  } catch (e) {
+    showToast(`Subject ${sid}: ${e?.data?.error || e.message}`, 'error');
+    return;
+  }
+  delete state.latestNodesPayload?.subject_types?.[sid];
+  state.latestBySubject.delete(sid);  // its last decoded message is not its type any more
+  reopenSubject(sid);
 };
 
 const _highlightSubjectRow = (sid) => {
