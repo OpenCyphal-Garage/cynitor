@@ -202,6 +202,17 @@ class BusLoadMonitor:
             raise
 
 
+def bound_address(bind: str, port: int) -> str:
+    """Where the server listens, as a link a terminal lets the user click.
+
+    A wildcard address is no place a browser can go, so it stays as it is.
+    """
+    host = f"[{bind}]" if ":" in bind else bind  # an IPv6 address, as a URL writes it
+    if bind in ("0.0.0.0", "::"):
+        return f"{host}:{port} (all interfaces)"
+    return f"http://{host}:{port}/"
+
+
 # ---------------------------------------------------------------------------
 # CAN session lifecycle
 # ---------------------------------------------------------------------------
@@ -1118,7 +1129,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
     logger.info("=" * 60)
     logger.info("SERVER RUNNING")
     logger.info("=" * 60)
-    logger.info("Bound to:    %s:%d", bind, port)
+    logger.info("Bound to:    %s", bound_address(bind, port))
     logger.info("Auth:        %s", "token required (CYNITOR_AUTH_TOKEN set)" if auth_token else "OPEN (no token)")
     logger.info("Data:        %s", data_path)
     show_token_on_terminal(auth_token)

@@ -147,7 +147,7 @@ Output:
 ============================================================
 SERVER RUNNING
 ============================================================
-Bound to:    127.0.0.1:8080
+Bound to:    http://127.0.0.1:8080/
 REST API:    http://localhost:8080/api/
 Health:      http://localhost:8080/api/health
 Status:      http://localhost:8080/api/status
