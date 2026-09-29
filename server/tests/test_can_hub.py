@@ -355,6 +355,14 @@ class TestPickFreeNodeId:
     def test_none_when_every_node_id_is_taken(self, channel):
         assert self._pick_while_publishing(channel, list(range(128))) is None
 
+    def test_can_fd_bus_is_opened_for_fd_frames(self, channel, monkeypatch):
+        # A SocketCAN socket gets no CAN FD frames unless asked for them.
+        opened = []
+        real_bus = can.Bus
+        monkeypatch.setattr(can_hub.can, "Bus", lambda **kw: opened.append(kw) or real_bus(interface="virtual", channel=channel))
+        pick_free_node_id(f"virtual:{channel}", rng=random.Random(0), fd=True)
+        assert opened[0]["fd"] is True
+
     def test_any_node_id_on_a_quiet_bus(self, channel):
         pick = pick_free_node_id(f"virtual:{channel}", rng=random.Random(0))
         assert 0 <= pick <= 127
@@ -591,3 +599,27 @@ class TestFrameCallback:
         finally:
             a.shutdown()
             h.stop()
+
+
+class TestNoFiltersOnVirtualChannels:
+    """Setting filters waits on the lock pycyphal's reader holds; see _no_filters_on_virtual_channels."""
+
+    def test_skipped_on_a_virtual_channel(self):
+        from unittest.mock import MagicMock
+        from pycyphal.transport.can.media import FilterConfiguration
+        from pycyphal.transport.can.media.pythoncan import PythonCANMedia
+        media = PythonCANMedia("virtual:test-no-filters", 500_000)
+        try:
+            media._bus.set_filters = MagicMock()
+            media.configure_acceptance_filters([FilterConfiguration.new_promiscuous()])
+            media._bus.set_filters.assert_not_called()
+        finally:
+            media.close()
+
+    def test_kept_on_a_real_adapter(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        from pycyphal.transport.can.media.pythoncan import PythonCANMedia
+        adapter = SimpleNamespace(interface_name="pcan:PCAN_USBBUS1", _closed=False, _bus=MagicMock())
+        PythonCANMedia.configure_acceptance_filters(adapter, [])
+        adapter._bus.set_filters.assert_called_once_with([])

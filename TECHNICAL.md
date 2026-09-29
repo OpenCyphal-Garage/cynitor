@@ -72,12 +72,14 @@ EventLogger.start()        SQLite persistence
 | `can_config.py` | Interface-spec and bitrate rules: bare names mean SocketCAN, `--bitrate` is required for anything else, `UAVCAN__CAN__BITRATE` is published as `"<n> <n>"` (`"<n> <data>"` for CAN FD); which adapters can run CAN FD, and whether a SocketCAN interface is set up for it |
 | `can_discovery.py` | Lists the adapters the dashboard offers besides SocketCAN: python-can vendor detection (PEAK, Kvaser, Vector, IXXAT), and off Linux a gs_usb USB scan and slcan serial ports by USB ID; cached for 10 s in `AdapterCatalog` |
 | `can_hub.py` | Opens a non-SocketCAN adapter once and bridges it to an in-process python-can `virtual` channel that the allocator probe, allocator and scanner all open instead; also picks Cynitor's node-ID from heartbeats on that channel; for those adapters it also opens CAN FD adapters with pycyphal's parameters, measures bus load (`HubBusLoad`, from forwarded frames' time on the wire, counted as canbusload counts: worst-case stuffing, CAN FD data phase at the data rate), counts error frames, and, for gs_usb, whose reads hide USB errors, checks every few seconds that the device is still enumerated |
-| `startup_setup.py` | DSDL compilation via `nnvg`, sets `UAVCAN__CAN__IFACE` / `UAVCAN__CAN__MTU` (64 for CAN FD, else 8), calls `yakut accommodate` for node ID |
+| `startup_setup.py` | DSDL compilation via `nnvg`, sets `UAVCAN__CAN__IFACE` / `UAVCAN__CAN__MTU` (64 for CAN FD, else 8), calls `yakut accommodate` for the node-ID only as a fallback: the session picks one itself first (`CANSession._pick_node_id`, from heartbeats, as the hub path does) |
 | `node_identity_map.py` | Bidirectional `unique_id ↔ node_id` mapping with displacement detection, snapshot storage, and SQLite-backed persistence |
 | `data_dir.py` | The data folder: per-user default per OS (`STATE_DIRECTORY` under systemd), `--data-dir` / `CYNITOR_DATA_DIR` override, and the one-time move of databases an earlier version left in the working directory, each with its `-wal`/`-shm` files |
 | `log_store.py` | In-memory deque (max 5000) fed by a `logging.Handler`; exposed via `/api/logs` |
 | `dsdl_manager.py` | DSDL discovery, namespace tree, source/compiled state, custom-type CRUD in the data folder (`dsdl/custom`, compiled to `dsdl/compiled`), compilation in-process via `pycyphal.dsdl.compile` (no `nnvg`, so it works frozen) |
-| `raw_log.py` | Raw CAN logs: `RawLog` writes frames to a candump `.log` file (python-can's `CanutilsLogWriter`, behind a lock), `SocketcanTap` is the listen-only second socket that feeds it on SocketCAN; behind the hub, `CANHub.on_frame` feeds it. Started and stopped by `CANSession.start_raw_log` / `stop_raw_log` |
+| `raw_log.py` | Raw CAN logs: `RawLog` writes frames to a candump `.log` file (python-can's `CanutilsLogWriter`, behind a lock), `SocketcanTap` is the listen-only second socket that feeds it on SocketCAN; behind the hub, `CANHub.on_frame` feeds it. Started and stopped by `CANSession.start_raw_log` / `stop_raw_log`, which also writes the `.types.json` sidecar (subject types, servers, names, bitrates). `LogPlayer` is a python-can bus that plays a log at its pace ÷ speed; `CANSession.play_raw_log` opens it through the hub, with the scanner in `offline` mode taking ports from the sidecar instead of asking nodes |
+| `firmware.py` | Firmware updates: `FirmwareServer` answers `uavcan.file.Read` (only that, from the data folder's `firmware/`) on the scanner's node and follows each update's progress; `send_update_command` sends ExecuteCommand BEGIN_SOFTWARE_UPDATE. `CANSession.begin_firmware_update` ties them together |
+| `type_guess.py` | Guessing a subject's type: `rank_types` keeps the compiled message types every sampled payload round-trips through exactly (CAN FD frame padding allowed) and ranks them by plausible values, custom first, fixed-port last. Payloads come from `ScannerNode.sample_subject` (a transport-level input session); `ScannerNode.set_subject_type` and `CANSession.set_subject_type` apply and save the chosen type (`subject_types.json`) |
 | `replay.py` | Recording-replay engine: streams `recording_events` rows back through subscriber queues at controlled speed; mirrors `TelemetryManager`'s broadcast shape so the WS handler picks one source per session (telemetry XOR replay) |
 
 ### CLI flags
@@ -259,6 +261,8 @@ cynitor/
     replay.py               Recording replay engine (subscriber queues + timing)
     frame_capture.py        Raw CAN frame capture (transport-level tap)
     raw_log.py              Raw CAN logs to candump .log files
+    firmware.py             Firmware updates: file server for bootloaders
+    type_guess.py           Guessing a subject's type from its payloads
     requirements.txt        Python runtime deps
     requirements-dev.txt    Adds pytest + pytest-asyncio for the test suite
     tests/                  pytest unit tests
@@ -294,6 +298,8 @@ cynitor/
     deb/                    control template, systemd unit, /etc/default file
     appimage/               AppRun, desktop entry, icon
   python_compiled_messages/ nnvg output (gitignored)
+  tools/
+    demo_nodes.py           Demo Cyphal nodes on a vcan, for trying Cynitor without hardware
   README.md                 User-facing intro
   TECHNICAL.md              This file
   WEBSOCKET_README.md       API contract reference

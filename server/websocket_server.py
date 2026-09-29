@@ -13,7 +13,8 @@ from aiohttp import web, WSCloseCode
 
 from can_config import is_explicit_spec, is_socketcan, resolve_bitrate, resolve_data_bitrate, socketcan_device
 from version import __version__
-from raw_log import list_logs, log_path
+from firmware import MAX_FIRMWARE_BYTES, firmware_path, list_firmware
+from raw_log import list_logs, log_path, sidecar_path
 
 
 def _csv_escape(value: Any) -> str:
@@ -287,6 +288,14 @@ class WebSocketServer:
         self.app.router.add_post('/api/rawlogs/stop', self._stop_raw_log)
         self.app.router.add_get('/api/rawlogs/{name}', self._download_raw_log)
         self.app.router.add_delete('/api/rawlogs/{name}', self._delete_raw_log)
+        self.app.router.add_post('/api/rawlogs/{name}/play', self._play_raw_log)
+        self.app.router.add_put('/api/subjects/{subject_id}/type', self._set_subject_type)
+        self.app.router.add_delete('/api/subjects/{subject_id}/type', self._clear_subject_type)
+        self.app.router.add_get('/api/subjects/{subject_id}/type-guesses', self._guess_subject_type)
+        self.app.router.add_get('/api/firmware', self._get_firmware)
+        self.app.router.add_post('/api/firmware', self._upload_firmware)
+        self.app.router.add_delete('/api/firmware/{name}', self._delete_firmware)
+        self.app.router.add_post('/api/nodes/{node_id}/firmware', self._update_firmware)
 
         self.app.router.add_post('/api/replay/start', self._replay_start)
         self.app.router.add_post('/api/replay/control', self._replay_control)
@@ -481,7 +490,142 @@ class WebSocketServer:
         if active is not None and active.path == path:
             return web.json_response({"error": "Stop the raw log before deleting it"}, status=409)
         path.unlink()
+        sidecar_path(path).unlink(missing_ok=True)
         return web.json_response({"deleted": path.name})
+
+    async def _play_raw_log(self, request: web.Request) -> web.Response:
+        """Connect to a saved raw log as if it were the bus; POST /api/can/disconnect stops it."""
+        if self._raw_log_file(request) is None:
+            return web.json_response({"error": "No such raw log"}, status=404)
+        try:
+            body = await request.json() if request.can_read_body else {}
+        except Exception:
+            return web.json_response({"error": "Invalid JSON body"}, status=400)
+        speed = body.get("speed", 1) if isinstance(body, dict) else 1
+        if isinstance(speed, bool) or not isinstance(speed, (int, float)) or not 0 <= speed <= 1000:
+            return web.json_response({"error": "speed must be a number from 0 (as fast as possible) to 1000"},
+                                     status=400)
+        if self.session.is_running:
+            return web.json_response({"error": "Disconnect CAN before playing a raw log"}, status=409)
+        name = request.match_info["name"]
+        try:
+            await self.session.play_raw_log(name, float(speed))
+        except Exception as e:
+            logger.error(f"Failed to play raw log {name}: {e}", exc_info=True)
+            return web.json_response({"error": str(e)}, status=500)
+        return web.json_response({"status": "running", "can_interface": f"rawlog:{name}",
+                                  "can_fd": self.session.can_fd})
+
+    # ── Subject types the user sets or has guessed (see type_guess.py) ──
+
+    async def _set_subject_type(self, request: web.Request) -> web.Response:
+        subject_id, err = _parse_int(request.match_info.get('subject_id'), 'subject_id', 0, MAX_SUBJECT_ID)
+        if err:
+            return err
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON body"}, status=400)
+        type_name = body.get("type") if isinstance(body, dict) else None
+        if not isinstance(type_name, str) or not type_name.strip():
+            return web.json_response({"error": "type is required, e.g. uavcan.primitive.scalar.Real32.1.0"},
+                                     status=400)
+        return self._subject_type_change(subject_id, type_name.strip())
+
+    async def _clear_subject_type(self, request: web.Request) -> web.Response:
+        subject_id, err = _parse_int(request.match_info.get('subject_id'), 'subject_id', 0, MAX_SUBJECT_ID)
+        if err:
+            return err
+        return self._subject_type_change(subject_id, None)
+
+    def _subject_type_change(self, subject_id: int, type_name: Optional[str]) -> web.Response:
+        try:
+            self.session.set_subject_type(subject_id, type_name)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        except RuntimeError as e:
+            return web.json_response({"error": str(e)}, status=409)
+        return web.json_response({"subject_id": subject_id, "type": type_name})
+
+    async def _guess_subject_type(self, request: web.Request) -> web.Response:
+        subject_id, err = _parse_int(request.match_info.get('subject_id'), 'subject_id', 0, MAX_SUBJECT_ID)
+        if err:
+            return err
+        if not self.dsdl_manager:
+            return web.json_response({"error": "DSDL manager not available"}, status=503)
+        types = await asyncio.to_thread(self.dsdl_manager.message_types)
+        try:
+            result = await self.session.guess_subject_type(subject_id, types)
+        except RuntimeError as e:
+            return web.json_response({"error": str(e)}, status=409)
+        return web.json_response(result)
+
+    # ── Firmware updates (see firmware.py) ──
+
+    async def _get_firmware(self, request: web.Request) -> web.Response:
+        firmware, scanner = self.session.firmware, self.session.scanner
+        updates = {str(nid): {**u, "mode": scanner.node_mode(nid)}
+                   for nid, u in firmware.updates.items()} if firmware else {}
+        return web.json_response({"files": list_firmware(self.session.firmware_folder), "updates": updates})
+
+    async def _upload_firmware(self, request: web.Request) -> web.Response:
+        """The request body is the file; ?name= names it, replacing any file of that name."""
+        name = request.query.get("name", "")
+        path = firmware_path(self.session.firmware_folder, name)
+        if path is None:
+            return web.json_response(
+                {"error": "name must be a plain file name: letters, digits, '.', '_' or '-'"}, status=400)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        partial = path.with_name(f".{path.name}.part")  # not a firmware name until complete
+        size = 0
+        try:
+            with partial.open("wb") as f:
+                async for chunk in request.content.iter_chunked(64 * 1024):
+                    size += len(chunk)
+                    if size > MAX_FIRMWARE_BYTES:
+                        raise ValueError
+                    f.write(chunk)
+            if size == 0:
+                raise ValueError
+            partial.replace(path)
+        except ValueError:
+            partial.unlink(missing_ok=True)
+            return web.json_response(
+                {"error": f"A firmware file holds 1 byte to {MAX_FIRMWARE_BYTES // (1024 * 1024)} MiB"},
+                status=413 if size else 400)
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            raise
+        return web.json_response({"name": name, "bytes": size}, status=201)
+
+    async def _delete_firmware(self, request: web.Request) -> web.Response:
+        path = firmware_path(self.session.firmware_folder, request.match_info["name"])
+        if path is None or not path.is_file():
+            return web.json_response({"error": "No such firmware file"}, status=404)
+        path.unlink()
+        return web.json_response({"deleted": path.name})
+
+    async def _update_firmware(self, request: web.Request) -> web.Response:
+        """Tell a node to update its software from an uploaded file."""
+        node_id, err = _parse_int(request.match_info.get('node_id'), 'node_id', 0, MAX_NODE_ID)
+        if err:
+            return err
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON body"}, status=400)
+        name = body.get("file") if isinstance(body, dict) else None
+        if not isinstance(name, str):
+            return web.json_response({"error": "file is required"}, status=400)
+        try:
+            update = await self.session.begin_firmware_update(node_id, name)
+        except FileNotFoundError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        except TimeoutError as e:
+            return web.json_response({"error": str(e)}, status=504)
+        except RuntimeError as e:
+            return web.json_response({"error": str(e)}, status=409)
+        return web.json_response(update)
 
     async def _can_disconnect(self, request: web.Request) -> web.Response:
         from main import discover_can_interfaces

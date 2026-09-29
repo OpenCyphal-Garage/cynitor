@@ -43,7 +43,6 @@ and want to reload without restarting the backend.
 
 These extend functionality but are not required to run the dashboard — the code degrades gracefully when each is absent.
 
-- `pip install yakut` — needed for `yakut accommodate` (automatic node-ID assignment). Without it the backend logs a warning and starts with no auto-assigned ID.
 - **Linux:** `sudo apt install can-utils` — provides `canbusload` for the bus-utilization sparkline on SocketCAN interfaces. Without it utilization stays at 0%; everything else works. Other adapters (see [Platforms](#platforms)) need nothing: Cynitor measures their load itself.
 - **Windows / macOS:** install the `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) — see [Platforms](#platforms) for the transport-spec syntax.
 - `pip install -r server/requirements-dev.txt` — only if you want to run the backend test suite (adds `pytest` and `pytest-asyncio` on top of the runtime requirements).
@@ -71,12 +70,29 @@ cd website && python3 -m http.server 5500
 Then open `http://localhost:5500` instead. The address field defaults to
 `http://localhost:8080`, which is where the backend is listening.
 
+### 3. No hardware? Try the demo nodes
+
+On Linux, a virtual CAN interface and `tools/demo_nodes.py` give Cynitor
+something to watch:
+
+```bash
+sudo ip link add dev vcan0 type vcan && sudo ip link set vcan0 up
+python3 tools/demo_nodes.py --iface vcan0     # add --fd on a CAN FD vcan (mtu 72)
+```
+
+Then connect Cynitor to `vcan0`. Node 50 (`demo.sensor`) publishes a
+temperature named in its registers (decoded and plotted), a velocity no
+register names (click subject 1700 in Subjects to have its type guessed),
+and diagnostics every 3 s (the log panel). Its Services tab restarts it, and
+**Update firmware…** makes it act like a bootloader reading the file from
+Cynitor. `--conflict` adds a second node on the same node-ID after 10 s.
+
 ## Features
 
 - **Live node table** — sortable, filterable, with health, message rate, uptime, and per-row publisher/subscriber/server/client port lists. Pin favourites to the top with a star, hide offline nodes you don't care about.
-- **Subject browser** — a second view (toggle via sidebar tabs) that lists every subject and service on the network. Expand any service inline to send requests to specific nodes without leaving the subject-centric view.
+- **Subject browser** — a second view (toggle via sidebar tabs) that lists every subject and service on the network. Expand any service inline to send requests to specific nodes without leaving the subject-centric view. A subject no register names the type of says so; click it, and Cynitor listens to it and lists the types its messages fit, each with the latest message decoded as it, custom DSDL types first. Pick one (or type any compiled type) and it decodes, plots and records like any other, in later sessions too.
 - **Per-subject inspection** — click a node, then a subject card in the detail panel, to see live message attributes and a 60-second history.
-- **Service interaction** — invoke services on remote nodes with auto-discovered request schemas, expandable composite fields, and a persistent call history (stored in SQLite, survives restarts). Nodes that serve `uavcan.node.ExecuteCommand` get Restart and Factory reset buttons.
+- **Service interaction** — invoke services on remote nodes with auto-discovered request schemas, expandable composite fields, and a persistent call history (stored in SQLite, survives restarts). Nodes that serve `uavcan.node.ExecuteCommand` get Restart and Factory reset buttons, and **Update firmware…**: pick a `.bin` and Cynitor serves it to the node's Cyphal bootloader (e.g. Zubax Kocherga), with a progress bar as the node reads it.
 - **Node history** — lifecycle tracking with health/mode changes, restarts, service calls, and per-subject telemetry summaries. Two nodes sharing a node-ID, or publishing one subject with different types, are flagged there. Retained for 30 days.
 - **Network topology** — D3 force-directed graph of device and subject nodes with directional pub/sub links and animated live-traffic. Three view modes (nodes only / node-centric / subject-centric), drag-to-pin with persistent positions, adjacency highlighting, hide-system / hide-offline / per-node-or-subject hide with a restore badge, inline device rename, gravity bias by total links / channels / rate / payload, and per-link rate/payload overlays.
 - **Multi-attribute plots** — each numeric attribute gets its own panel with its own y-axis, so a fast-growing uptime doesn't squash a small voltage reading. Interactive three-zone legend pills for color, line style, and visibility.
@@ -84,7 +100,7 @@ Then open `http://localhost:5500` instead. The address field defaults to
 - **Compare view** — independent graphs for side-by-side multi-series comparison with derived series (delta, ratio, moving average, min/max, rate of change), thresholds, timeline markers (Shift+click), freehand drawing (Alt+drag), crosshair sync across graphs, and workspace export/import.
 - **DSDL Inspector** — searchable tree of all loaded DSDL types with bus-activity indicators (which types are actually being seen on the wire), field-level search, and dependency navigation. Create, edit, compile and delete custom DSDL types, kept in the data folder (`dsdl/custom`, compiled into `dsdl/compiled`), with a compile-state lock. Compiling runs inside Cynitor, so it works in the packaged binaries too.
 - **Recordings** — capture filtered events into per-recording SQLite stores with `max_length` / `max_events` limits and `stop_on_limit`. Quick-save the last N seconds from the global buffer, duplicate a configuration with "New like this", edit limits on live recordings without stopping them, and export per recording as CSV or JSONL. Replay any recording through the live UI with play/pause/seek/speed controls.
-- **Raw CAN logs** — record every frame on the bus (Classic, CAN FD and error frames) to a candump `.log` file from the Record view, and download it: python-can, SavvyCAN and can-utils open it, and `log2asc` turns it into Vector ASC.
+- **Raw CAN logs** — record every frame on the bus (Classic, CAN FD and error frames) to a candump `.log` file from the Record view, and download it: python-can, SavvyCAN and can-utils open it, and `log2asc` turns it into Vector ASC. Play a saved log back (1×, 10×, 100×, or as fast as possible) with CAN disconnected, and the dashboard shows it as if it were the live bus.
 - **Right log panel** — hidden by default, resizable; merges live `uavcan.diagnostic.Record` (subject 8184), any user-added text-bearing subject, and the backend's Python logs (polled from `/api/logs`) into one timeline. Per-source toggle pills with live count badges, severity floor across all sources, amber disconnect indicator when the backend is unreachable.
 - **Dark / light theme**, sidebar collapse, resizable detail panel.
 - **Auto-reconnect** on transient backend or frontend-server outages.
@@ -117,7 +133,7 @@ Other options:
 Bus history (24 h), node history (30 days), service-call history, recordings,
 remembered device names, and the allocator's table of which device got which
 node-ID are kept in SQLite files in one data folder, whatever folder Cynitor
-is started from. Raw CAN logs go in its `raw/` subfolder:
+is started from, as are the types you set for subjects. Raw CAN logs go in its `raw/` subfolder, firmware files for updates in `firmware/`:
 
 | OS | Data folder |
 |----|-------------|
@@ -163,7 +179,7 @@ On Windows, `pip install -r requirements.txt` also installs what candleLight ada
 
 Most such adapters can be opened by only one program at a time. Cynitor opens the adapter once and shares it between its own parts internally, so it works with them — but nothing else can use the adapter while Cynitor is connected. Stop other CAN tools first.
 
-The node-ID Cynitor uses for itself is picked the way `yakut accommodate` does it (listen to heartbeats, choose a free one), without needing yakut.
+On every platform, the node-ID Cynitor uses for itself is picked the way `yakut accommodate` does it (listen to heartbeats, choose a free one), without needing yakut. Set `UAVCAN__NODE__ID` to choose it yourself.
 
 For these adapters Cynitor measures bus load itself, from the frames passing through it, counted the way `canbusload` counts them by default (worst-case bit stuffing; for CAN FD, the data phase at the data rate). Error frames are counted too, when the adapter's driver reports them; they show in the Debugging view. It also notices a CANable being unplugged and disconnects, as it does when SocketCAN reports the interface gone; other adapters' drivers report that themselves. What it cannot see off SocketCAN are the controller's error counters and error-passive/bus-off state. The rest of the stack — REST/WebSocket server, DSDL Inspector, recordings, log panel, telemetry — works the same on all three OSes. Install whichever `python-can` backend your CAN adapter needs (PCAN, Kvaser, Vector, SLCAN-over-USB, …) and pass its transport string.
 
@@ -203,7 +219,7 @@ chmod +x cynitor-server-*-x86_64.AppImage && ./cynitor-server-*-x86_64.AppImage
 ```
 
 On Windows, run the `.exe` from a terminal, e.g.
-`.\cynitor-server-0.9.0-windows-x86_64.exe`. It includes what candleLight
+`.\cynitor-server-0.10.0-windows-x86_64.exe`. It includes what candleLight
 adapters (CANable) need; other adapters need their vendor's driver
 installed (PEAK, Kvaser, Vector, IXXAT). Windows may warn about an
 unrecognised app the first time, as the executable is not code-signed.
@@ -295,9 +311,11 @@ show how to narrow that to a dedicated user.
 
 **"Frontend Server Unavailable" overlay appears.** Only happens when the dashboard is served separately for frontend work: the static-file server on port 5500 stopped responding. Restart it with `cd website && python3 -m http.server 5500`. Cynitor reloads automatically once it's back. Served from the backend, this cannot occur.
 
-**Backend won't connect to CAN.** Check that the interface exists (`ip link show vcan0`) and that you have permission to open it. If `yakut accommodate` fails, the backend logs a warning but still starts — the node ID just won't be auto-assigned. Check `/api/logs` or stderr for the full error.
+**Backend won't connect to CAN.** Check that the interface exists (`ip link show vcan0`) and that you have permission to open it. Check `/api/logs` or stderr for the full error.
 
-**No nodes appearing.** Confirm there are publishers on the bus (`yakut sub uavcan.node.Heartbeat.1.0`). On a virtual interface (`vcan0`) you also need a publisher on the same `vcan` interface — the backend doesn't generate traffic on its own.
+**A node shows up but never answers (no name, no registers).** Its heartbeats reach Cynitor, but Cynitor's requests do not reach it. The log says so, and on a CAN FD bus names the usual cause: a node running Classic CAN receives none of Cynitor's CAN FD frames. Run every node in CAN FD, or set the interface to Classic CAN (see [CAN FD](#can-fd)).
+
+**No nodes appearing.** Confirm there are publishers on the bus (`yakut sub uavcan.node.Heartbeat.1.0`). On a virtual interface (`vcan0`) you also need a publisher on the same `vcan` interface — the backend doesn't generate traffic on its own. `tools/demo_nodes.py` is one (see [No hardware?](#3-no-hardware-try-the-demo-nodes)).
 
 
 **Port already in use.** For the backend, pass `--port 9099` (or any free port). For the separate frontend server used during development, run `python3 -m http.server 8088` and open the matching URL.

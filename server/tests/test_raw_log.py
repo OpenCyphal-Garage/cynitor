@@ -3,7 +3,7 @@
 import datetime
 import time
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import can
 import pytest
@@ -182,3 +182,152 @@ class TestSocketcanTap:
         assert opened == {"interface": "socketcan", "channel": "vcan0", "fd": True}
         assert [m.arbitration_id for m in seen] == [0x7]
         assert not tap._thread.is_alive()
+
+
+# ── Playback ──
+
+from raw_log import LogPlayer, log_has_fd_frames, read_sidecar, sidecar_path, write_sidecar
+
+
+def _log_with(tmp_path, frames):
+    log = RawLog(tmp_path / "cynitor-20260928-120000.log", channel="can0")
+    for msg in frames:
+        log.write(msg)
+    log.close()
+    return log.path
+
+
+def _heartbeat(node_id, t, is_rx=True):
+    return can.Message(timestamp=1790000000 + t, arbitration_id=0x107D5500 | node_id, data=b"\x01", is_rx=is_rx)
+
+
+def _drain(bus, limit=2.0):
+    got, deadline = [], time.monotonic() + limit
+    while time.monotonic() < deadline:
+        try:
+            msg = bus.recv(timeout=0.05)
+        except can.CanOperationError as exc:
+            return got, str(exc)
+        if msg is not None:
+            got.append(msg)
+    return got, None
+
+
+class TestLogPlayer:
+    def test_plays_the_bus_without_the_cynitor_that_logged_it(self, tmp_path):
+        path = _log_with(tmp_path, [_heartbeat(50, 0), _heartbeat(46, 0.1, is_rx=False), _heartbeat(50, 0.2, is_rx=False)])
+        bus = LogPlayer(path, speed=0, skip_node_id=46)
+        bus.play()
+        got, end = _drain(bus)
+        assert [m.arbitration_id & 0x7F for m in got] == [50, 50]
+        assert all(m.is_rx for m in got)  # logged on this host or not, it comes from the "bus" now
+        assert end == "end of the raw log"
+
+    def test_silent_until_play(self, tmp_path):
+        bus = LogPlayer(_log_with(tmp_path, [_heartbeat(50, 0)]), speed=0)
+        assert bus.recv(timeout=0.2) is None
+        bus.play()
+        assert bus.recv(timeout=0.2).arbitration_id & 0x7F == 50
+
+    def test_speed_scales_the_logged_pace(self, tmp_path):
+        bus = LogPlayer(_log_with(tmp_path, [_heartbeat(50, 0), _heartbeat(50, 1.0)]), speed=10)
+        bus.play()
+        start = time.monotonic()
+        got, _ = _drain(bus)
+        assert len(got) == 2 and 0.07 < time.monotonic() - start < 0.5  # 1 s of log at 10x
+
+    def test_sending_is_ignored(self, tmp_path):
+        LogPlayer(_log_with(tmp_path, [_heartbeat(50, 0)])).send(_heartbeat(1, 0))
+
+
+class TestSidecar:
+    def test_round_trip(self, tmp_path):
+        path = _log_with(tmp_path, [_heartbeat(50, 0)])
+        write_sidecar(path, {"names": {"50": "x"}})
+        assert sidecar_path(path).name == "cynitor-20260928-120000.types.json"
+        assert read_sidecar(path) == {"names": {"50": "x"}}
+
+    def test_missing_sidecar_reads_empty(self, tmp_path):
+        assert read_sidecar(_log_with(tmp_path, [_heartbeat(50, 0)])) == {}
+
+    def test_fd_frames_detected(self, tmp_path):
+        classic = _log_with(tmp_path, [_heartbeat(50, 0)])
+        assert not log_has_fd_frames(classic)
+        classic.unlink()
+        fd = _log_with(tmp_path, [can.Message(timestamp=1790000000, arbitration_id=0x123, is_fd=True, data=bytes(12))])
+        assert log_has_fd_frames(fd)
+
+
+class TestSessionPlayback:
+    def test_stopping_a_log_keeps_what_the_session_knew(self, running_session):
+        import numpy
+        scanner = running_session.scanner
+        scanner.active_publishers = {1620: {50}, 7509: {50}}
+        scanner.subject_types = {1620: "uavcan.si.sample.temperature.Scalar_1_0"}
+        scanner.node_service_types = {50: {384: "uavcan.register.Access_1_0"}}
+        node = SimpleNamespace(info_response=SimpleNamespace(name=numpy.frombuffer(b"demo.sensor", numpy.uint8)))
+        scanner.all_nodes = {50: node, 51: SimpleNamespace()}
+        log = running_session.start_raw_log()
+        running_session.stop_raw_log()
+        info = read_sidecar(log.path)
+        assert info["publishers"] == {"50": {"1620": "uavcan.si.sample.temperature.Scalar_1_0"}}
+        assert info["servers"] == {"50": {"384": "uavcan.register.Access_1_0"}}
+        assert info["names"] == {"50": "demo.sensor"}
+
+    async def test_unknown_log_is_refused(self, tmp_path):
+        from main import CANSession
+        with pytest.raises(FileNotFoundError):
+            await CANSession(data_dir=tmp_path).play_raw_log("cynitor-20260928-000000.log")
+
+    async def test_plays_through_the_hub_with_the_sidecar(self, tmp_path, monkeypatch):
+        from main import CANSession
+        session = CANSession(data_dir=tmp_path)
+        folder = session.raw_log_folder
+        folder.mkdir()
+        path = _log_with(folder, [_heartbeat(50, 0)])
+        write_sidecar(path, {"own_node_id": 46, "bitrate": 250000, "fd": False,
+                             "publishers": {"50": {"1620": "ns.T_1_0"}}})
+        calls = {}
+
+        async def connect(iface, **kwargs):
+            calls.update(iface=iface, **kwargs)
+            session.scanner = MagicMock(add_subscriptions=AsyncMock())
+        session.connect = connect
+        played = []
+        monkeypatch.setattr(LogPlayer, "play", lambda self: played.append(self))
+        await session.play_raw_log(path.name, speed=5)
+        assert calls["iface"] == f"rawlog:{path.name}" and calls["bitrate"] == 250000
+        assert calls["data_bitrate"] is None and calls["offline"]["own_node_id"] == 46
+        player = calls["open_bus"]("spec", 1, None)
+        assert isinstance(player, LogPlayer) and played == [player]
+        session.scanner.add_subscriptions.assert_awaited_once_with(50, {1620: "ns.T_1_0"})
+
+
+class TestPlayApi:
+    async def test_play_errors(self, api):
+        client, session = api
+        assert (await client.post("/api/rawlogs/cynitor-20260928-000000.log/play", json={})).status == 404
+        log = session.start_raw_log()
+        session.stop_raw_log()
+        url = f"/api/rawlogs/{log.path.name}/play"
+        assert (await client.post(url, json={"speed": -1})).status == 400
+        assert (await client.post(url, json={"speed": "fast"})).status == 400
+        assert (await client.post(url, json={})).status == 409  # the fixture session is connected
+
+    async def test_play_starts_the_session(self, api):
+        client, session = api
+        log = session.start_raw_log()
+        session.stop_raw_log()
+        session.scanner = None  # disconnected
+        session.play_raw_log = AsyncMock()
+        resp = await client.post(f"/api/rawlogs/{log.path.name}/play", json={"speed": 0})
+        assert resp.status == 200
+        session.play_raw_log.assert_awaited_once_with(log.path.name, 0.0)
+
+    async def test_delete_removes_the_sidecar(self, api):
+        client, session = api
+        log = session.start_raw_log()
+        session.stop_raw_log()
+        assert sidecar_path(log.path).exists()
+        assert (await client.delete(f"/api/rawlogs/{log.path.name}")).status == 200
+        assert not sidecar_path(log.path).exists()

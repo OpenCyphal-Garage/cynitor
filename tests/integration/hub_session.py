@@ -18,6 +18,10 @@ Checks, in order:
   3. Cynitor's allocator gives the anonymous node a node-ID;
   4. bus load is measured by the hub, not canbusload;
      and a raw log of the frames reads back through python-can;
+  4a. a firmware update: node 50 accepts the command and reads the whole
+     file from Cynitor with uavcan.file.Read, as a bootloader does;
+  4b. a subject no register names is not decoded; guessing its type from
+     its payloads offers the right one, and setting it decodes the subject;
   5. an adapter that disappears ends the session with an error;
   6. the databases are written to the session's data folder.
 
@@ -50,6 +54,8 @@ BITRATE = 500_000
 FD = "--fd" in sys.argv[1:]
 DATA_BITRATE = 2_000_000 if FD else None
 DEVICE_NODE_ID = 50
+TEMPERATURE_SUBJECT_ID = 1620
+UNNAMED_SUBJECT_ID = 1700  # published with no register naming its type
 TIMEOUT = 30.0
 
 
@@ -107,9 +113,61 @@ async def run() -> None:
     device = pycyphal.application.make_node(
         uavcan.node.GetInfo_1_0.Response(name="integration.device"),
         transport=on_wire(DEVICE_NODE_ID),
-        registry=pycyphal.application.make_registry(None, environment_variables={}),
+        # A subject named in its registers, as firmware names them: Cynitor
+        # decodes it live only through the registers, and in a raw log's
+        # playback only through the sidecar that keeps what they said.
+        registry=pycyphal.application.make_registry(
+            None, environment_variables={"UAVCAN__PUB__TEMPERATURE__ID": str(TEMPERATURE_SUBJECT_ID)}),
     )
     device.start()
+    import uavcan.si.sample.temperature
+    temperature = device.make_publisher(uavcan.si.sample.temperature.Scalar_1_0, "temperature")
+
+    async def publish_temperature():
+        while True:
+            await temperature.publish(uavcan.si.sample.temperature.Scalar_1_0(kelvin=300.0))
+            await asyncio.sleep(0.1)
+    temperature_task = asyncio.ensure_future(publish_temperature())
+    # Straight through the presentation layer, so no register names its type.
+    # Twelve bytes: on CAN FD, padded to a sixteen-byte frame.
+    import uavcan.si.unit.velocity
+    velocity = device.presentation.make_publisher(uavcan.si.unit.velocity.Vector3_1_0, UNNAMED_SUBJECT_ID)
+
+    async def publish_velocity():
+        while True:
+            await velocity.publish(uavcan.si.unit.velocity.Vector3_1_0(meter_per_second=[1.0, 2.0, 3.5]))
+            await asyncio.sleep(0.1)
+    velocity_task = asyncio.ensure_future(publish_velocity())
+
+    # Answers a software update the way a bootloader does: read the file,
+    # chunk by chunk, from the node that sent the command.
+    import uavcan.file
+    Command = uavcan.node.ExecuteCommand_1_3
+    downloaded: list[bytes] = []
+
+    async def download(server_node_id: int, path: str) -> None:
+        client = device.make_client(uavcan.file.Read_1_1, server_node_id)
+        image = b""
+        try:
+            while True:
+                result = await client.call(uavcan.file.Read_1_1.Request(
+                    offset=len(image), path=uavcan.file.Path_2_0(path)))
+                if result is None or result[0].error.value != 0:
+                    return
+                chunk = result[0].data.value.tobytes()
+                image += chunk
+                if len(chunk) < 256:
+                    downloaded.append(image)
+                    return
+        finally:
+            client.close()
+
+    async def on_command(request, meta):
+        if request.command != Command.Request.COMMAND_BEGIN_SOFTWARE_UPDATE:
+            return Command.Response(status=Command.Response.STATUS_BAD_COMMAND)
+        asyncio.ensure_future(download(meta.client_node_id, request.parameter.tobytes().decode()))
+        return Command.Response(status=Command.Response.STATUS_SUCCESS)
+    device.get_server(Command).serve_in_background(on_command)
     anonymous = pycyphal.presentation.Presentation(on_wire(None))
     allocatee = Allocatee(anonymous, bytes(range(16)))
 
@@ -162,8 +220,10 @@ async def run() -> None:
         loaded = await wait_for(lambda: session.bus_load.utilization > 0, timeout=5.0)
         check(loaded, f"bus load measured ({session.bus_load.utilization} %)")
 
+        live = await wait_for(lambda: TEMPERATURE_SUBJECT_ID in session.telemetry.latest_by_subject)
+        check(live, f"subject {TEMPERATURE_SUBJECT_ID}, named in the device's registers, decoded live")
         log = session.start_raw_log()
-        await asyncio.sleep(3)  # a few heartbeats each way
+        await asyncio.sleep(4)  # heartbeats each way, the port list, temperatures
         session.stop_raw_log()
         logged = list(can.LogReader(str(log.path)))
         from_device = [m for m in logged if m.is_rx and m.arbitration_id & 0x7F == DEVICE_NODE_ID]
@@ -171,6 +231,37 @@ async def run() -> None:
         check(from_device and own and all(m.is_fd == FD for m in from_device + own),
               f"raw log {log.path.name}: {len(logged)} frames, the device's and Cynitor's own "
               f"({'CAN FD' if FD else 'Classic CAN'}), read back by python-can")
+
+        image = os.urandom(3000)  # eleven full chunks and a short one
+        session.firmware_folder.mkdir()
+        (session.firmware_folder / "integration-2.0.app.bin").write_bytes(image)
+        update = await session.begin_firmware_update(DEVICE_NODE_ID, "integration-2.0.app.bin")
+        # A fast node may be reading already: the update is followed from before the command.
+        check(update["state"] in ("requested", "reading", "transferred"),
+              f"node {DEVICE_NODE_ID} accepted the update command")
+        done = await wait_for(lambda: downloaded)
+        check(done and downloaded[0] == image,
+              f"node {DEVICE_NODE_ID} read the whole firmware file from Cynitor ({len(image)} bytes)")
+        check(update["state"] == "transferred" and update["read"] == len(image),
+              f"the update's progress followed the reads: {update['state']}, {update['read']} bytes")
+
+        listed = await wait_for(lambda: UNNAMED_SUBJECT_ID in
+                                (session.telemetry.get_all_nodes_info()["nodes"][DEVICE_NODE_ID]["publishers"]))
+        check(listed and UNNAMED_SUBJECT_ID not in session.scanner.subject_types,
+              f"subject {UNNAMED_SUBJECT_ID} is in the device's port list, but no register names its type")
+        from dsdl_manager import DsdlManager
+        types = DsdlManager(ROOT, data_dir=data).message_types()
+        guess = await session.guess_subject_type(UNNAMED_SUBJECT_ID, types)
+        offered = {c["type"]: c["preview"] for c in guess["candidates"]}
+        right = "uavcan.si.unit.velocity.Vector3.1.0"
+        check(guess["samples"] > 0 and offered.get(right) == {"meter_per_second": [1.0, 2.0, 3.5]},
+              f"guessing from {guess['samples']} payloads offers {right} among {guess['matches']} fitting types")
+        check("uavcan.si.sample.velocity.Vector3.1.0" not in offered,
+              "a type of another size (the same with a timestamp) is not offered")
+        session.set_subject_type(UNNAMED_SUBJECT_ID, right)
+        decoded = await wait_for(lambda: UNNAMED_SUBJECT_ID in session.telemetry.latest_by_subject)
+        values = decoded and session.telemetry.latest_by_subject[UNNAMED_SUBJECT_ID]["attributes"][0]["value"]
+        check(values == [1.0, 2.0, 3.5], f"subject {UNNAMED_SUBJECT_ID} decodes once its type is set: {values}")
 
         session.hub._still_present = lambda: False  # the adapter goes away
         gone = await wait_for(lambda: not session.is_running, timeout=10.0)
@@ -181,7 +272,24 @@ async def run() -> None:
         written = sorted(p.name for p in data.glob("*.db"))
         check(written == ["allocator_2app.db", "monitor_app.db", "telemetry_events.db"],
               f"databases written to the data folder: {written}")
+
+        # Play the raw log back: the bus as it was, from the file alone.
+        temperature_task.cancel()
+        await session.play_raw_log(log.path.name, speed=5)
+        check(session.is_running and session.can_interface == f"rawlog:{log.path.name}",
+              "playing the raw log as a bus")
+        decoded = await wait_for(lambda: session.telemetry is not None
+                                 and TEMPERATURE_SUBJECT_ID in session.telemetry.latest_by_subject, timeout=10)
+        check(decoded, f"playback decodes subject {TEMPERATURE_SUBJECT_ID} from the log's sidecar")
+        named = await wait_for(lambda: session.telemetry is not None and session.telemetry.get_all_nodes_info()["nodes"]
+                               .get(DEVICE_NODE_ID, {}).get("name") == "integration.device", timeout=10)
+        check(named, "playback names the device from the sidecar")
+        ended = await wait_for(lambda: not session.is_running, timeout=15)
+        check(ended and "end of the raw log" in (session.last_error or ""),
+              f"playback ends with the log: {session.last_error!r}")
     finally:
+        temperature_task.cancel()
+        velocity_task.cancel()
         if session.is_running:
             await session.disconnect()
         tap.shutdown()

@@ -27,7 +27,7 @@ FD_MTU = 64       # ... and CAN FD
 # python-can interfaces the hub can open as CAN FD, given a data bitrate.
 # Others (gs_usb, slcan, ...) have no CAN FD mode in python-can, or only a
 # partial one; on Linux such adapters do CAN FD as SocketCAN instead.
-FD_INTERFACES = frozenset({"pcan", "kvaser", "vector", "ixxat", "virtual"})
+FD_INTERFACES = frozenset({"pcan", "kvaser", "vector", "ixxat", "virtual", "rawlog"})
 
 # A SocketCAN interface carries CAN FD frames once its MTU is that of
 # struct canfd_frame (`ip link set can0 ... fd on`, or `mtu 72` for vcan).

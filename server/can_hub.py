@@ -33,6 +33,33 @@ logger = logging.getLogger(__name__)
 _RECV_TIMEOUT = 0.1
 _channel_numbers = itertools.count(1)
 
+
+def _no_filters_on_virtual_channels() -> None:
+    """Stop pycyphal setting acceptance filters on python-can virtual channels.
+
+    python-can's ThreadSafeBus guards set_filters and recv with one lock, and
+    pycyphal's reader thread holds it through each recv, letting go only to
+    take it again at once. Every subscriber made or closed sets the filters,
+    from the event loop, which then waits for that lock: seconds, or minutes
+    on a busy machine, with the whole dashboard stalled.
+
+    On a virtual channel the filters gain nothing: the channel is software,
+    and pycyphal's transport sorts every frame into its sessions anyway.
+    Real adapters are opened by the hub itself, not through pycyphal, and
+    SocketCAN through pycyphal's own media, so neither is affected.
+    """
+    from pycyphal.transport.can.media.pythoncan import PythonCANMedia
+    configure = PythonCANMedia.configure_acceptance_filters
+
+    def configure_unless_virtual(media, configuration) -> None:
+        if not media.interface_name.startswith("virtual:"):
+            configure(media, configuration)
+
+    PythonCANMedia.configure_acceptance_filters = configure_unless_virtual
+
+
+_no_filters_on_virtual_channels()
+
 # Cyphal/CAN heartbeat, used to find a free node-ID the way `yakut accommodate`
 # does, but on the hub's channel: a child process cannot see an in-process one.
 HEARTBEAT_SUBJECT_ID = 7509
@@ -380,17 +407,20 @@ def _heartbeat_source(msg: can.Message) -> Optional[tuple[int, Optional[int]]]:
 
 
 def pick_free_node_id(local_spec: str, exclude: frozenset[int] = frozenset(),
-                      rng: Optional[random.Random] = None) -> Optional[int]:
+                      rng: Optional[random.Random] = None, fd: bool = False) -> Optional[int]:
     """Listen to heartbeats on ``local_spec`` and pick an unused node-ID at random.
 
     Same procedure as `yakut accommodate`: listen for two heartbeat periods,
     extending the wait whenever a new node shows up (three periods if it is
     still initializing, as the network may be starting), then choose among
     the node-IDs nobody used. Blocking. Returns None if every node-ID is taken.
+
+    ``fd`` opens the bus for CAN FD frames, which a SocketCAN socket otherwise
+    never receives: on a CAN FD bus every heartbeat is one.
     """
     interface, _, channel = local_spec.partition(":")
     candidates = set(range(_MAX_NODE_ID + 1)) - set(exclude)
-    bus = can.Bus(interface=interface, channel=channel)
+    bus = can.Bus(interface=interface, channel=channel, fd=fd)
     try:
         deadline = time.monotonic() + HEARTBEAT_MAX_PUBLICATION_PERIOD * 2.0
         while (remaining := deadline - time.monotonic()) > 0:
