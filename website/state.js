@@ -68,6 +68,7 @@ const state = {
   logSubjectIds: new Set(),
   logShowCyphal: true,
   logShowServer: false,
+  logTextFilter: '',       // the log panel's filter box, lowercased; not persisted
   _logSeq: 0,
   detailPanelHeight: null,
   detailPanelCollapsed: false,

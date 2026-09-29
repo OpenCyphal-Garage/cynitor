@@ -369,10 +369,22 @@ body {
 }
 
 .log-panel-controls {
-  margin-left: auto;
+  flex: 1 1 100%;
   display: flex;
   align-items: center;
   gap: 0.375rem;
+}
+
+.log-filter-input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  padding: 0.1875rem 0.5rem;
 }
 
 .log-severity-wrap {
@@ -446,24 +458,18 @@ body {
   flex-direction: column;
 }
 
+/* time · severity · message; the left inset clears the collapse button. */
 .log-row {
   display: grid;
+  grid-template-columns: 3.75rem 3rem minmax(0, 1fr);
   gap: 0.5rem;
   align-items: baseline;
-  padding: 0.1875rem 0.875rem;
+  padding: 0.1875rem 0.875rem 0.1875rem 1.375rem;
   font-family: var(--mono);
   font-size: 0.75rem;
   line-height: 1.4;
   border-top: 1px solid transparent;
   border-bottom: 1px solid var(--border);
-}
-
-.log-row-src-server {
-  grid-template-columns: max-content max-content max-content 1fr;
-}
-
-.log-row-src-cyphal {
-  grid-template-columns: max-content max-content max-content minmax(0, max-content) 1fr;
 }
 
 .log-row.hidden {
@@ -483,24 +489,30 @@ body {
   white-space: nowrap;
 }
 
-.log-row-node {
-  color: var(--text);
-  opacity: 0.8;
-  white-space: nowrap;
-}
-
-.log-row-subj {
-  color: var(--text);
-  opacity: 0.7;
-  white-space: nowrap;
-}
-
-.log-row-type {
+/* Who said it, leading the message: a node (its ID, then its name) or a
+   backend logger. */
+.log-row-src {
+  margin-right: 0.25rem;
   color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 9rem;
+}
+
+.log-row-src-cyphal .log-row-src {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.log-row-nid {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.log-row-tag {
+  margin-right: 0.125rem;
+  padding: 0 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.1875rem;
+  color: var(--muted);
+  font-size: 0.6875rem;
 }
 
 .log-row-text {
@@ -519,11 +531,14 @@ body {
 .log-row-sev-alert    .log-row-sev { color: var(--error); font-weight: 800; }
 .log-row-sev-none     .log-row-sev { color: var(--muted); }
 
-.log-row-sev-alert    { background: var(--error-muted); }
-.log-row-sev-critical { background: var(--error-muted); }
+/* A bar on the left edge marks what needs a look when scanning. */
+.log-row-sev-warning  { box-shadow: inset 0.1875rem 0 0 var(--warn); }
+.log-row-sev-error    { box-shadow: inset 0.1875rem 0 0 var(--error); }
+.log-row-sev-critical,
+.log-row-sev-alert    { box-shadow: inset 0.1875rem 0 0 var(--error); background: var(--error-muted); }
 
 .log-subject-popover {
-  min-width: 10rem;
+  min-width: 15rem;
   max-height: 24rem;
   overflow-y: auto;
 }
@@ -550,6 +565,16 @@ body {
 
 .log-subject-row:hover {
   background: var(--surface-2);
+}
+
+.log-subject-type {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .log-subject-checkbox {
