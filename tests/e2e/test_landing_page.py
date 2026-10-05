@@ -239,6 +239,22 @@ async def _(page):
     await page.locator("#logFilterInput").fill("")
 
 
+@test("Cyphal v1.1 traffic is noticed under the CAN status")
+async def _(page):
+    notice = page.locator("#canV11Notice")
+    assert await notice.is_hidden(), "Notice shown without v1.1 traffic"
+    await page.evaluate("""() => {
+        state.canConnected = true;
+        state.cyphalV11 = {transfers: 3, nodes: [110], subject_count: 1, subject_ids: [54580],
+                           last_seen_unix: Date.now() / 1000};
+        renderV11Notice(); }""")
+    try:
+        text = await notice.inner_text()
+        assert "v1.1" in text and "110" in text and "not decoded" in text, f"Notice reads: {text}"
+    finally:
+        await page.evaluate("state.canConnected = false; state.cyphalV11 = null; renderV11Notice()")
+
+
 # ── Graph tab ──
 #
 # Fed through the paths live data takes: /api/nodes polling stores its reply

@@ -3091,6 +3091,18 @@ button:focus-visible,
 .mode-usual { color: var(--muted); }
 .mode-other { color: var(--warn); }
 
+/* Cyphal v1.1 traffic this dashboard cannot decode (sidebar, CAN section). */
+.can-v11-notice {
+  margin: 0 0 0.5rem;
+  padding: 0.25rem 0.5rem;
+  border-left: 0.1875rem solid var(--warn);
+  background: var(--warn-muted);
+  color: var(--warn);
+  font-size: 0.6875rem;
+  line-height: 1.35;
+  cursor: help;
+}
+
 /* ── Subjects table ── */
 
 .kind-badge {

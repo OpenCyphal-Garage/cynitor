@@ -163,8 +163,8 @@ class TestSocketcanTap:
         opened = {}
         real_bus = can.Bus  # raw_log.can is this very module
 
-        def bus(interface, channel, fd):
-            opened.update(interface=interface, channel=channel, fd=fd)
+        def bus(interface, channel, fd, can_filters=None):
+            opened.update(interface=interface, channel=channel, fd=fd, can_filters=can_filters)
             return real_bus(interface="virtual", channel="tap-test")
 
         wire = real_bus(interface="virtual", channel="tap-test")
@@ -179,7 +179,7 @@ class TestSocketcanTap:
         finally:
             tap.stop()
             wire.shutdown()
-        assert opened == {"interface": "socketcan", "channel": "vcan0", "fd": True}
+        assert opened == {"interface": "socketcan", "channel": "vcan0", "fd": True, "can_filters": None}
         assert [m.arbitration_id for m in seen] == [0x7]
         assert not tap._thread.is_alive()
 

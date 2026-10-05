@@ -28,6 +28,8 @@ from typing import Callable, Optional
 
 import can
 
+from cyphal_v11 import V11Traffic
+
 logger = logging.getLogger(__name__)
 
 _RECV_TIMEOUT = 0.1
@@ -179,6 +181,8 @@ class CANHub:
         # Called from the pump threads with every frame on the wire, both ways
         # (raw_log.RawLog.write while a raw log runs).
         self.on_frame: Optional[Callable[[can.Message], None]] = None
+        # Cyphal v1.1 traffic among the received frames (see cyphal_v11).
+        self.v11 = V11Traffic()
         # Seconds the forwarded frames occupied the wire, for bus load. One
         # counter per pump thread, so that neither can overwrite the other's.
         self.busy_from_bus = 0.0
@@ -295,6 +299,7 @@ class CANHub:
             # does). Forwarding the echo would hand each node its own frames.
             if not msg.is_rx:
                 continue
+            self.v11.observe(msg)
             try:
                 self._local.send(msg)
             except Exception as exc:

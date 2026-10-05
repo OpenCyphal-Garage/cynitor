@@ -88,7 +88,27 @@ const drawBusLoadSparkline = () => {
   }
 };
 
+// Cyphal v1.1 traffic on the bus, which this dashboard (a v1.0 monitor)
+// cannot decode: devices sending it would otherwise just look silent.
+const V11_NODES_SHOWN = 4;
+const renderV11Notice = () => {
+  const notice = el('canV11Notice');
+  if (!notice) return;
+  const v11 = state.canConnected ? state.cyphalV11 : null;
+  notice.classList.toggle('hidden', !v11);
+  if (!v11) return;
+  const shown = v11.nodes.slice(0, V11_NODES_SHOWN).join(', ');
+  const more = v11.nodes.length > V11_NODES_SHOWN ? ` +${v11.nodes.length - V11_NODES_SHOWN}` : '';
+  notice.textContent = `Cyphal v1.1 from node${v11.nodes.length === 1 ? '' : 's'} ${shown}${more} · not decoded`;
+  const subjects = v11.subject_ids.join(', ') + (v11.subject_count > v11.subject_ids.length ? ', …' : '');
+  const ago = formatLastSeen([new Date(v11.last_seen_unix * 1000).toISOString()]);
+  notice.title = `${v11.transfers} Cyphal v1.1 transfers on ${v11.subject_count} subject-ID`
+    + `${v11.subject_count === 1 ? '' : 's'} (${subjects}), the last ${ago}. This dashboard speaks Cyphal v1.0: `
+    + 'v1.1 topics are not shown unless the device pins them to a v1.0 subject-ID.';
+};
+
 const updateSemaphores = () => {
+  renderV11Notice();
   const serverDot = el('serverSemaphore');
   const canDot = el('canSemaphore');
   const serverInfo = el('serverThroughput');
@@ -628,6 +648,7 @@ const pollStatus = async () => {
 
   state.busUtilization = data.bus_utilization ?? null;
   state.droppedEvents = data.dropped ?? null;
+  state.cyphalV11 = data.cyphal_v11 ?? null;
 
   const backendCanRunning = data.status === 'running' && !!data.can_interface;
 

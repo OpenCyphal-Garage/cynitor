@@ -22,6 +22,8 @@ Checks, in order:
      file from Cynitor with uavcan.file.Read, as a bootloader does;
   4b. a subject no register names is not decoded; guessing its type from
      its payloads offers the right one, and setting it decodes the subject;
+  4c. Cyphal v1.1 transfers on the wire (16-bit subject-IDs) are noticed,
+     though not decoded;
   5. an adapter that disappears ends the session with an error;
   6. the databases are written to the session's data folder.
 
@@ -262,6 +264,17 @@ async def run() -> None:
         decoded = await wait_for(lambda: UNNAMED_SUBJECT_ID in session.telemetry.latest_by_subject)
         values = decoded and session.telemetry.latest_by_subject[UNNAMED_SUBJECT_ID]["attributes"][0]["value"]
         check(values == [1.0, 2.0, 3.5], f"subject {UNNAMED_SUBJECT_ID} decodes once its type is set: {values}")
+
+        # A Cyphal v1.1 node: 16-bit subject-IDs, a frame format v1.0 lacks.
+        check(session.v11.status() is None, "no Cyphal v1.1 traffic seen yet")
+        for subject in (0x1234, 0xBEEF):
+            tap.send(can.Message(arbitration_id=(4 << 26) | (subject << 8) | (1 << 7) | 77,
+                                 data=b"v1.1" + bytes([0xE0]), is_fd=FD))  # one whole transfer
+        seen = await wait_for(lambda: session.v11.status() is not None and session.v11.status()["transfers"] == 2,
+                              timeout=5)
+        v11 = session.v11.status()
+        check(seen and v11["nodes"] == [77] and v11["subject_ids"] == [0x1234, 0xBEEF],
+              f"Cyphal v1.1 traffic noticed: {v11}")
 
         session.hub._still_present = lambda: False  # the adapter goes away
         gone = await wait_for(lambda: not session.is_running, timeout=10.0)

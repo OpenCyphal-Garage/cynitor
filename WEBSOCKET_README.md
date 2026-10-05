@@ -327,9 +327,12 @@ Response:
     ],
     "bus_utilization": 3.0,
     "dropped": {"scanner": 0, "logger": 0, "clients": 12},
-    "last_error": null
+    "last_error": null,
+    "cyphal_v11": null
 }
 ```
+
+`cyphal_v11` is `null` until Cyphal v1.1 traffic is seen on the bus, which Cynitor, a Cyphal v1.0 monitor, does not decode. Then it is `{"transfers", "nodes": [node-IDs], "subject_count", "subject_ids": [the first 16, sorted], "last_seen_unix"}`, counted over the CAN session; the dashboard shows it under the CAN status. A v1.1 transfer is recognised by its first frame: an extended CAN ID with bit 25 = 0, bit 24 = 0 and bit 7 = 1 (a 16-bit subject-ID; v1.0 keeps bit 7 at 0), and a tail byte with start-of-transfer and toggle set (which tells it from a DroneCAN service frame), every frame but a transfer's last being full. On SocketCAN a listen-only socket watches for it, filtered by the kernel to frames with those ID bits; behind the hub, the hub does. A v1.1 topic pinned to a v1.0 subject-ID (`name#1234`) travels as v1.0 and is decoded as usual.
 
 `dropped` counts decoded messages discarded since the CAN connection opened because a queue was full: `scanner` before reaching anything, `logger` missing from the 24 h history and from recordings, `clients` missing from some dashboard's live view (each open dashboard has its own 100-event queue). `null` when not connected to CAN. The dashboard shows the total next to the CAN message rate.
 

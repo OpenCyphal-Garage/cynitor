@@ -29,6 +29,7 @@ from can_config import (
 )
 from can_discovery import AdapterCatalog, discover_adapters
 from can_hub import CANHub, HubBusLoad, pick_free_node_id
+from cyphal_v11 import SOCKETCAN_FILTER, V11Traffic
 from data_dir import ALLOCATOR_DB, EVENTS_DB, SCANNER_DB, SUBJECT_TYPES_FILE, prepare_data_dir, resolve_data_dir
 from firmware import COMMAND_STATUS, FIRMWARE_DIR, FirmwareServer, firmware_path, send_update_command
 from log_store import InMemoryLogStore, APILogHandler
@@ -237,6 +238,10 @@ class CANSession:
         # The raw frame log being written, if any, and its SocketCAN tap.
         self.raw_log: Optional[RawLog] = None
         self._raw_tap: Optional[SocketcanTap] = None
+        # Cyphal v1.1 traffic seen on the bus (see cyphal_v11); on SocketCAN
+        # from a filtered listen-only socket, behind the hub from the hub.
+        self.v11: Optional[V11Traffic] = None
+        self._v11_tap: Optional[SocketcanTap] = None
         # Serves firmware files to nodes being updated; None when Cynitor has
         # no node-ID or plays a raw log, since nothing can be sent then.
         self.firmware: Optional[FirmwareServer] = None
@@ -384,6 +389,12 @@ class CANSession:
                     self.bus_load = HubBusLoad(hub)
                 await self.bus_load.start()
 
+                if hub is None:
+                    self.v11 = V11Traffic()
+                    self._v11_tap = self._open_v11_tap(socketcan_device(can_iface), self.v11)
+                else:
+                    self.v11 = hub.v11
+
                 self.can_interface = can_iface
                 self.can_bitrate = bitrate
                 self.can_data_bitrate = data_bitrate
@@ -395,6 +406,16 @@ class CANSession:
                 except Exception as cleanup_err:
                     logger.error("Cleanup error during failed connect: %s", cleanup_err)
                 raise
+
+    @staticmethod
+    def _open_v11_tap(device: str, traffic: V11Traffic) -> Optional[SocketcanTap]:
+        """A listen-only socket the kernel passes only frames that may be Cyphal v1.1."""
+        try:
+            return SocketcanTap(device, socketcan_supports_fd(device), traffic.observe,
+                                can_filters=SOCKETCAN_FILTER, name="v11-watch")
+        except Exception as exc:  # only a notice is lost
+            logger.warning("Cannot watch %s for Cyphal v1.1 traffic: %s", device, exc)
+            return None
 
     async def _pick_node_id(self, local_spec: str, fd: bool = False) -> None:
         """Choose Cynitor's own node-ID from the heartbeats on the bus, unless one is set.
@@ -741,6 +762,10 @@ class CANSession:
         if self.scanner:
             self.scanner.close()
             self.scanner = None
+        if self._v11_tap is not None:
+            self._v11_tap.stop()
+            self._v11_tap = None
+        self.v11 = None
         # Last: everything above talks to the adapter through it.
         if self.hub:
             await asyncio.to_thread(self.hub.stop)

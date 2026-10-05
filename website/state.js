@@ -68,7 +68,8 @@ const state = {
   logSubjectIds: new Set(),
   logShowCyphal: true,
   logShowServer: false,
-  logTextFilter: '',       // the log panel's filter box, lowercased; not persisted
+  logTextFilter: '',
+  cyphalV11: null,          // Cyphal v1.1 traffic seen on the bus (GET /api/status), or null       // the log panel's filter box, lowercased; not persisted
   _logSeq: 0,
   detailPanelHeight: null,
   detailPanelCollapsed: false,

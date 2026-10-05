@@ -204,6 +204,10 @@ Cyphal/CAN FD works on both paths:
 
 Every node on a CAN FD bus must be set up for CAN FD: Cynitor sends its own frames as CAN FD frames there, which a Classic-only controller answers with error frames.
 
+### Cyphal v1.1
+
+Cynitor speaks Cyphal v1.0. Cyphal v1.1 (in draft; named topics, 16-bit subject-IDs on CAN) uses a frame format v1.0 does not have, so a v1.1 device would just look silent. Cynitor notices that traffic and says so under the CAN status: which nodes send it, and on hover how much, on which subject-IDs and when. To see a v1.1 device's data, pin its topics to v1.0 subject-IDs on the device (`name#1234`).
+
 ## Deploying to a Server
 
 The backend serves the dashboard as well as the API, so a deployment is one
