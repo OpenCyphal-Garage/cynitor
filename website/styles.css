@@ -4800,6 +4800,9 @@ details.svc-history-entry[open] > summary::before {
   transition: opacity 0.15s;
 }
 
+/* A subject nothing publishes, or whose type nothing names */
+.graph-node--warn .graph-subject-rect { stroke: var(--warn); }
+
 .graph-node.graph-hi .graph-subject-rect {
   stroke: var(--accent);
   stroke-width: 2;
@@ -4994,6 +4997,16 @@ details.svc-history-entry[open] > summary::before {
   font-weight: 600;
 }
 
+.graph-info-buttons {
+  margin: 0.125rem 0 0.375rem;
+}
+
+.graph-info-rate {
+  margin-left: auto;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .graph-info-status--warn {
   color: var(--warn);
   font-weight: 600;
@@ -5161,6 +5174,38 @@ details.svc-history-entry[open] > summary::before {
 .graph-legend-line--silent {
   border-top: 0.125rem dashed var(--warn);
 }
+
+/* Status strip: what needs a look; a count picks those nodes out */
+.graph-status-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.3125rem 0.75rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  flex-shrink: 0;
+}
+
+.graph-status-total { color: var(--text); }
+.graph-status-usual { color: var(--muted); }
+
+.graph-chip {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  padding: 0.0625rem 0.5rem;
+  border-radius: 1rem;
+  border: 1px solid currentColor;
+  background: none;
+  cursor: pointer;
+}
+
+.graph-chip--warn { color: var(--warn); }
+.graph-chip--err { color: var(--error); }
+.graph-chip--warn[aria-pressed="true"] { background: var(--warn-muted); }
+.graph-chip--err[aria-pressed="true"] { background: var(--error-muted); }
 
 /* Display menu: the view options one sets and leaves */
 .graph-display {

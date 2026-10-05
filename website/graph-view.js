@@ -28,6 +28,7 @@ const GraphView = (() => {
     showGrid: true,
     showLinkStats: false,
     animateTraffic: false,
+    focus: null,  // a status-strip kind picked out of the graph; not saved
     initialized: false,
   };
 
@@ -178,6 +179,7 @@ const GraphView = (() => {
         fullType: _subjectFullType(sid, ev),
         pubs: meta.pubs,
         subs: meta.subs,
+        status: _subjectStatus(sid, meta.pubs, meta.subs),
       });
     }
 
@@ -326,6 +328,19 @@ const GraphView = (() => {
     }
     const mode = getNodeModeValue(nodeId);
     return mode && getStatusClass('mode', mode) ? { text: mode, level: 'warn' } : null;
+  };
+
+  // What is unusual about a subject: subscribed to but published by no node,
+  // so that its subscribers wait for nothing; or of a type nothing names, so
+  // that it cannot be decoded. Null when all is usual.
+  const _subjectStatus = (sid, pubs, subs) => {
+    if (!pubs.length && subs.length) return { text: 'no publisher', level: 'warn' };
+    if (typeof isUntypedSubject === 'function' && isUntypedSubject(sid)) return { text: 'type unknown', level: 'warn' };
+    return null;
+  };
+
+  const _paintSubject = function(d) {
+    d3.select(this).classed('graph-node--warn', !!d.status);
   };
 
   // The node-ID a device is shown under: its own, or for one whose node-ID
@@ -516,6 +531,18 @@ const GraphView = (() => {
     `;
     root.appendChild(toolbar);
 
+    const statusStrip = document.createElement('div');
+    statusStrip.className = 'graph-status-bar';
+    statusStrip.id = 'graphStatus';
+    statusStrip.setAttribute('role', 'status');
+    statusStrip.addEventListener('click', (e) => {
+      const key = e.target.closest('[data-focus]')?.dataset.focus;
+      if (!key) return;
+      _setFocus(gState.focus === key ? null : key);
+      _renderStatusStrip();
+    });
+    root.appendChild(statusStrip);
+
     const legendBar = document.createElement('div');
     legendBar.className = 'graph-legend-bar';
     legendBar.innerHTML = `
@@ -554,6 +581,8 @@ const GraphView = (() => {
       if (!node) return;
       if (action === 'graphInfoHide') _hideFromGraph(node);
       else if (action === 'graphInfoRename') _startRename(node);
+      else if (action === 'graphInfoOpen') _openInNodes(node);
+      else if (action === 'graphInfoPlot') _openPlot(node);
     });
 
     const width = svgWrap.clientWidth || 800;
@@ -905,15 +934,16 @@ const GraphView = (() => {
     const merged = nodeEnter.merge(nodeSel);
     merged.classed('graph-node--pinned', d => !!gState.positions[d.id]?.pinned);
     merged.filter(d => d.type === 'device').each(_paintDevice);
+    merged.filter(d => d.type === 'subject').each(_paintSubject);
 
-    // Labels: the name, and for a device a second line for its status
+    // Labels: the name, and a second line for what is unusual
     const labelSel = gLabels.selectAll('.graph-label').data(allNodes, d => d.id);
     labelSel.exit().remove();
     const labelEnter = labelSel.enter().append('text')
       .attr('class', d => `graph-label graph-label--${d.type}`)
       .attr('text-anchor', 'middle');
     labelEnter.append('tspan').attr('class', 'graph-label-name');
-    labelEnter.filter(d => d.type === 'device').append('tspan')
+    labelEnter.append('tspan')
       .attr('class', 'graph-label-status')
       .attr('dy', '1.2em');
     labelEnter.merge(labelSel).each(_paintLabel);
@@ -925,6 +955,8 @@ const GraphView = (() => {
     prevSnapshot = _snapshotKey();
     _renderLinkStats();
     _renderHiddenBadge();
+    _renderStatusStrip();
+    if (!gState.selectedId) _applyFocus();
   };
 
   const _renderHiddenBadge = () => {
@@ -1019,8 +1051,8 @@ const GraphView = (() => {
     if (fitPending && simulation.alpha() < FIT_ALPHA && _fitToView()) fitPending = false;
   };
 
-  // A device's status line goes under its name: above the node, the name
-  // moves up by a line to make room.
+  // A status line goes under the name: above the node, the name moves up by
+  // a line to make room.
   const STATUS_LINE = 11;
   const _labelY = (d) => {
     if (d.labelSide === 'above') {
@@ -1029,13 +1061,12 @@ const GraphView = (() => {
     return d.y + (d.type === 'device' ? 26 : 22);
   };
 
-  // A label's name and, under a device's, what is unusual about it. Written
+  // A label's name and, under it, what is unusual about the node. Written
   // only where it changed: this runs every second.
   const _paintLabel = function(d) {
     const label = d3.select(this);
     const name = label.select('.graph-label-name');
     if (name.text() !== d.label) name.text(d.label);
-    if (d.type !== 'device') return;
     const status = label.select('.graph-label-status');
     const text = d.status?.text || '';
     if (status.text() !== text) status.text(text);
@@ -1166,6 +1197,58 @@ const GraphView = (() => {
       save();
     });
 
+  // ── Status strip ──
+  //
+  // What needs a look, counted over what is drawn. A count, clicked, picks
+  // those nodes out of the graph; clicked again, it lets them go.
+  const FOCUS_KINDS = [
+    { key: 'offline', label: 'offline', level: 'err', test: (d) => d.type === 'device' && d.disappeared && !d.ghost },
+    { key: 'displaced', label: 'displaced', level: 'err', test: (d) => d.type === 'device' && d.ghost },
+    { key: 'health', label: 'unusual health', level: 'warn',
+      test: (d) => d.type === 'device' && !d.disappeared && !!getStatusClass('health', d.health) },
+    { key: 'mode', label: 'unusual mode', level: 'warn', test: (d) => d.type === 'device' && d.status?.level === 'warn' },
+    { key: 'silent', label: 'silent', level: 'warn', test: (d) => d.type === 'subject' && _isSilentSubject(d.subjectId) },
+    { key: 'orphan', label: 'no publisher', level: 'warn', test: (d) => d.type === 'subject' && d.status?.text === 'no publisher' },
+    { key: 'untyped', label: 'type unknown', level: 'warn', test: (d) => d.type === 'subject' && d.status?.text === 'type unknown' },
+  ];
+
+  // A subject that has sent before and has now gone quiet.
+  const _isSilentSubject = (sid) => {
+    const ev = state.latestBySubject.get(sid);
+    return !!ev && !_isFresh(ev, Date.now());
+  };
+
+  const _renderStatusStrip = () => {
+    const strip = document.getElementById('graphStatus');
+    if (!strip) return;
+    const nodes = simulation?.nodes() || [];
+    const counts = FOCUS_KINDS.map((k) => ({ ...k, count: nodes.filter(k.test).length })).filter((k) => k.count);
+    if (gState.focus && !counts.some((k) => k.key === gState.focus)) _setFocus(null);
+    const devices = nodes.filter((d) => d.type === 'device').length;
+    const fresh = document.createElement('div');
+    fresh.innerHTML = `<span class="graph-status-total">${devices} device${devices === 1 ? '' : 's'}</span>`
+      + (counts.length
+        ? counts.map((k) => `<button type="button" class="graph-chip graph-chip--${k.level}" data-focus="${k.key}"`
+          + ` aria-pressed="${gState.focus === k.key}">${k.count} ${escapeHtml(k.label)}</button>`).join('')
+        : '<span class="graph-status-usual">nothing unusual</span>');
+    patchChildren(strip, fresh);
+  };
+
+  const _setFocus = (key) => {
+    gState.focus = key;
+    _selectNode(null);  // clears the highlight, which then draws the focus
+  };
+
+  // Dims all but the nodes of the focused kind, and the edges between others.
+  const _applyFocus = () => {
+    const kind = FOCUS_KINDS.find((k) => k.key === gState.focus);
+    if (!kind || !gNodes) return;
+    const picked = new Set((simulation?.nodes() || []).filter(kind.test).map((d) => d.id));
+    gNodes.selectAll('.graph-node').classed('graph-dim', (d) => !picked.has(d.id));
+    gLabels.selectAll('.graph-label').classed('graph-dim', (d) => !picked.has(d.id));
+    gLinks.selectAll('.graph-link').classed('graph-dim', (d) => !picked.has(d.source.id) && !picked.has(d.target.id));
+  };
+
   // ── Selection & highlighting ──
 
   const _selectNode = (id) => {
@@ -1175,7 +1258,7 @@ const GraphView = (() => {
   };
 
   const _hoverNode = (id) => {
-    if (gState.selectedId) return;
+    if (gState.selectedId || gState.focus) return;
     _applyHighlight(id, true);
     if (!id) _renderInfo(null);
   };
@@ -1186,6 +1269,7 @@ const GraphView = (() => {
       gLinks.selectAll('.graph-link').classed('graph-dim', false).classed('graph-link--hi', false)
         .attr('marker-end', d => _hasArrow(d) ? 'url(#graph-arrow-pub)' : null);
       gLabels.selectAll('.graph-label').classed('graph-dim', false);
+      _applyFocus();
       return;
     }
 
@@ -1313,36 +1397,70 @@ const GraphView = (() => {
       ${node.status ? `<span class="graph-info-status graph-info-status--${node.status.level}">${escapeHtml(node.status.text)}</span>` : ''}
     </div>`;
 
+    // An online device's heartbeat: its mode (coloured when unusual, as in
+    // the Nodes table), uptime and vendor-specific status code.
+    if (raw && !node.disappeared) {
+      const mode = getNodeModeValue(node.nodeId);
+      const vssc = getNodeHeartbeatValue(node.nodeId, 'vssc');
+      const facts = [
+        mode ? `<span class="${getStatusClass('mode', mode)}">${escapeHtml(mode)}</span>` : '',
+        raw.uptime != null ? `<span>up ${escapeHtml(formatUptime(raw.uptime))}</span>` : '',
+        vssc != null ? `<span>VSSC ${escapeHtml(vssc)}</span>` : '',
+      ].join('');
+      if (facts) html += `<div class="graph-info-meta">${facts}</div>`;
+    }
+    html += '<div class="graph-info-buttons"><button type="button" class="graph-btn" id="graphInfoOpen">Open in Nodes</button></div>';
+
     if (raw) {
-      if (raw.publishers?.length) {
-        html += `<div class="graph-info-section"><div class="graph-info-section-label">Publishers (${raw.publishers.length})</div>`;
-        html += raw.publishers.map(sid => {
-          const type = _subjectShortType(sid, state.latestBySubject.get(sid));
-          return `<div class="graph-info-row"><span class="graph-info-sid">${sid}</span><span class="graph-info-mtype">${escapeHtml(type)}</span></div>`;
-        }).join('');
-        html += '</div>';
-      }
-      if (raw.subscribers?.length) {
-        html += `<div class="graph-info-section"><div class="graph-info-section-label">Subscribers (${raw.subscribers.length})</div>`;
-        html += raw.subscribers.map(sid => {
-          const type = _subjectShortType(sid, state.latestBySubject.get(sid));
-          return `<div class="graph-info-row"><span class="graph-info-sid">${sid}</span><span class="graph-info-mtype">${escapeHtml(type)}</span></div>`;
-        }).join('');
-        html += '</div>';
-      }
-      if (raw.servers?.length) {
-        html += `<div class="graph-info-section"><div class="graph-info-section-label">Servers (${raw.servers.length})</div>`;
-        html += raw.servers.map(sid => `<div class="graph-info-row"><span class="graph-info-sid">${sid}</span></div>`).join('');
-        html += '</div>';
-      }
-      if (raw.clients?.length) {
-        html += `<div class="graph-info-section"><div class="graph-info-section-label">Clients (${raw.clients.length})</div>`;
-        html += raw.clients.map(sid => `<div class="graph-info-row"><span class="graph-info-sid">${sid}</span></div>`).join('');
-        html += '</div>';
-      }
+      // A port's own rate: what this device publishes, or what reaches it.
+      const online = !node.disappeared;
+      html += _portSectionHtml('Publishers', raw.publishers, (sid) => {
+        const ev = online ? state.latestByNode.get(node.nodeId)?.get(sid) : null;
+        return [_subjectShortType(sid, state.latestBySubject.get(sid)), ev, Number(ev?.rate) || 0];
+      });
+      html += _portSectionHtml('Subscribers', raw.subscribers, (sid) => {
+        const ev = online ? state.latestBySubject.get(sid) : null;
+        return [_subjectShortType(sid, state.latestBySubject.get(sid)), ev, getSubjectRate(ev)];
+      });
+      html += _portSectionHtml('Servers', raw.servers, (sid) => [_serviceShortName(sid)]);
+      html += _portSectionHtml('Clients', raw.clients, (sid) => [_serviceShortName(sid)]);
     }
 
     return html;
+  };
+
+  // "uavcan.register.Access" for 384: the standard services have fixed IDs.
+  const _serviceShortName = (sid) => {
+    const type = typeof STANDARD_SERVICE_TYPES === 'object' ? STANDARD_SERVICE_TYPES[sid] : null;
+    return type ? type.split('.').slice(-2).join('.') : '';
+  };
+
+  // One section of ports: ID, name and, where messages are judged, the rate
+  // or that it has gone silent. describe(id) gives [name, message, rate].
+  const _portSectionHtml = (title, ids, describe) => {
+    if (!ids?.length) return '';
+    const rows = ids.map((id) => {
+      const [name, ev, rate] = describe(id);
+      const rateHtml = !ev ? ''
+        : _isFresh(ev, Date.now()) ? `<span class="graph-info-rate">${Number(rate).toFixed(1)} Hz</span>`
+        : '<span class="graph-info-rate graph-info-status--warn">silent</span>';
+      return `<div class="graph-info-row"><span class="graph-info-sid">${id}</span>`
+        + `<span class="graph-info-mtype">${escapeHtml(name || '')}</span>${rateHtml}</div>`;
+    }).join('');
+    return `<div class="graph-info-section"><div class="graph-info-section-label">${title} (${ids.length})</div>${rows}</div>`;
+  };
+
+  // Over to the Nodes tab, with this device selected there.
+  const _openInNodes = (node) => {
+    switchView('nodes');
+    setSelectedNode(node.nodeId ?? node.payloadKey);
+  };
+
+  // Over to the Subjects tab, with this subject's plot open.
+  const _openPlot = (node) => {
+    state._subjectsPlotSubject = node.subjectId;
+    state.plotPaused = false;
+    switchView('subjects');
   };
 
   const _hideFromGraph = (node) => {
@@ -1415,7 +1533,9 @@ const GraphView = (() => {
     <div class="graph-info-meta">
       <span>ID: ${node.subjectId}</span>
       ${rateHtml}
-    </div>`;
+      ${node.status ? `<span class="graph-info-status graph-info-status--warn">${escapeHtml(node.status.text)}</span>` : ''}
+    </div>
+    <div class="graph-info-buttons"><button type="button" class="graph-btn" id="graphInfoPlot">Plot in Subjects</button></div>`;
 
     if (node.pubs?.length) {
       html += `<div class="graph-info-section"><div class="graph-info-section-label">Publishers</div>`;
@@ -1473,10 +1593,12 @@ const GraphView = (() => {
       _paintDevice.call(this, d);
     });
     // A subject's type is known from its first message on.
-    gNodes.selectAll('.graph-node--subject').each((d) => {
+    gNodes.selectAll('.graph-node--subject').each(function(d) {
       const ev = state.latestBySubject.get(d.subjectId);
       d.label = _subjectLabel(d.subjectId, ev);
       d.fullType = _subjectFullType(d.subjectId, ev);
+      d.status = _subjectStatus(d.subjectId, d.pubs, d.subs);
+      _paintSubject.call(this, d);
     });
     gLabels.selectAll('.graph-label').each(_paintLabel).attr('y', d => _labelY(d));
 
@@ -1487,6 +1609,8 @@ const GraphView = (() => {
     }
 
     _renderHiddenBadge();
+    _renderStatusStrip();
+    if (!gState.selectedId) _applyFocus();
 
     if (gState.selectedId) _renderInfo(gState.selectedId);
   };

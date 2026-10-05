@@ -428,6 +428,33 @@ async def _(page):
     assert changes == 0, f"Info panel changed {changes} times in 2.5 s without new data"
 
 
+@test("Graph: the status strip counts what needs a look, and picks it out")
+async def _(page):
+    chips = [" ".join(t.split()) for t in await page.locator("#graphStatus .graph-chip").all_inner_texts()]
+    for expected in ("1 offline", "2 displaced", "1 unusual health", "1 silent"):
+        assert expected in chips, f"Missing {expected!r} in the strip: {chips}"
+    offline = page.locator('#graphStatus [data-focus="offline"]')
+    await offline.click()
+    dimmed = await page.evaluate("""() => Object.fromEntries([...document.querySelectorAll('#graphContainer .graph-node')]
+        .map(el => [d3.select(el).datum().id, el.classList.contains('graph-dim')]))""")
+    await offline.click()
+    assert dimmed["dev:40"] is False and all(d for key, d in dimmed.items() if key != "dev:40"), \
+        f"Picking 'offline' left these lit: {[k for k, d in dimmed.items() if not d]}"
+
+
+@test("Graph: 'Open in Nodes' selects the device in the Nodes tab")
+async def _(page):
+    await page.evaluate("""() => [...document.querySelectorAll('#graphContainer .graph-node')]
+        .find(e => d3.select(e).datum().id === 'dev:20').dispatchEvent(new MouseEvent('click', {bubbles: true}))""")
+    await page.locator("#graphInfoOpen").click()
+    try:
+        shown = await page.evaluate("({view: state.activeView, node: state.selectedNodeId})")
+        assert shown == {"view": "nodes", "node": 20}, f"After 'Open in Nodes': {shown}"
+    finally:
+        await page.evaluate("clearSelectedNode()")
+        await page.locator("#viewTabGraph").click()
+
+
 @test("Graph: 'Nodes only' honours Hide system and shows direction")
 async def _(page):
     await page.select_option("#graphView", "nodes")
