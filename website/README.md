@@ -74,7 +74,7 @@ Open in browser:
 - View tabs (bottom of sidebar):
   - **Nodes** — node-centric table with per-node detail panel; ghost rows for displaced identities pinned to bottom
   - **Subjects** — subject-centric table listing all subjects and services across the network, with inline service expansion
-  - **Graph** — D3 force-directed bipartite topology showing device and subject nodes with directional pub/sub links
+  - **Graph** — D3 force-directed bipartite topology showing device and subject nodes with directional pub/sub links. An edge is live while messages keep arriving on it and goes silent after three message periods (two seconds at least) without one; a publisher's edge shows that publisher's own rate, and nothing flows to or from an offline device. A device whose node-ID another device took is drawn offline under the node-ID it last had. A click selects a node; a drag moves and pins it
   - **Compare** — independent graphs for side-by-side multi-series comparison with derived series, thresholds, markers, and freehand drawing
   - **DSDL** — searchable tree of loaded DSDL types with bus-activity badges, field-level search, dependency navigation, and a custom-type editor under `dsdl_messages/custom/`
   - **Record** — capture filtered events into per-recording SQLite stores with `max_length` / `max_events` caps, quick-save the last N seconds, edit limits on live recordings, duplicate, and CSV/JSON export

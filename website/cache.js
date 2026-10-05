@@ -17,6 +17,16 @@ const cacheEvent = (event) => {
     return;
   }
 
+  // When the browser got it and how long after the same publisher's previous
+  // message: a rate arrives only with a message, so this is how the graph
+  // tells a subject that has gone quiet from a slow one.
+  const previous = Number.isInteger(event.publisher_node_id)
+    ? state.latestByNode.get(event.publisher_node_id)?.get(event.subject_id)
+    : state.latestBySubject.get(event.subject_id);
+  event._rxMs = Date.now();
+  event._gapMs = previous?._rxMs ? event._rxMs - previous._rxMs : null;
+  event._prevGapMs = previous?._gapMs ?? null;
+
   state.latestBySubject.set(event.subject_id, event);
 
   if (Number.isInteger(event.publisher_node_id)) {

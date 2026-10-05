@@ -5004,6 +5004,14 @@ details.svc-history-entry[open] > summary::before {
   animation: none;
 }
 
+/* Kept after the rules above, which it must outrank */
+@media (prefers-reduced-motion: reduce) {
+  .graph-link--live,
+  .graph-node--live .graph-device-circle {
+    animation: none;
+  }
+}
+
 /* Filter input */
 .graph-filter {
   flex: 0 1 14rem;

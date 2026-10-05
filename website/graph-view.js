@@ -123,16 +123,22 @@ const GraphView = (() => {
       return key ? hiddenNodeKeys.has(key) : false;
     };
 
-    for (const node of Object.values(nodes)) {
+    // Devices are keyed as /api/nodes keys them: by node-ID, or "uid:<hex>"
+    // for one whose node-ID another device took. pubs/subs hold these keys.
+    for (const [key, node] of Object.entries(nodes)) {
       if (_isHiddenNode(node)) continue;
       const nid = node.node_id;
-      const id = `dev:${nid}`;
+      const id = `dev:${key}`;
+      const shownId = _shownNodeId(node);
       deviceNodes.push({
         id,
         nodeId: nid,
+        payloadKey: key,
+        shownId,
+        ghost: node._ghost === true,
         type: 'device',
-        label: _deviceDisplayLabel(node, nid),
-        fullName: _deviceFullName(node, nid),
+        label: _deviceDisplayLabel(node, shownId),
+        fullName: _deviceFullName(node, shownId),
         uniqueId: node.unique_id || null,
         stableKey: typeof nodeStableKey === 'function' ? nodeStableKey(node) : null,
         health: getNodeHealthValue(nid),
@@ -142,14 +148,14 @@ const GraphView = (() => {
       for (const sid of node.publishers || []) {
         if (_isHiddenSubject(sid)) continue;
         if (!subjectSet.has(sid)) subjectSet.set(sid, { pubs: [], subs: [] });
-        subjectSet.get(sid).pubs.push(nid);
-        links.push({ source: id, target: `sub:${sid}`, type: 'pub', subjectId: sid });
+        subjectSet.get(sid).pubs.push(key);
+        links.push({ source: id, target: `sub:${sid}`, type: 'pub', subjectId: sid, publisherId: nid });
       }
       for (const sid of node.subscribers || []) {
         if (_isHiddenSubject(sid)) continue;
         if (!subjectSet.has(sid)) subjectSet.set(sid, { pubs: [], subs: [] });
-        subjectSet.get(sid).subs.push(nid);
-        links.push({ source: `sub:${sid}`, target: id, type: 'sub', subjectId: sid });
+        subjectSet.get(sid).subs.push(key);
+        links.push({ source: `sub:${sid}`, target: id, type: 'sub', subjectId: sid, subscriberId: nid });
       }
     }
 
@@ -161,7 +167,6 @@ const GraphView = (() => {
         type: 'subject',
         label: _truncate(ev?.message_type ? ev.message_type.split('.').pop() : `Subject ${sid}`),
         fullType: ev?.message_type || null,
-        rate: ev ? getSubjectRate(ev) : null,
         pubs: meta.pubs,
         subs: meta.subs,
       });
@@ -183,6 +188,7 @@ const GraphView = (() => {
     const collapsedLinks = [];
     const collapsedAdj = new Map();
     for (const [sid, meta] of subjectSet) {
+      if (gState.hideSystem && _isSystemSubject(sid)) continue;
       for (const pub of meta.pubs) {
         for (const sub of meta.subs) {
           if (pub === sub) continue;
@@ -190,13 +196,26 @@ const GraphView = (() => {
           const tgt = `dev:${sub}`;
           const key = `${src}|${tgt}`;
           if (!collapsedAdj.has(key)) {
-            collapsedAdj.set(key, { source: src, target: tgt, subjects: [] });
+            collapsedAdj.set(key, {
+              source: src, target: tgt, type: 'dev', subjects: [],
+              publisherId: nodes[pub]?.node_id ?? null,
+              subscriberId: nodes[sub]?.node_id ?? null,
+            });
           }
           collapsedAdj.get(key).subjects.push(sid);
         }
       }
     }
     for (const link of collapsedAdj.values()) collapsedLinks.push(link);
+
+    // In "Nodes only" a device's drawn neighbours are devices: the filter and
+    // the highlight must reach them, not just the (undrawn) subjects between.
+    if (!_showSubs()) {
+      for (const link of collapsedLinks) {
+        addAdj(link.source, link.target);
+        addAdj(link.target, link.source);
+      }
+    }
 
     return { deviceNodes, subjectNodes, links, collapsedLinks, adjacency };
   };
@@ -209,12 +228,51 @@ const GraphView = (() => {
     return [];
   };
 
-  const linkRate = (link) => {
-    let total = 0;
+  // A rate arrives only with a message, so a publisher that stops keeps its
+  // last one. A message counts as current for three of its periods (two
+  // seconds at least); the period is the rate's, or the gap between messages
+  // when that is longer, as for subjects too slow to report a rate. Of the
+  // last two gaps the shorter counts: one stray message after a long pause
+  // does not make a stopped subject look slow and alive.
+  // A paused or finished replay keeps the picture it stopped at.
+  const FRESH_PERIODS = 3;
+  const FRESH_MIN_MS = 2000;
+
+  const _isFresh = (ev, now) => {
+    if (!ev) return false;
+    if (state.replayPaused || state.replayFinished) return true;
+    const gapMs = Math.min(ev._gapMs ?? Infinity, ev._prevGapMs ?? Infinity);
+    const periodMs = Math.max(ev.rate > 0 ? 1000 / ev.rate : 0, Number.isFinite(gapMs) ? gapMs : 0);
+    return now - (ev._rxMs || 0) <= Math.max(FRESH_MIN_MS, FRESH_PERIODS * periodMs);
+  };
+
+  const _isOnline = (nodeId) => nodeId != null && !isNodeDisappeared(nodeId);
+
+  // The current message an edge's traffic is judged by, or null. A publisher's
+  // edge goes by that publisher's own messages, since a subject may have
+  // several publishers (every node publishes Heartbeat). A subscriber's edge
+  // goes by the subject's, and carries nothing to a subscriber that is offline.
+  const _currentEvent = (link, sid, now) => {
+    if (link.type !== 'pub' && !_isOnline(link.subscriberId)) return null;
+    const ev = link.type === 'sub'
+      ? state.latestBySubject.get(sid)
+      : _isOnline(link.publisherId) ? state.latestByNode.get(link.publisherId)?.get(sid) : null;
+    return _isFresh(ev, now) ? ev : null;
+  };
+
+  // What an edge carries now: whether anything current flows on it, at what
+  // message rate, and the payload size of the latest messages.
+  const _linkTraffic = (link) => {
+    const now = Date.now();
+    const traffic = { live: false, rate: 0, payload: 0 };
     for (const sid of _linkSubjectIds(link)) {
-      total += getSubjectRate(state.latestBySubject.get(sid));
+      const ev = _currentEvent(link, sid, now);
+      if (!ev) continue;
+      traffic.live = true;
+      traffic.rate += link.type === 'sub' ? getSubjectRate(ev) : (Number(ev.rate) || 0);
+      traffic.payload += ev.payload_bytes || 0;
     }
-    return total;
+    return traffic;
   };
 
   const rateToWidth = (rate) => {
@@ -222,37 +280,35 @@ const GraphView = (() => {
     return Math.min(4, 1 + Math.log10(rate + 1) * 1.1);
   };
 
-  const isLinkLive = (link) => {
-    const now = Date.now() / 1000;
-    for (const sid of _linkSubjectIds(link)) {
-      const ev = state.latestBySubject.get(sid);
-      if (!ev) continue;
-      if (getSubjectRate(ev) > 0) return true;
-      if (ev.timestamp_unix && now - ev.timestamp_unix < 2) return true;
-    }
-    return false;
+  const _paintLink = function(d) {
+    const { live, rate } = _linkTraffic(d);
+    d3.select(this)
+      .attr('stroke-width', rateToWidth(rate))
+      .classed('graph-link--live', live);
   };
+
+  // Publisher and device-to-device edges point at whoever receives the data.
+  const _hasArrow = (link) => link.type !== 'sub';
 
   const isDeviceLive = (nodeId, disappeared) => {
     if (disappeared) return false;
     return typeof getNodeRate === 'function' && getNodeRate(nodeId) > 0;
   };
 
-  const _deviceFullName = (raw, nid) => {
-    const alias = typeof getNodeAlias === 'function' ? getNodeAlias(raw?.unique_id) : null;
-    return alias || raw?.name || `Node ${nid}`;
+  // The node-ID a device is shown under: its own, or for one whose node-ID
+  // another device took, the one it last had, as the Nodes table shows it.
+  const _shownNodeId = (raw) => (raw?._ghost === true ? raw.last_node_id : raw?.node_id) ?? '-';
+
+  // A displaced device goes without its alias, as in the Nodes table.
+  const _deviceFullName = (raw, shownId) => {
+    const alias = typeof getNodeAlias === 'function' && raw?._ghost !== true ? getNodeAlias(raw?.unique_id) : null;
+    return alias || raw?.name || `Node ${shownId}`;
   };
 
-  const _deviceDisplayLabel = (raw, nid) => _truncate(_deviceFullName(raw, nid), 20);
+  const _deviceDisplayLabel = (raw, shownId) => _truncate(_deviceFullName(raw, shownId), 20);
 
   const _linkStatText = (link) => {
-    let rate = 0, payload = 0;
-    for (const sid of _linkSubjectIds(link)) {
-      const ev = state.latestBySubject.get(sid);
-      if (!ev) continue;
-      rate += getSubjectRate(ev);
-      payload += ev.payload_bytes || 0;
-    }
+    const { rate, payload } = _linkTraffic(link);
     const parts = [];
     if (rate > 0) parts.push(`${Math.round(rate)} Hz`);
     if (payload > 0) parts.push(`${payload} B`);
@@ -268,7 +324,7 @@ const GraphView = (() => {
 
   const _metricValue = (node, metric) => {
     if (metric === 'none') return 0;
-    const raw = state.latestNodesPayload?.nodes?.[String(node.nodeId ?? '')];
+    const raw = state.latestNodesPayload?.nodes?.[node.payloadKey];
     const filterSubs = (arr) => gState.hideSystem ? arr.filter(sid => !_isSystemSubject(sid)) : arr;
     const filterSvcs = (arr) => gState.hideSystem ? arr.filter(sid => !_isSystemService(sid)) : arr;
     if (node.type === 'device') {
@@ -408,6 +464,16 @@ const GraphView = (() => {
     info.className = 'graph-info hidden';
     info.id = 'graphInfo';
     svgWrap.appendChild(info);
+    // One listener for the panel's buttons: the panel is refreshed in place,
+    // so a button outlives any single render.
+    info.addEventListener('click', (e) => {
+      const action = e.target.closest('button')?.id;
+      if (action === 'graphInfoClose') { _selectNode(null); return; }
+      const node = simulation?.nodes().find((n) => n.id === gState.selectedId);
+      if (!node) return;
+      if (action === 'graphInfoHide') _hideFromGraph(node);
+      else if (action === 'graphInfoRename') _startRename(node);
+    });
 
     const width = svgWrap.clientWidth || 800;
     const height = svgWrap.clientHeight || 600;
@@ -467,7 +533,10 @@ const GraphView = (() => {
     svg.call(zoomBehavior);
 
     if (typeof ResizeObserver !== 'undefined') {
-      const ro = new ResizeObserver(() => { if (gState.selectedId) _positionInfoPanel(); });
+      const ro = new ResizeObserver(() => {
+        _syncViewBox();
+        if (gState.selectedId) _positionInfoPanel();
+      });
       ro.observe(svgWrap);
     }
 
@@ -541,6 +610,7 @@ const GraphView = (() => {
       for (const key of Object.keys(gState.positions)) {
         delete gState.positions[key].pinned;
       }
+      gNodes.selectAll('.graph-node').classed('graph-node--pinned', false);
       if (simulation) {
         simulation.nodes().forEach(n => { n.fx = null; n.fy = null; });
         simulation.alpha(0.15).restart();
@@ -594,7 +664,7 @@ const GraphView = (() => {
     const matchesFilter = (n) => {
       if (!filterStr) return true;
       if (n.type === 'device') {
-        return String(n.nodeId).includes(filterStr) || (n.label || '').toLowerCase().includes(filterStr);
+        return String(n.shownId).includes(filterStr) || (n.label || '').toLowerCase().includes(filterStr);
       }
       return String(n.subjectId).includes(filterStr)
         || (n.label || '').toLowerCase().includes(filterStr)
@@ -681,13 +751,8 @@ const GraphView = (() => {
     linkSel.exit().remove();
     const linkEnter = linkSel.enter().append('line')
       .attr('class', 'graph-link')
-      .attr('marker-end', d => d.type === 'pub' ? 'url(#graph-arrow-pub)' : null);
-    linkEnter.merge(linkSel).each(function(d) {
-      const rate = linkRate(d);
-      d3.select(this)
-        .attr('stroke-width', rateToWidth(rate))
-        .classed('graph-link--live', isLinkLive(d));
-    });
+      .attr('marker-end', d => _hasArrow(d) ? 'url(#graph-arrow-pub)' : null);
+    linkEnter.merge(linkSel).each(_paintLink);
 
     // Nodes
     const nodeSel = gNodes.selectAll('.graph-node').data(allNodes, d => d.id);
@@ -709,7 +774,7 @@ const GraphView = (() => {
           .attr('class', 'graph-node-id')
           .attr('text-anchor', 'middle')
           .attr('dominant-baseline', 'central')
-          .text(d.nodeId);
+          .text(d.shownId);
       } else {
         g.append('rect')
           .attr('x', -8).attr('y', -8)
@@ -723,6 +788,7 @@ const GraphView = (() => {
     const merged = nodeEnter.merge(nodeSel);
     merged.each(function(d) {
       const g = d3.select(this);
+      g.classed('graph-node--pinned', !!gState.positions[d.id]?.pinned);
       if (d.type === 'device') {
         g.select('.graph-device-circle')
           .attr('stroke', d.disappeared ? 'var(--unknown)' : getHealthColor(d.health))
@@ -908,25 +974,37 @@ const GraphView = (() => {
 
   // ── Drag ──
 
+  // Screen pixels a press may wander and still be a click, which only selects:
+  // moving and pinning a node take a drag.
+  const CLICK_DISTANCE = 3;
+
   const _dragBehavior = () => d3.drag()
+    .clickDistance(CLICK_DISTANCE)
     .on('start', (e, d) => {
-      if (!e.active) simulation.alphaTarget(0.05).restart();
-      d.fx = d.x;
-      d.fy = d.y;
+      d._press = { x: e.x, y: e.y, reheat: !e.active, moved: false };
     })
     .on('drag', (e, d) => {
+      const press = d._press;
+      if (!press.moved) {
+        const k = d3.zoomTransform(svg.node()).k;
+        if (Math.hypot(e.x - press.x, e.y - press.y) * k <= CLICK_DISTANCE) return;
+        press.moved = true;
+        if (press.reheat) simulation.alphaTarget(0.05).restart();
+      }
       d.fx = e.x;
       d.fy = e.y;
     })
-    .on('end', (e, d) => {
+    .on('end', function(e, d) {
       if (!e.active) simulation.alphaTarget(0);
+      const moved = d._press?.moved;
+      d._press = null;
+      if (!moved) return;
       const sx = _snap(e.x);
       const sy = _snap(e.y);
       d.fx = sx;
       d.fy = sy;
       gState.positions[d.id] = { x: sx, y: sy, pinned: true };
-      d3.select(e.sourceEvent.target.closest('.graph-node'))
-        .classed('graph-node--pinned', true);
+      d3.select(this).classed('graph-node--pinned', true);
       save();
     });
 
@@ -947,7 +1025,8 @@ const GraphView = (() => {
   const _applyHighlight = (id, isHover) => {
     if (!id) {
       gNodes.selectAll('.graph-node').classed('graph-dim', false).classed('graph-hi', false);
-      gLinks.selectAll('.graph-link').classed('graph-dim', false).classed('graph-link--hi', false);
+      gLinks.selectAll('.graph-link').classed('graph-dim', false).classed('graph-link--hi', false)
+        .attr('marker-end', d => _hasArrow(d) ? 'url(#graph-arrow-pub)' : null);
       gLabels.selectAll('.graph-label').classed('graph-dim', false);
       return;
     }
@@ -970,7 +1049,7 @@ const GraphView = (() => {
       d3.select(this)
         .classed('graph-link--hi', connected)
         .classed('graph-dim', !connected)
-        .attr('marker-end', connected && d.type === 'pub' ? 'url(#graph-arrow-pub-hi)' : (d.type === 'pub' ? 'url(#graph-arrow-pub)' : null));
+        .attr('marker-end', !_hasArrow(d) ? null : connected ? 'url(#graph-arrow-pub-hi)' : 'url(#graph-arrow-pub)');
     });
 
     gLabels.selectAll('.graph-label').each(function(d) {
@@ -1003,11 +1082,11 @@ const GraphView = (() => {
     const node = allNodes.find(n => n.id === id);
     if (!node) { panel.classList.add('hidden'); return; }
 
-    if (node.type === 'device') {
-      _renderDeviceInfo(panel, node);
-    } else {
-      _renderSubjectInfo(panel, node);
-    }
+    // Patched in place, not rebuilt: this runs every second, and a click on a
+    // button swapped out between press and release is lost.
+    const fresh = document.createElement('div');
+    fresh.innerHTML = node.type === 'device' ? _deviceInfoHtml(node) : _subjectInfoHtml(node);
+    patchChildren(panel, fresh);
     _positionInfoPanel();
   };
 
@@ -1049,19 +1128,20 @@ const GraphView = (() => {
     panel.style.top = `${y}px`;
   };
 
-  const _renderDeviceInfo = (panel, node) => {
-    const raw = state.latestNodesPayload?.nodes?.[String(node.nodeId)];
+  const _deviceInfoHtml = (node) => {
+    const raw = state.latestNodesPayload?.nodes?.[node.payloadKey];
     const health = node.health || 'UNKNOWN';
     const hClass = getHealthCssClass(health);
-    const alias = typeof getNodeAlias === 'function' ? getNodeAlias(raw?.unique_id) : null;
-    const displayName = alias || node.fullName || node.label;
+    const displayName = raw ? _deviceFullName(raw, node.shownId) : node.fullName;
+    // A displaced device goes without an alias, so it offers no renaming.
+    const renameButton = node.ghost ? '' : `<button class="graph-info-icon-btn" id="graphInfoRename" aria-label="Rename device" title="Rename">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        </button>`;
 
     let html = `<div class="graph-info-header">
       <span class="graph-info-type">Device</span>
       <div class="graph-info-actions">
-        <button class="graph-info-icon-btn" id="graphInfoRename" aria-label="Rename device" title="Rename">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-        </button>
+        ${renameButton}
         <button class="graph-info-icon-btn" id="graphInfoHide" aria-label="Hide device" title="Hide">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.5 18.5 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
         </button>
@@ -1070,7 +1150,7 @@ const GraphView = (() => {
     </div>
     <div class="graph-info-title" id="graphInfoTitle" data-uid="${escapeHtml(raw?.unique_id_hex || '')}">${escapeHtml(displayName)}</div>
     <div class="graph-info-meta">
-      <span>ID: ${node.nodeId}</span>
+      <span>${node.ghost ? 'Last ID' : 'ID'}: ${escapeHtml(String(node.shownId))}</span>
       <span class="graph-info-health ${hClass}">${escapeHtml(health)}</span>
       ${node.disappeared ? '<span class="graph-info-offline">OFFLINE</span>' : ''}
     </div>`;
@@ -1106,22 +1186,25 @@ const GraphView = (() => {
       }
     }
 
-    panel.innerHTML = html;
-    document.getElementById('graphInfoClose')?.addEventListener('click', () => _selectNode(null));
-    document.getElementById('graphInfoHide')?.addEventListener('click', () => {
-      if (typeof hideNode === 'function') hideNode(node.nodeId);
-      _selectNode(null);
-      _render(deriveGraph());
-      _renderHiddenBadge();
-    });
-    document.getElementById('graphInfoRename')?.addEventListener('click', () => {
-      _startRename(node, raw);
-    });
+    return html;
   };
 
-  const _startRename = (node, raw) => {
+  const _hideFromGraph = (node) => {
+    if (node.type === 'device') {
+      // hideNode() takes a node-ID; a displaced device has only its key.
+      if (typeof hideNode === 'function') hideNode(node.nodeId ?? node.payloadKey);
+    } else if (typeof hideSubject === 'function') {
+      hideSubject({ id: node.subjectId });
+    }
+    _selectNode(null);
+    _render(deriveGraph());
+    _renderHiddenBadge();
+  };
+
+  const _startRename = (node) => {
     const titleEl = document.getElementById('graphInfoTitle');
     if (!titleEl) return;
+    const raw = state.latestNodesPayload?.nodes?.[node.payloadKey];
     const uid = raw?.unique_id;
     const current = (typeof getNodeAlias === 'function' && getNodeAlias(uid)) || raw?.name || '';
     const input = document.createElement('input');
@@ -1138,6 +1221,8 @@ const GraphView = (() => {
       if (committed) return;
       committed = true;
       if (save && typeof setNodeAlias === 'function') setNodeAlias(uid, input.value);
+      // Out of the input, or _renderInfo() keeps it as an edit in progress.
+      input.blur();
       const id = node.id;
       _render(deriveGraph());
       _selectNode(id);
@@ -1149,8 +1234,16 @@ const GraphView = (() => {
     input.addEventListener('blur', () => commit(true));
   };
 
-  const _renderSubjectInfo = (panel, node) => {
+  // A device listed in a subject's panel, by its /api/nodes key.
+  const _deviceRowHtml = (key) => {
+    const raw = state.latestNodesPayload?.nodes?.[key];
+    const shownId = _shownNodeId(raw);
+    return `<div class="graph-info-row"><span class="graph-info-sid">${escapeHtml(String(shownId))}</span><span class="graph-info-mtype">${escapeHtml(_deviceFullName(raw, shownId))}</span></div>`;
+  };
+
+  const _subjectInfoHtml = (node) => {
     const ev = state.latestBySubject.get(node.subjectId);
+    const rateText = !ev ? '' : _isFresh(ev, Date.now()) ? `${getSubjectRate(ev).toFixed(1)} msg/s` : 'silent';
     let html = `<div class="graph-info-header">
       <span class="graph-info-type">Subject</span>
       <div class="graph-info-actions">
@@ -1163,7 +1256,7 @@ const GraphView = (() => {
     <div class="graph-info-title">${escapeHtml(node.fullType || node.label)}</div>
     <div class="graph-info-meta">
       <span>ID: ${node.subjectId}</span>
-      ${node.rate != null ? `<span>${Number(node.rate).toFixed(1)} msg/s</span>` : ''}
+      ${rateText ? `<span>${rateText}</span>` : ''}
     </div>`;
 
     if (node.fullType) {
@@ -1172,20 +1265,12 @@ const GraphView = (() => {
 
     if (node.pubs?.length) {
       html += `<div class="graph-info-section"><div class="graph-info-section-label">Publishers</div>`;
-      html += node.pubs.map(nid => {
-        const raw = state.latestNodesPayload?.nodes?.[String(nid)];
-        const label = raw?.name || `Node ${nid}`;
-        return `<div class="graph-info-row"><span class="graph-info-sid">${nid}</span><span class="graph-info-mtype">${escapeHtml(label)}</span></div>`;
-      }).join('');
+      html += node.pubs.map(_deviceRowHtml).join('');
       html += '</div>';
     }
     if (node.subs?.length) {
       html += `<div class="graph-info-section"><div class="graph-info-section-label">Subscribers</div>`;
-      html += node.subs.map(nid => {
-        const raw = state.latestNodesPayload?.nodes?.[String(nid)];
-        const label = raw?.name || `Node ${nid}`;
-        return `<div class="graph-info-row"><span class="graph-info-sid">${nid}</span><span class="graph-info-mtype">${escapeHtml(label)}</span></div>`;
-      }).join('');
+      html += node.subs.map(_deviceRowHtml).join('');
       html += '</div>';
     }
 
@@ -1197,14 +1282,7 @@ const GraphView = (() => {
       html += '</div>';
     }
 
-    panel.innerHTML = html;
-    document.getElementById('graphInfoClose')?.addEventListener('click', () => _selectNode(null));
-    document.getElementById('graphInfoHide')?.addEventListener('click', () => {
-      if (typeof hideSubject === 'function') hideSubject({ id: node.subjectId });
-      _selectNode(null);
-      _render(deriveGraph());
-      _renderHiddenBadge();
-    });
+    return html;
   };
 
   // ── Live refresh ──
@@ -1234,12 +1312,12 @@ const GraphView = (() => {
     let labelTextChanged = false;
     gNodes.selectAll('.graph-node--device').each(function(d) {
       const newHealth = getNodeHealthValue(d.nodeId);
-      const raw = state.latestNodesPayload?.nodes?.[String(d.nodeId)];
+      const raw = state.latestNodesPayload?.nodes?.[d.payloadKey];
       d.health = newHealth;
       d.disappeared = raw?.has_disappeared || false;
-      const newLabel = _deviceDisplayLabel(raw, d.nodeId);
+      const newLabel = _deviceDisplayLabel(raw, d.shownId);
       if (newLabel !== d.label) { d.label = newLabel; labelTextChanged = true; }
-      d.fullName = _deviceFullName(raw, d.nodeId);
+      d.fullName = _deviceFullName(raw, d.shownId);
       const g = d3.select(this);
       g.select('.graph-device-circle')
         .attr('stroke', d.disappeared ? 'var(--unknown)' : getHealthColor(newHealth))
@@ -1250,12 +1328,7 @@ const GraphView = (() => {
       gLabels.selectAll('.graph-label--device').text(d => d.label);
     }
 
-    gLinks.selectAll('.graph-link').each(function(d) {
-      const rate = linkRate(d);
-      d3.select(this)
-        .attr('stroke-width', rateToWidth(rate))
-        .classed('graph-link--live', isLinkLive(d));
-    });
+    gLinks.selectAll('.graph-link').each(_paintLink);
 
     if (gState.showLinkStats) {
       gLinkLabels.selectAll('.graph-link-label').text(d => _linkStatText(d));
@@ -1271,24 +1344,27 @@ const GraphView = (() => {
     refreshTimer = setInterval(_refresh, REFRESH_MS);
   };
 
+  // One SVG unit per screen pixel, as the layout and the info panel's placement
+  // assume. A hidden tab has no size; it keeps the last one.
+  const _syncViewBox = () => {
+    const wrap = svg?.node()?.parentNode;
+    if (!wrap?.clientWidth || !wrap.clientHeight) return;
+    const w = wrap.clientWidth;
+    const h = wrap.clientHeight;
+    svg.attr('viewBox', `0 0 ${w} ${h}`);
+    if (simulation) simulation.force('center', d3.forceCenter(w / 2, h / 2).strength(0.03));
+  };
+
   // ── Public API ──
 
   const show = () => {
-    if (!gState.initialized) init();
+    // Shown before init(), so that the first layout has the real size.
     const root = document.getElementById('graphContainer');
     if (root) root.classList.remove('hidden');
+    if (!gState.initialized) init();
     _startRefresh();
+    _syncViewBox();
     _refresh();
-    // Resize viewBox to current container
-    if (svg) {
-      const wrap = root?.querySelector('.graph-svg-wrap');
-      if (wrap) {
-        const w = wrap.clientWidth || 800;
-        const h = wrap.clientHeight || 600;
-        svg.attr('viewBox', `0 0 ${w} ${h}`);
-        if (simulation) simulation.force('center', d3.forceCenter(w / 2, h / 2).strength(0.03));
-      }
-    }
   };
 
   const hide = () => {

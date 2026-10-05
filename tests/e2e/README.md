@@ -1,8 +1,9 @@
 # End-to-End Tests
 
 Playwright tests for the Cynitor frontend. These run against the static site
-only and need no backend, because every assertion describes the disconnected
-state of the landing page.
+only and need no backend: the landing page's assertions describe its
+disconnected state, and the Graph tab's tests feed it nodes and messages
+through the same paths live data takes.
 
 Backend unit tests live separately in `server/tests/` and run under pytest.
 
@@ -39,7 +40,7 @@ Tests run in registration order on one page; the first one navigates.
 
 | File | Covers |
 |------|--------|
-| `test_landing_page.py` | Landing page: layout, semaphores, nodes table, theme toggle, sidebar collapse, accessibility labels |
+| `test_landing_page.py` | Landing page: layout, semaphores, nodes table, theme toggle, sidebar collapse, accessibility labels. Graph tab: silent subjects, per-publisher edge rates, devices that lost their node-ID, click vs. drag, "Nodes only" view, reduced motion, resize |
 
 ## Configuration
 
