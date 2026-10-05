@@ -458,17 +458,22 @@ async def _(page):
     assert not node["pinned"] and node["fx"] is None, f"The click pinned the node: {node}"
 
 
-@test("Graph: the open info panel is left alone while nothing changes")
+@test("Graph: the open inspector keeps its buttons while it refreshes, and draws rate sparklines")
 async def _(page):
-    # Rebuilt each second, its buttons were swapped out under the pointer.
-    changes = await page.evaluate("""() => new Promise(done => {
-        let n = 0;
-        const observer = new MutationObserver(records => { n += records.length; });
-        observer.observe(document.getElementById('graphInfo'), {childList: true, subtree: true, characterData: true});
-        setTimeout(() => { observer.disconnect(); done(n); }, 2500);
+    # Rebuilt each second, its buttons were swapped out under the pointer and
+    # clicks were lost. Sparklines move each second; the buttons must stay.
+    kept = await page.evaluate("""() => new Promise(done => {
+        const panel = document.getElementById('graphInfo');
+        const before = [...panel.querySelectorAll('button')];
+        setTimeout(() => {
+            const after = [...panel.querySelectorAll('button')];
+            done(before.length > 0 && before.length === after.length && before.every((b, i) => b === after[i]));
+        }, 2500);
     })""")
+    sparks = await page.locator("#graphInfo .graph-spark polyline").count()
     await page.locator("#graphInfoClose").click()
-    assert changes == 0, f"Info panel changed {changes} times in 2.5 s without new data"
+    assert kept, "The inspector replaced its buttons while refreshing"
+    assert sparks > 0, "No rate sparklines in the inspector"
 
 
 @test("Graph: the inspector docks beside the canvas, follows its rows, and Esc closes it")

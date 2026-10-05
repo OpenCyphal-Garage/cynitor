@@ -354,6 +354,40 @@ const GraphView = (() => {
       .classed('graph-link--svc', d.type === 'svc');
   };
 
+  // ── Rate history ──
+  //
+  // The last minute of each drawn data edge's rate, sampled once a second
+  // while the tab is open, for the inspector's sparklines.
+  const SPARK_SAMPLES = 60;
+  const rateHistory = new Map();  // link key -> rates, oldest first
+
+  const _recordRates = (links) => {
+    const seen = new Set();
+    for (const link of links) {
+      if (link.type !== 'pub' && link.type !== 'sub') continue;
+      const key = _linkKey(link);
+      seen.add(key);
+      const rates = rateHistory.get(key) || [];
+      rates.push(_linkTraffic(link).rate);
+      if (rates.length > SPARK_SAMPLES) rates.shift();
+      rateHistory.set(key, rates);
+    }
+    for (const key of rateHistory.keys()) if (!seen.has(key)) rateHistory.delete(key);
+  };
+
+  // A sparkline of an edge's rate, newest at the right, scaled to its own
+  // peak with room above it, so that a steady rate is a line, not the edge
+  // of the box; nothing until there are two samples.
+  const _sparkHtml = (key) => {
+    const rates = rateHistory.get(key);
+    if (!rates || rates.length < 2) return '';
+    const peak = Math.max(...rates, 0.1) * 1.4;
+    const start = SPARK_SAMPLES - rates.length;
+    const points = rates.map((v, i) => `${start + i},${(15 - (v / peak) * 14).toFixed(1)}`).join(' ');
+    return `<svg class="graph-spark" viewBox="0 0 ${SPARK_SAMPLES - 1} 16" preserveAspectRatio="none"`
+      + ` aria-hidden="true"><polyline points="${points}"/></svg>`;
+  };
+
   // An edge's identity in a data join: a service edge and a data edge may
   // join the same two devices.
   const _linkKey = (d) => {
@@ -1832,11 +1866,13 @@ const GraphView = (() => {
       const online = !node.disappeared;
       html += _portSectionHtml('Publishers', raw.publishers, (sid) => {
         const ev = online ? state.latestByNode.get(node.nodeId)?.get(sid) : null;
-        return [_subjectShortType(sid, state.latestBySubject.get(sid)), ev, Number(ev?.rate) || 0, `sub:${sid}`];
+        return [_subjectShortType(sid, state.latestBySubject.get(sid)), ev, Number(ev?.rate) || 0, `sub:${sid}`,
+          `pub:dev:${node.payloadKey}|sub:${sid}`];
       });
       html += _portSectionHtml('Subscribers', raw.subscribers, (sid) => {
         const ev = online ? state.latestBySubject.get(sid) : null;
-        return [_subjectShortType(sid, state.latestBySubject.get(sid)), ev, getSubjectRate(ev), `sub:${sid}`];
+        return [_subjectShortType(sid, state.latestBySubject.get(sid)), ev, getSubjectRate(ev), `sub:${sid}`,
+          `sub:sub:${sid}|dev:${node.payloadKey}`];
       });
       html += _portSectionHtml('Servers', raw.servers, (sid) => [_serviceShortName(sid)]);
       html += _portSectionHtml('Clients', raw.clients, (sid) => [_serviceShortName(sid)]);
@@ -1853,16 +1889,16 @@ const GraphView = (() => {
 
   // One section of ports: ID, name and, where messages are judged, the rate
   // or that it has gone silent. describe(id) gives [name, message, rate, the
-  // graph node the row selects].
+  // graph node the row selects, the edge whose rate history to draw].
   const _portSectionHtml = (title, ids, describe) => {
     if (!ids?.length) return '';
     const rows = ids.map((id) => {
-      const [name, ev, rate, selects] = describe(id);
+      const [name, ev, rate, selects, edge] = describe(id);
       const rateHtml = !ev ? ''
         : _isFresh(ev, Date.now()) ? `<span class="graph-info-rate">${Number(rate).toFixed(1)} Hz</span>`
         : '<span class="graph-info-rate graph-info-status--warn">silent</span>';
       const cells = `<span class="graph-info-sid">${id}</span>`
-        + `<span class="graph-info-mtype">${escapeHtml(name || '')}</span>${rateHtml}`;
+        + `<span class="graph-info-mtype">${escapeHtml(name || '')}</span>${edge ? _sparkHtml(edge) : ''}${rateHtml}`;
       return _rowHtml(selects, cells);
     }).join('');
     return `<div class="graph-info-section"><div class="graph-info-section-label">${title} (${ids.length})</div>${rows}</div>`;
@@ -2040,6 +2076,7 @@ ${_factsHtml([
     gLabels.selectAll('.graph-label').each(_paintLabel).attr('y', d => _labelY(d));
 
     gLinks.selectAll('.graph-link').each(_paintLink);
+    _recordRates(gLinks.selectAll('.graph-link').data());
 
     if (gState.showLinkStats) {
       gLinkLabels.selectAll('.graph-link-label').text(d => _linkStatText(d));

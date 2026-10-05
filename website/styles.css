@@ -5071,7 +5071,32 @@ details.svc-history-entry[open] > summary::before {
   margin: 0.125rem 0 0.375rem;
 }
 
+/* A port's rate over the last minute, beside the rate */
+.graph-spark {
+  flex-shrink: 0;
+  width: 3rem;
+  height: 0.75rem;
+  margin-left: auto;
+  /* Replaced each second: a press must land on its row, which stays */
+  pointer-events: none;
+  /* The slot shows where the minute's history will fill in */
+  background: var(--surface-2);
+  border-radius: 0.125rem;
+}
+
+.graph-spark polyline {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.graph-spark + .graph-info-rate { margin-left: 0.5rem; }
+
 .graph-info-rate {
+  /* One width for "50.0 Hz" and "silent", so that the sparklines align */
+  min-width: 3.75rem;
+  text-align: right;
   margin-left: auto;
   color: var(--muted);
   white-space: nowrap;
