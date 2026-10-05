@@ -302,14 +302,29 @@ GRAPH_LINKS = """() => Object.fromEntries([...document.querySelectorAll('#graphC
     const d = d3.select(el).datum();
     const end = (n) => typeof n === 'object' ? n.id : n;
     return [`${end(d.source)}->${end(d.target)}`, {live: el.classList.contains('graph-link--live'),
+        silent: el.classList.contains('graph-link--silent'),
         arrow: el.getAttribute('marker-end'), subjects: d.subjects || [d.subjectId]}];
 }))"""
 
 GRAPH_NODES_DRAWN = """() => Object.fromEntries([...document.querySelectorAll('#graphContainer .graph-node')].map(el => {
     const d = d3.select(el).datum();
+    const label = [...document.querySelectorAll('#graphContainer .graph-label')].find(l => d3.select(l).datum().id === d.id);
     return [d.id, {pinned: el.classList.contains('graph-node--pinned'), fx: d.fx ?? null,
-        shownId: el.querySelector('.graph-node-id')?.textContent ?? null, name: d.fullName ?? null}];
+        shownId: el.querySelector('.graph-node-id')?.textContent ?? null, name: d.fullName ?? null,
+        classes: el.getAttribute('class'), badge: el.querySelector('.graph-health-badge')?.textContent ?? null,
+        label: label?.querySelector('.graph-label-name')?.textContent ?? null,
+        status: label?.querySelector('.graph-label-status')?.textContent ?? null}];
 }))"""
+
+
+async def open_graph_display(page):
+    if not await page.evaluate("document.getElementById('graphDisplay').open"):
+        await page.locator("#graphDisplay > summary").click()
+
+
+async def close_graph_display(page):
+    if await page.evaluate("document.getElementById('graphDisplay').open"):
+        await page.locator("#graphDisplay > summary").click()
 
 GRAPH_LINK_STATS = """() => Object.fromEntries([...document.querySelectorAll('#graphContainer .graph-link-label')].map(el => {
     const d = d3.select(el).datum();
@@ -322,17 +337,23 @@ GRAPH_LINK_STATS = """() => Object.fromEntries([...document.querySelectorAll('#g
 async def _(page):
     await page.evaluate(GRAPH_START, GRAPH_NODES)
     await page.locator("#viewTabGraph").click()
-    imu_live = f"({GRAPH_LINKS})()['dev:10->sub:1100']?.live"
-    await page.wait_for_function(f"{imu_live} === true", timeout=5000)
+    # A new user starts without the system subjects; the tests below use Heartbeat.
+    hide_system = page.locator("#graphHideSystem")
+    assert await hide_system.is_checked(), "Hide system should start on"
+    await hide_system.uncheck()
+    imu = f"({GRAPH_LINKS})()['dev:10->sub:1100']"
+    await page.wait_for_function(f"{imu}?.live === true", timeout=5000)
     await page.evaluate("window.e2eImuPublishing = false")
     # Silent after three message periods, two seconds at least.
-    await page.wait_for_function(f"{imu_live} === false", timeout=5000)
+    await page.wait_for_function(f"{imu}?.silent === true", timeout=5000)
     links = await page.evaluate(GRAPH_LINKS)
+    assert not links["dev:10->sub:1100"]["live"], "A silent edge is still drawn as traffic"
     assert links["dev:20->sub:1200"]["live"], "Subject 1200, still publishing, went silent too"
 
 
 @test("Graph: an edge carries its own publisher's rate, an offline one none")
 async def _(page):
+    await open_graph_display(page)
     await page.locator("#graphShowLinkStats").check()
     try:
         # Heartbeat's 3 Hz is three nodes at 1 Hz each.
@@ -344,6 +365,7 @@ async def _(page):
         assert not links["dev:40->sub:7509"]["live"], "Offline node 40's edge is drawn live"
     finally:
         await page.locator("#graphShowLinkStats").uncheck()
+        await close_graph_display(page)
 
 
 @test("Graph: devices that lost their node-ID keep their own identity")
@@ -352,6 +374,31 @@ async def _(page):
     ghosts = sorted((n["shownId"], n["name"]) for key, n in nodes.items() if key.startswith("dev:uid:"))
     expected = [("37", "org.example.old_sensor_a"), ("38", "org.example.old_sensor_b")]
     assert ghosts == expected, f"Displaced devices drawn as {ghosts}, of {list(nodes)}"
+
+
+@test("Graph: only what is unusual is coloured, and nothing pulses")
+async def _(page):
+    nodes = await page.evaluate(GRAPH_NODES_DRAWN)
+    marked = ("graph-node--warn", "graph-node--err", "graph-node--offline")
+    usual = {key: nodes[key]["classes"] for key in ("dev:10", "dev:20")
+             if any(m in nodes[key]["classes"] for m in marked)}
+    assert not usual, f"NOMINAL nodes are marked: {usual}"
+    caution = nodes["dev:30"]
+    assert "graph-node--warn" in caution["classes"] and caution["badge"] == "!", f"CAUTION node drawn as {caution}"
+    offline = nodes["dev:40"]
+    assert "graph-node--offline" in offline["classes"] and (offline["status"] or "").startswith("offline"), \
+        f"Offline node drawn as {offline}"
+    pulsing = await page.evaluate("""() => [...document.querySelectorAll('#graphContainer .graph-node *')]
+        .filter(el => getComputedStyle(el).animationName !== 'none').length""")
+    assert pulsing == 0, f"{pulsing} node parts animate"
+
+
+@test("Graph: subjects are labelled by their ID first")
+async def _(page):
+    nodes = await page.evaluate(GRAPH_NODES_DRAWN)
+    labels = {key: n["label"] for key, n in nodes.items() if key.startswith("sub:")}
+    wrong = {key: label for key, label in labels.items() if not label.startswith(key[4:])}
+    assert labels and not wrong, f"Subject labels not led by their ID: {wrong}"
 
 
 @test("Graph: a click selects a node without moving or pinning it")
@@ -396,16 +443,43 @@ async def _(page):
         await page.select_option("#graphView", "node-centric")
 
 
-@test("Graph: animations stop when the system asks for reduced motion")
+@test("Graph: traffic animates only on request, and never under reduced motion")
 async def _(page):
-    await page.emulate_media(reduced_motion="reduce")
+    live_animations = """() => [...document.querySelectorAll('#graphContainer .graph-link--live')]
+        .map(el => getComputedStyle(el).animationName)"""
+    names = await page.evaluate(live_animations)
+    assert names and set(names) == {"none"}, f"Traffic animates by default: {names}"
+    await open_graph_display(page)
+    await page.locator("#graphAnimate").check()
     try:
-        names = await page.evaluate("""() => [...document.querySelectorAll(
-            '#graphContainer .graph-link--live, #graphContainer .graph-node--live .graph-device-circle')]
-            .map(el => getComputedStyle(el).animationName)""")
-        assert names and set(names) == {"none"}, f"Animations still running: {names}"
+        names = await page.evaluate(live_animations)
+        assert set(names) == {"graph-link-flow"}, f"'Animate traffic' did not animate: {names}"
+        await page.emulate_media(reduced_motion="reduce")
+        names = await page.evaluate(live_animations)
+        assert set(names) == {"none"}, f"Animations still running under reduced motion: {names}"
     finally:
         await page.emulate_media(reduced_motion="no-preference")
+        await page.locator("#graphAnimate").uncheck()
+        await close_graph_display(page)
+
+
+@test("Graph: Fit brings every node into view")
+async def _(page):
+    svg = page.locator("#graphContainer .graph-svg-wrap > svg")
+    box = await svg.bounding_box()
+    # Drag the view far off, then fit it back.
+    await page.mouse.move(box["x"] + 40, box["y"] + 40)
+    await page.mouse.down()
+    await page.mouse.move(box["x"] + box["width"] - 10, box["y"] + box["height"] - 10, steps=5)
+    await page.mouse.up()
+    await page.locator("#graphFit").click()
+    await page.wait_for_function("""() => {
+        const s = document.querySelector('#graphContainer .graph-svg-wrap > svg').getBoundingClientRect();
+        return [...document.querySelectorAll('#graphContainer .graph-node')].every(el => {
+            const r = el.getBoundingClientRect();
+            return r.left >= s.left && r.right <= s.right && r.top >= s.top && r.bottom <= s.bottom;
+        });
+    }""", timeout=WAIT_MS)
 
 
 @test("Graph: resizing the window keeps the drawing at screen scale")

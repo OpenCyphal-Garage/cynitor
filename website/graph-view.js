@@ -20,11 +20,14 @@ const GraphView = (() => {
     zoom: null,
     view: 'node-centric',
     hideOffline: false,
-    hideSystem: false,
+    // Heartbeat, port.List and the like connect every node to every other;
+    // a node's health already says what its Heartbeat does.
+    hideSystem: true,
     filterText: '',
     gravityMetric: 'none',
     showGrid: true,
     showLinkStats: false,
+    animateTraffic: false,
     initialized: false,
   };
 
@@ -54,6 +57,9 @@ const GraphView = (() => {
   let refreshTimer = null;
   let prevSnapshot = null;
   let _savePending = null;
+  // Fit the view once the layout settles, unless the user zooms or pans first.
+  let fitPending = false;
+  let overlayHtml = null;
 
   // ── Persistence ──
 
@@ -68,6 +74,7 @@ const GraphView = (() => {
       gravityMetric: gState.gravityMetric,
       showGrid: gState.showGrid,
       showLinkStats: gState.showLinkStats,
+      animateTraffic: gState.animateTraffic,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   };
@@ -98,6 +105,7 @@ const GraphView = (() => {
       }
       if (typeof raw.showGrid === 'boolean') gState.showGrid = raw.showGrid;
       if (typeof raw.showLinkStats === 'boolean') gState.showLinkStats = raw.showLinkStats;
+      if (typeof raw.animateTraffic === 'boolean') gState.animateTraffic = raw.animateTraffic;
     } catch { /* ignore corrupt storage */ }
   };
 
@@ -143,6 +151,7 @@ const GraphView = (() => {
         stableKey: typeof nodeStableKey === 'function' ? nodeStableKey(node) : null,
         health: getNodeHealthValue(nid),
         disappeared: !!node.has_disappeared,
+        status: _deviceStatus(node, nid),
       });
 
       for (const sid of node.publishers || []) {
@@ -165,8 +174,8 @@ const GraphView = (() => {
         id: `sub:${sid}`,
         subjectId: sid,
         type: 'subject',
-        label: _truncate(ev?.message_type ? ev.message_type.split('.').pop() : `Subject ${sid}`),
-        fullType: ev?.message_type || null,
+        label: _subjectLabel(sid, ev),
+        fullType: _subjectFullType(sid, ev),
         pubs: meta.pubs,
         subs: meta.subs,
       });
@@ -248,26 +257,26 @@ const GraphView = (() => {
 
   const _isOnline = (nodeId) => nodeId != null && !isNodeDisappeared(nodeId);
 
-  // The current message an edge's traffic is judged by, or null. A publisher's
-  // edge goes by that publisher's own messages, since a subject may have
-  // several publishers (every node publishes Heartbeat). A subscriber's edge
-  // goes by the subject's, and carries nothing to a subscriber that is offline.
-  const _currentEvent = (link, sid, now) => {
+  // The message an edge's traffic is judged by, or null when an end of the
+  // edge is offline. A publisher's edge goes by that publisher's own messages,
+  // since a subject may have several publishers (every node publishes
+  // Heartbeat); a subscriber's edge goes by the subject's.
+  const _edgeEvent = (link, sid) => {
     if (link.type !== 'pub' && !_isOnline(link.subscriberId)) return null;
-    const ev = link.type === 'sub'
-      ? state.latestBySubject.get(sid)
-      : _isOnline(link.publisherId) ? state.latestByNode.get(link.publisherId)?.get(sid) : null;
-    return _isFresh(ev, now) ? ev : null;
+    if (link.type === 'sub') return state.latestBySubject.get(sid) || null;
+    return _isOnline(link.publisherId) ? state.latestByNode.get(link.publisherId)?.get(sid) || null : null;
   };
 
-  // What an edge carries now: whether anything current flows on it, at what
-  // message rate, and the payload size of the latest messages.
+  // What an edge carries now: whether anything current flows on it, whether
+  // a subject on it has gone silent, at what message rate, and the payload
+  // size of the latest messages.
   const _linkTraffic = (link) => {
     const now = Date.now();
-    const traffic = { live: false, rate: 0, payload: 0 };
+    const traffic = { live: false, silent: false, rate: 0, payload: 0 };
     for (const sid of _linkSubjectIds(link)) {
-      const ev = _currentEvent(link, sid, now);
+      const ev = _edgeEvent(link, sid);
       if (!ev) continue;
+      if (!_isFresh(ev, now)) { traffic.silent = true; continue; }
       traffic.live = true;
       traffic.rate += link.type === 'sub' ? getSubjectRate(ev) : (Number(ev.rate) || 0);
       traffic.payload += ev.payload_bytes || 0;
@@ -280,19 +289,43 @@ const GraphView = (() => {
     return Math.min(4, 1 + Math.log10(rate + 1) * 1.1);
   };
 
+  // Traffic is drawn plain, being the usual; an edge with a subject gone
+  // silent stands out, even where other subjects on it still flow.
   const _paintLink = function(d) {
-    const { live, rate } = _linkTraffic(d);
+    const { live, silent, rate } = _linkTraffic(d);
     d3.select(this)
       .attr('stroke-width', rateToWidth(rate))
-      .classed('graph-link--live', live);
+      .classed('graph-link--live', live && !silent)
+      .classed('graph-link--silent', silent);
   };
 
   // Publisher and device-to-device edges point at whoever receives the data.
   const _hasArrow = (link) => link.type !== 'sub';
 
-  const isDeviceLive = (nodeId, disappeared) => {
-    if (disappeared) return false;
-    return typeof getNodeRate === 'function' && getNodeRate(nodeId) > 0;
+  // The Nodes table's health icons; NOMINAL, the usual, needs none.
+  const HEALTH_ICONS = { ADVISORY: '~', CAUTION: '!', WARNING: '!!', 1: '~', 2: '!', 3: '!!' };
+
+  // Ring and icon coloured as the Nodes table colours health: only what is
+  // not the usual. An offline device's ring is dashed.
+  const _paintDevice = function(d) {
+    const health = d.disappeared ? '' : getStatusClass('health', d.health);
+    d3.select(this)
+      .classed('graph-node--offline', d.disappeared)
+      .classed('graph-node--warn', health === 'status-warn')
+      .classed('graph-node--err', health === 'status-err')
+      .select('.graph-health-badge')
+      .text(health ? HEALTH_ICONS[String(d.health).toUpperCase()] || '' : '');
+  };
+
+  // What is unusual about a device, said under its name: since when it has
+  // been offline, or a mode other than OPERATIONAL. Null when all is usual.
+  const _deviceStatus = (raw, nodeId) => {
+    if (raw?.has_disappeared) {
+      const ago = typeof formatLastSeen === 'function' ? formatLastSeen(raw.last_seen) : '-';
+      return { text: ago === '-' ? 'offline' : `offline · ${ago}`, level: 'err' };
+    }
+    const mode = getNodeModeValue(nodeId);
+    return mode && getStatusClass('mode', mode) ? { text: mode, level: 'warn' } : null;
   };
 
   // The node-ID a device is shown under: its own, or for one whose node-ID
@@ -305,10 +338,44 @@ const GraphView = (() => {
     return alias || raw?.name || `Node ${shownId}`;
   };
 
-  const _deviceDisplayLabel = (raw, shownId) => _truncate(_deviceFullName(raw, shownId), 20);
+  // A dotted name (org.example.flight_controller) keeps its end, which tells
+  // nodes apart; other names, such as aliases, keep their start.
+  const _truncateName = (s, max) => {
+    if (!s || s.length <= max || !/^[\w-]+(\.[\w-]+)+$/.test(s)) return _truncate(s, max);
+    const parts = s.split('.');
+    let tail = parts.pop();
+    while (parts.length && parts[parts.length - 1].length + 1 + tail.length < max) {
+      tail = `${parts.pop()}.${tail}`;
+    }
+    return `…${tail.slice(-(max - 1))}`;
+  };
+
+  const _deviceDisplayLabel = (raw, shownId) => _truncateName(_deviceFullName(raw, shownId), 20);
+
+  // A subject's type in full, as the tables name it, or null while nothing
+  // names it.
+  const _subjectFullType = (sid, ev) => {
+    const type = typeof subjectTypeName === 'function' ? subjectTypeName(sid, ev) : ev?.message_type;
+    return type && type !== '-' ? type : null;
+  };
+
+  // "uavcan.si.sample.angular_velocity.Vector3.1.0" or "Vector3_1_0": "Vector3".
+  const _subjectShortType = (sid, ev) => {
+    const type = _subjectFullType(sid, ev);
+    if (!type || type === 'type unknown') return '';
+    const parts = type.split('.').filter((p) => !/^\d+$/.test(p));
+    return (parts.pop() || '').replace(/_\d+_\d+$/, '');
+  };
+
+  // "1100 Vector3": the subject-ID first, as many subjects share a type.
+  const _subjectLabel = (sid, ev) => {
+    const short = _subjectShortType(sid, ev);
+    return _truncate(short ? `${sid} ${short}` : String(sid));
+  };
 
   const _linkStatText = (link) => {
-    const { rate, payload } = _linkTraffic(link);
+    const { silent, rate, payload } = _linkTraffic(link);
+    if (silent) return 'silent';
     const parts = [];
     if (rate > 0) parts.push(`${Math.round(rate)} Hz`);
     if (payload > 0) parts.push(`${payload} B`);
@@ -418,21 +485,31 @@ const GraphView = (() => {
         <input type="checkbox" id="graphHideSystem" ${gState.hideSystem ? 'checked' : ''} />
         <span>Hide system</span>
       </label>
-      <label class="graph-toggle">
-        <input type="checkbox" id="graphShowGrid" ${gState.showGrid ? 'checked' : ''} />
-        <span>Show grid</span>
-      </label>
-      <label class="graph-toggle">
-        <input type="checkbox" id="graphShowLinkStats" ${gState.showLinkStats ? 'checked' : ''} />
-        <span>Link stats</span>
-      </label>
       <input type="text" id="graphFilter" class="graph-filter" placeholder="Filter by id, name, or type…" aria-label="Filter graph" />
-      <div class="graph-select-group">
-        <label for="graphGravity">Gravity</label>
-        <select id="graphGravity" class="graph-select" aria-label="Gravity metric">
-          ${GRAVITY_OPTIONS.map(o => `<option value="${o.value}">${o.label}</option>`).join('')}
-        </select>
-      </div>
+      <details class="graph-display" id="graphDisplay">
+        <summary class="graph-btn">Display</summary>
+        <div class="graph-display-menu">
+          <label class="graph-toggle">
+            <input type="checkbox" id="graphShowGrid" ${gState.showGrid ? 'checked' : ''} />
+            <span>Show grid</span>
+          </label>
+          <label class="graph-toggle">
+            <input type="checkbox" id="graphShowLinkStats" ${gState.showLinkStats ? 'checked' : ''} />
+            <span>Link stats</span>
+          </label>
+          <label class="graph-toggle">
+            <input type="checkbox" id="graphAnimate" ${gState.animateTraffic ? 'checked' : ''} />
+            <span>Animate traffic</span>
+          </label>
+          <div class="graph-select-group">
+            <label for="graphGravity">Gravity</label>
+            <select id="graphGravity" class="graph-select" aria-label="Gravity metric">
+              ${GRAVITY_OPTIONS.map(o => `<option value="${o.value}">${o.label}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+      </details>
+      <button class="graph-btn" id="graphFit" aria-label="Fit graph to view">Fit</button>
       <button class="graph-btn" id="graphResetLayout" aria-label="Reset graph layout">Reset layout</button>
       <button class="graph-btn" id="graphUnpinAll" aria-label="Unpin all nodes">Unpin all</button>
       <button class="graph-btn graph-hidden-badge hidden" id="graphHiddenBadge" aria-label="Show all hidden">0 hidden — show</button>
@@ -444,9 +521,13 @@ const GraphView = (() => {
     legendBar.innerHTML = `
       <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device"></span>device</span>
       <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--subject"></span>subject</span>
-      <span class="graph-legend-item"><span class="graph-legend-line"></span>idle link</span>
-      <span class="graph-legend-item"><span class="graph-legend-line graph-legend-line--live"></span>live link</span>
-      <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--pulse"></span>publishing</span>
+      <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device graph-legend-dot--warn"></span>advisory ~, caution !</span>
+      <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device graph-legend-dot--err"></span>warning !!</span>
+      <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device graph-legend-dot--offline"></span>offline</span>
+      <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device graph-legend-dot--pinned"></span>pinned</span>
+      <span class="graph-legend-item"><span class="graph-legend-line graph-legend-line--live"></span>traffic</span>
+      <span class="graph-legend-item"><span class="graph-legend-line graph-legend-line--silent"></span>silent</span>
+      <span class="graph-legend-item"><span class="graph-legend-line"></span>no data</span>
     `;
     root.appendChild(legendBar);
 
@@ -516,7 +597,8 @@ const GraphView = (() => {
       .attr('width', 20000).attr('height', 20000)
       .attr('fill', 'url(#graph-grid-pattern)')
       .attr('pointer-events', 'none');
-    gLinks = container.append('g').attr('class', 'graph-links');
+    gLinks = container.append('g').attr('class', 'graph-links')
+      .classed('graph-animate', gState.animateTraffic);
     gNodes = container.append('g').attr('class', 'graph-nodes');
     gLabels = container.append('g').attr('class', 'graph-labels');
     gLinkLabels = container.append('g').attr('class', 'graph-link-labels');
@@ -525,6 +607,7 @@ const GraphView = (() => {
     zoomBehavior = d3.zoom()
       .scaleExtent([0.1, 4])
       .on('zoom', (e) => {
+        if (e.sourceEvent) fitPending = false;  // the user has placed the view
         container.attr('transform', e.transform);
         gState.zoom = { k: e.transform.k, x: e.transform.x, y: e.transform.y };
         if (gState.selectedId) _positionInfoPanel();
@@ -543,6 +626,8 @@ const GraphView = (() => {
     if (gState.zoom) {
       svg.call(zoomBehavior.transform,
         d3.zoomIdentity.translate(gState.zoom.x, gState.zoom.y).scale(gState.zoom.k));
+    } else {
+      fitPending = true;
     }
 
     // Click on background deselects
@@ -582,6 +667,22 @@ const GraphView = (() => {
       save();
       _renderLinkStats();
     });
+    document.getElementById('graphAnimate').addEventListener('change', (e) => {
+      gState.animateTraffic = e.target.checked;
+      save();
+      gLinks.classed('graph-animate', gState.animateTraffic);
+    });
+    document.getElementById('graphFit').addEventListener('click', () => _fitToView());
+    // The Display menu closes on a click elsewhere, or on Escape.
+    const display = document.getElementById('graphDisplay');
+    document.addEventListener('click', (e) => {
+      if (display.open && !display.contains(e.target)) display.open = false;
+    });
+    display.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || !display.open) return;
+      display.open = false;
+      display.querySelector('summary').focus();
+    });
     let _filterDebounce = null;
     document.getElementById('graphFilter').addEventListener('input', (e) => {
       gState.filterText = e.target.value;
@@ -596,6 +697,7 @@ const GraphView = (() => {
       gState.positions = {};
       gState.zoom = null;
       svg.call(zoomBehavior.transform, d3.zoomIdentity);
+      fitPending = true;
       save();
       prevSnapshot = null;
       _render(deriveGraph());
@@ -636,8 +738,14 @@ const GraphView = (() => {
   const _render = (graph) => {
     const { deviceNodes, subjectNodes, links, collapsedLinks, adjacency } = graph;
 
-    const placeholderHtml = typeof eventSourcePlaceholder === 'function'
-      ? eventSourcePlaceholder('view the topology graph') : null;
+    // Not connected, or no node on the bus yet: say so, not an empty canvas.
+    const noNodes = !Object.keys(state.latestNodesPayload?.nodes || {}).length;
+    const placeholderHtml = (typeof eventSourcePlaceholder === 'function'
+      ? eventSourcePlaceholder('view the topology graph') : null)
+      || (noNodes && typeof svcStateMsg === 'function'
+        ? svcStateMsg('<span class="svc-spinner"></span>', 'Waiting for nodes…',
+          'Listening on the CAN bus. Nodes will appear as they send heartbeats.')
+        : null);
     const svgWrap = svg?.node()?.parentNode;
     if (svgWrap) {
       let overlay = svgWrap.querySelector('.graph-conn-overlay');
@@ -646,8 +754,13 @@ const GraphView = (() => {
           overlay = document.createElement('div');
           overlay.className = 'graph-conn-overlay';
           svgWrap.appendChild(overlay);
+          overlayHtml = null;
         }
-        overlay.innerHTML = placeholderHtml;
+        // Rewritten only when it changes: a rewrite restarts its spinner.
+        if (overlayHtml !== placeholderHtml) {
+          overlay.innerHTML = placeholderHtml;
+          overlayHtml = placeholderHtml;
+        }
         prevSnapshot = null;
         return;
       }
@@ -775,6 +888,10 @@ const GraphView = (() => {
           .attr('text-anchor', 'middle')
           .attr('dominant-baseline', 'central')
           .text(d.shownId);
+        g.append('text')
+          .attr('class', 'graph-health-badge')
+          .attr('x', 11).attr('y', -10)
+          .attr('dominant-baseline', 'central');
       } else {
         g.append('rect')
           .attr('x', -8).attr('y', -8)
@@ -786,26 +903,20 @@ const GraphView = (() => {
     });
 
     const merged = nodeEnter.merge(nodeSel);
-    merged.each(function(d) {
-      const g = d3.select(this);
-      g.classed('graph-node--pinned', !!gState.positions[d.id]?.pinned);
-      if (d.type === 'device') {
-        g.select('.graph-device-circle')
-          .attr('stroke', d.disappeared ? 'var(--unknown)' : getHealthColor(d.health))
-          .attr('opacity', d.disappeared ? 0.4 : 1);
-        g.select('.graph-node-id')
-          .attr('opacity', d.disappeared ? 0.4 : 1);
-        g.classed('graph-node--live', isDeviceLive(d.nodeId, d.disappeared));
-      }
-    });
+    merged.classed('graph-node--pinned', d => !!gState.positions[d.id]?.pinned);
+    merged.filter(d => d.type === 'device').each(_paintDevice);
 
-    // Labels
+    // Labels: the name, and for a device a second line for its status
     const labelSel = gLabels.selectAll('.graph-label').data(allNodes, d => d.id);
     labelSel.exit().remove();
     const labelEnter = labelSel.enter().append('text')
       .attr('class', d => `graph-label graph-label--${d.type}`)
       .attr('text-anchor', 'middle');
-    labelEnter.merge(labelSel).text(d => d.label);
+    labelEnter.append('tspan').attr('class', 'graph-label-name');
+    labelEnter.filter(d => d.type === 'device').append('tspan')
+      .attr('class', 'graph-label-status')
+      .attr('dy', '1.2em');
+    labelEnter.merge(labelSel).each(_paintLabel);
 
     // Store references for tick
     gState._adjacency = adjacency;
@@ -894,6 +1005,8 @@ const GraphView = (() => {
     gLabels.selectAll('.graph-label')
       .attr('x', d => d.x)
       .attr('y', d => _labelY(d));
+    // A second line starts again from the label's x.
+    gLabels.selectAll('.graph-label-status').attr('x', d => d.x);
 
     if (gState.showLinkStats) {
       gLinkLabels.selectAll('.graph-link-label')
@@ -902,13 +1015,58 @@ const GraphView = (() => {
     }
 
     if (gState.selectedId) _positionInfoPanel();
+    // Fitted once the layout has nearly settled, not at its last tick.
+    if (fitPending && simulation.alpha() < FIT_ALPHA && _fitToView()) fitPending = false;
   };
 
+  // A device's status line goes under its name: above the node, the name
+  // moves up by a line to make room.
+  const STATUS_LINE = 11;
   const _labelY = (d) => {
     if (d.labelSide === 'above') {
-      return d.y - (d.type === 'device' ? 18 : 14);
+      return d.y - (d.type === 'device' ? 18 : 14) - (d.status ? STATUS_LINE : 0);
     }
     return d.y + (d.type === 'device' ? 26 : 22);
+  };
+
+  // A label's name and, under a device's, what is unusual about it. Written
+  // only where it changed: this runs every second.
+  const _paintLabel = function(d) {
+    const label = d3.select(this);
+    const name = label.select('.graph-label-name');
+    if (name.text() !== d.label) name.text(d.label);
+    if (d.type !== 'device') return;
+    const status = label.select('.graph-label-status');
+    const text = d.status?.text || '';
+    if (status.text() !== text) status.text(text);
+    status.attr('x', d.x)
+      .classed('graph-label-status--err', d.status?.level === 'err')
+      .classed('graph-label-status--warn', d.status?.level === 'warn');
+  };
+
+  // Zoom so that every drawn node, with room for its label, is in view; no
+  // closer than 2×, which would blow a small network up. False when there is
+  // nothing to fit yet.
+  const FIT_ALPHA = 0.05;
+  const FIT_MAX_SCALE = 2;
+  const FIT_MARGIN = 40;
+  const _fitToView = () => {
+    const nodes = simulation?.nodes() || [];
+    const box = svg?.node()?.viewBox.baseVal;
+    if (!nodes.length || !box?.width || !box?.height) return false;
+    // Labels reach about 70 px to either side, 30 above and 40 below.
+    const x0 = d3.min(nodes, (n) => n.x) - 70;
+    const x1 = d3.max(nodes, (n) => n.x) + 70;
+    const y0 = d3.min(nodes, (n) => n.y) - 30;
+    const y1 = d3.max(nodes, (n) => n.y) + 40;
+    const k = Math.max(0.1, Math.min(FIT_MAX_SCALE,
+      (box.width - 2 * FIT_MARGIN) / (x1 - x0), (box.height - 2 * FIT_MARGIN) / (y1 - y0)));
+    const t = d3.zoomIdentity
+      .translate(box.width / 2 - k * (x0 + x1) / 2, box.height / 2 - k * (y0 + y1) / 2)
+      .scale(k);
+    const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    (still ? svg : svg.transition().duration(400)).call(zoomBehavior.transform, t);
+    return true;
   };
 
   const _recalcLabelSides = () => {
@@ -1131,7 +1289,7 @@ const GraphView = (() => {
   const _deviceInfoHtml = (node) => {
     const raw = state.latestNodesPayload?.nodes?.[node.payloadKey];
     const health = node.health || 'UNKNOWN';
-    const hClass = getHealthCssClass(health);
+    const hClass = getStatusClass('health', health);
     const displayName = raw ? _deviceFullName(raw, node.shownId) : node.fullName;
     // A displaced device goes without an alias, so it offers no renaming.
     const renameButton = node.ghost ? '' : `<button class="graph-info-icon-btn" id="graphInfoRename" aria-label="Rename device" title="Rename">
@@ -1152,15 +1310,14 @@ const GraphView = (() => {
     <div class="graph-info-meta">
       <span>${node.ghost ? 'Last ID' : 'ID'}: ${escapeHtml(String(node.shownId))}</span>
       <span class="graph-info-health ${hClass}">${escapeHtml(health)}</span>
-      ${node.disappeared ? '<span class="graph-info-offline">OFFLINE</span>' : ''}
+      ${node.status ? `<span class="graph-info-status graph-info-status--${node.status.level}">${escapeHtml(node.status.text)}</span>` : ''}
     </div>`;
 
     if (raw) {
       if (raw.publishers?.length) {
         html += `<div class="graph-info-section"><div class="graph-info-section-label">Publishers (${raw.publishers.length})</div>`;
         html += raw.publishers.map(sid => {
-          const ev = state.latestBySubject.get(sid);
-          const type = ev?.message_type ? ev.message_type.split('.').pop() : '';
+          const type = _subjectShortType(sid, state.latestBySubject.get(sid));
           return `<div class="graph-info-row"><span class="graph-info-sid">${sid}</span><span class="graph-info-mtype">${escapeHtml(type)}</span></div>`;
         }).join('');
         html += '</div>';
@@ -1168,8 +1325,7 @@ const GraphView = (() => {
       if (raw.subscribers?.length) {
         html += `<div class="graph-info-section"><div class="graph-info-section-label">Subscribers (${raw.subscribers.length})</div>`;
         html += raw.subscribers.map(sid => {
-          const ev = state.latestBySubject.get(sid);
-          const type = ev?.message_type ? ev.message_type.split('.').pop() : '';
+          const type = _subjectShortType(sid, state.latestBySubject.get(sid));
           return `<div class="graph-info-row"><span class="graph-info-sid">${sid}</span><span class="graph-info-mtype">${escapeHtml(type)}</span></div>`;
         }).join('');
         html += '</div>';
@@ -1243,7 +1399,9 @@ const GraphView = (() => {
 
   const _subjectInfoHtml = (node) => {
     const ev = state.latestBySubject.get(node.subjectId);
-    const rateText = !ev ? '' : _isFresh(ev, Date.now()) ? `${getSubjectRate(ev).toFixed(1)} msg/s` : 'silent';
+    const rateHtml = !ev ? ''
+      : _isFresh(ev, Date.now()) ? `<span>${getSubjectRate(ev).toFixed(1)} msg/s</span>`
+      : '<span class="graph-info-status graph-info-status--warn">silent</span>';
     let html = `<div class="graph-info-header">
       <span class="graph-info-type">Subject</span>
       <div class="graph-info-actions">
@@ -1253,15 +1411,11 @@ const GraphView = (() => {
         <button class="graph-info-close" id="graphInfoClose" aria-label="Close info panel">&times;</button>
       </div>
     </div>
-    <div class="graph-info-title">${escapeHtml(node.fullType || node.label)}</div>
+    <div class="graph-info-title">${escapeHtml(node.fullType || `Subject ${node.subjectId}`)}</div>
     <div class="graph-info-meta">
       <span>ID: ${node.subjectId}</span>
-      ${rateText ? `<span>${rateText}</span>` : ''}
+      ${rateHtml}
     </div>`;
-
-    if (node.fullType) {
-      html += `<div class="graph-info-row"><span class="graph-info-mtype">${escapeHtml(node.fullType)}</span></div>`;
-    }
 
     if (node.pubs?.length) {
       html += `<div class="graph-info-section"><div class="graph-info-section-label">Publishers</div>`;
@@ -1309,24 +1463,22 @@ const GraphView = (() => {
   };
 
   const _updateVisuals = () => {
-    let labelTextChanged = false;
     gNodes.selectAll('.graph-node--device').each(function(d) {
-      const newHealth = getNodeHealthValue(d.nodeId);
       const raw = state.latestNodesPayload?.nodes?.[d.payloadKey];
-      d.health = newHealth;
+      d.health = getNodeHealthValue(d.nodeId);
       d.disappeared = raw?.has_disappeared || false;
-      const newLabel = _deviceDisplayLabel(raw, d.shownId);
-      if (newLabel !== d.label) { d.label = newLabel; labelTextChanged = true; }
+      d.status = _deviceStatus(raw, d.nodeId);
+      d.label = _deviceDisplayLabel(raw, d.shownId);
       d.fullName = _deviceFullName(raw, d.shownId);
-      const g = d3.select(this);
-      g.select('.graph-device-circle')
-        .attr('stroke', d.disappeared ? 'var(--unknown)' : getHealthColor(newHealth))
-        .attr('opacity', d.disappeared ? 0.4 : 1);
-      g.classed('graph-node--live', isDeviceLive(d.nodeId, d.disappeared));
+      _paintDevice.call(this, d);
     });
-    if (labelTextChanged && gLabels) {
-      gLabels.selectAll('.graph-label--device').text(d => d.label);
-    }
+    // A subject's type is known from its first message on.
+    gNodes.selectAll('.graph-node--subject').each((d) => {
+      const ev = state.latestBySubject.get(d.subjectId);
+      d.label = _subjectLabel(d.subjectId, ev);
+      d.fullType = _subjectFullType(d.subjectId, ev);
+    });
+    gLabels.selectAll('.graph-label').each(_paintLabel).attr('y', d => _labelY(d));
 
     gLinks.selectAll('.graph-link').each(_paintLink);
 

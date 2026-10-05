@@ -4636,9 +4636,8 @@ details.svc-history-entry[open] > summary::before {
   border-bottom: 1px solid var(--border);
   font-size: 0.75rem;
   flex-shrink: 0;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  white-space: nowrap;
+  /* Wraps rather than scrolls: a scrolling bar would clip the Display menu */
+  flex-wrap: wrap;
 }
 
 .graph-toolbar > * {
@@ -4663,6 +4662,8 @@ details.svc-history-entry[open] > summary::before {
 
 .graph-toggle input[type="checkbox"] {
   accent-color: var(--accent);
+  /* Not the global inputs' 100 %, which spreads a row in the Display menu */
+  width: auto;
 }
 
 .graph-btn {
@@ -4704,34 +4705,74 @@ details.svc-history-entry[open] > summary::before {
   height: 100%;
 }
 
-/* Links */
+/* Links: traffic, the usual, is plain; a subject gone silent stands out.
+   The width (by message rate) is the stroke-width attribute set in JS,
+   which a stroke-width here would override. */
 .graph-link {
   stroke: var(--border);
-  stroke-width: 1;
   fill: none;
   transition: opacity 0.15s;
 }
 
-.graph-link--hi {
+.graph-link--live {
+  stroke: var(--muted);
+  stroke-opacity: 0.6;
+}
+
+.graph-link--silent {
+  stroke: var(--warn);
+  stroke-dasharray: 0.25rem 0.1875rem;
+}
+
+.graph-link.graph-link--hi {
   stroke: var(--accent);
-  stroke-width: 1.5;
+  stroke-opacity: 1;
 }
 
 .graph-link.graph-dim {
   opacity: 0.1;
 }
 
-/* Device nodes */
+/* Device nodes: health coloured as in the Nodes table, only when unusual */
 .graph-device-circle {
   fill: var(--surface);
+  stroke: var(--muted);
   stroke-width: 2;
   cursor: grab;
   transition: opacity 0.15s;
 }
 
-.graph-node--pinned .graph-device-circle {
-  stroke-dasharray: 3 2;
+.graph-node--warn .graph-device-circle { stroke: var(--warn); }
+.graph-node--err .graph-device-circle { stroke: var(--error); }
+
+.graph-node--offline .graph-device-circle {
+  stroke: var(--error);
+  stroke-dasharray: 0.25rem 0.1875rem;
 }
+
+.graph-node--offline .graph-node-id { fill: var(--muted); }
+
+/* Pinned by a drag: filled, as a dashed ring means offline */
+.graph-node--pinned .graph-device-circle,
+.graph-node--pinned .graph-subject-rect {
+  fill: var(--surface-3);
+}
+
+/* The Nodes table's health icons (~ ! !!), beside the ring */
+.graph-health-badge {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  font-weight: 700;
+  pointer-events: none;
+  user-select: none;
+  paint-order: stroke fill;
+  stroke: var(--bg);
+  stroke-width: 0.1875rem;
+  stroke-linejoin: round;
+}
+
+.graph-node--warn .graph-health-badge { fill: var(--warn); }
+.graph-node--err .graph-health-badge { fill: var(--error); }
 
 .graph-node.graph-hi .graph-device-circle {
   stroke-width: 3;
@@ -4805,6 +4846,14 @@ details.svc-history-entry[open] > summary::before {
   font-size: 0.625rem;
   fill: var(--text);
 }
+
+/* A device's second label line: what is unusual about it */
+.graph-label-status {
+  font-size: 0.5625rem;
+}
+
+.graph-label-status--err { fill: var(--error); }
+.graph-label-status--warn { fill: var(--warn); }
 
 .graph-label.graph-dim {
   opacity: 0.1;
@@ -4940,8 +4989,13 @@ details.svc-history-entry[open] > summary::before {
   font-weight: 600;
 }
 
-.graph-info-offline {
+.graph-info-status--err {
   color: var(--error);
+  font-weight: 600;
+}
+
+.graph-info-status--warn {
+  color: var(--warn);
   font-weight: 600;
 }
 
@@ -4980,9 +5034,8 @@ details.svc-history-entry[open] > summary::before {
   white-space: nowrap;
 }
 
-/* Live traffic indicators */
-.graph-link--live {
-  stroke: var(--accent);
+/* "Animate traffic" (Display menu): flow along the edges carrying traffic */
+.graph-animate .graph-link--live {
   stroke-dasharray: 0.25rem 0.1875rem;
   animation: graph-link-flow 1s linear infinite;
 }
@@ -4991,23 +5044,9 @@ details.svc-history-entry[open] > summary::before {
   to { stroke-dashoffset: -0.4375rem; }
 }
 
-@keyframes graph-pulse {
-  0%, 100% { filter: drop-shadow(0 0 0.0625rem var(--accent)); }
-  50% { filter: drop-shadow(0 0 0.375rem var(--accent)); }
-}
-
-.graph-node--live .graph-device-circle {
-  animation: graph-pulse 1.6s ease-in-out infinite;
-}
-
-.graph-node.graph-hi.graph-node--live .graph-device-circle {
-  animation: none;
-}
-
-/* Kept after the rules above, which it must outrank */
+/* Kept after the rule above, which it must outrank */
 @media (prefers-reduced-motion: reduce) {
-  .graph-link--live,
-  .graph-node--live .graph-device-circle {
+  .graph-animate .graph-link--live {
     animation: none;
   }
 }
@@ -5097,21 +5136,63 @@ details.svc-history-entry[open] > summary::before {
   transform: rotate(45deg);
 }
 
-.graph-legend-dot--pulse {
-  border-radius: 50%;
-  border-color: var(--accent);
-  box-shadow: 0 0 0.25rem var(--accent);
+.graph-legend-dot--warn { border-color: var(--warn); }
+.graph-legend-dot--err { border-color: var(--error); }
+
+.graph-legend-dot--offline {
+  border-color: var(--error);
+  border-style: dashed;
 }
 
+.graph-legend-dot--pinned { background: var(--surface-3); }
+
+/* Edges as drawn: no data, traffic, silent */
 .graph-legend-line {
   display: inline-block;
   width: 1.75rem;
-  height: 0.125rem;
-  background: var(--border);
+  border-top: 0.125rem solid var(--border);
 }
 
 .graph-legend-line--live {
-  background: var(--accent);
+  border-top-color: var(--muted);
+  opacity: 0.6;
+}
+
+.graph-legend-line--silent {
+  border-top: 0.125rem dashed var(--warn);
+}
+
+/* Display menu: the view options one sets and leaves */
+.graph-display {
+  position: relative;
+}
+
+.graph-display > summary {
+  list-style: none;
+}
+
+.graph-display > summary::-webkit-details-marker {
+  display: none;
+}
+
+.graph-display > summary::after {
+  content: ' ▾';
+}
+
+.graph-display-menu {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 12rem;
+  padding: 0.5rem 0.625rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.12);
 }
 
 /* ── DSDL View ── */
