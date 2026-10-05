@@ -892,6 +892,25 @@ Event types: `first_seen`, `reappeared`, `disappeared`, `restart_suspected` (the
 
 Returns `400` for invalid node_id or limit, `503` if the event logger is not available.
 
+**Get recent lifecycle events of every node:**
+```bash
+curl "http://localhost:8080/api/nodes/events?range=15m&types=restart_suspected,node_id_conflict"
+```
+
+The same events as above, for all nodes at once, newest first: the Graph tab uses them to mark nodes that restarted or share a node-ID. Query params: `range` (as above, default `15m`), `types`, `limit` (1–2000, default `500`).
+
+```json
+{
+    "now_unix": 1741949460.5,
+    "events": [
+        {"id": 12, "node_id": 37, "unique_id": "d74f8b69…", "timestamp_unix": 1741949445.123,
+         "event_type": "restart_suspected", "detail": {"old_uptime": 812, "new_uptime": 3}}
+    ]
+}
+```
+
+`now_unix` is the server's clock at the time of the reply, so that a client can tell an event's age without relying on its own clock. Returns `400` for an invalid `range` or `limit`, `503` if the event logger is not available.
+
 **Get node subject summary (aggregated telemetry stats per subject):**
 ```bash
 curl http://localhost:8080/api/nodes/37/history/subjects

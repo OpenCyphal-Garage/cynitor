@@ -208,6 +208,14 @@ class TestEventLogger:
         assert len(history) == 2
 
     @pytest.mark.asyncio
+    async def test_node_history_of_every_node(self, logger):
+        logger._log_node_event_sync(node_id=10, event_type="restart_suspected")
+        logger._log_node_event_sync(node_id=20, event_type="node_id_conflict")
+        logger._log_node_event_sync(node_id=30, event_type="health_change")
+        history = logger._get_node_history_sync(None, event_types=["restart_suspected", "node_id_conflict"])
+        assert sorted(h["node_id"] for h in history) == [10, 20]
+
+    @pytest.mark.asyncio
     async def test_subject_summary_by_unique_id(self, logger):
         uid = "aabbccdd" * 4
         logger._write_events_sync([

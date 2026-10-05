@@ -28,6 +28,7 @@ const GraphView = (() => {
     showGrid: true,
     showLinkStats: false,
     animateTraffic: false,
+    showServices: true,
     focus: null,  // a status-strip kind picked out of the graph; not saved
     initialized: false,
   };
@@ -76,6 +77,7 @@ const GraphView = (() => {
       showGrid: gState.showGrid,
       showLinkStats: gState.showLinkStats,
       animateTraffic: gState.animateTraffic,
+      showServices: gState.showServices,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   };
@@ -107,6 +109,7 @@ const GraphView = (() => {
       if (typeof raw.showGrid === 'boolean') gState.showGrid = raw.showGrid;
       if (typeof raw.showLinkStats === 'boolean') gState.showLinkStats = raw.showLinkStats;
       if (typeof raw.animateTraffic === 'boolean') gState.animateTraffic = raw.animateTraffic;
+      if (typeof raw.showServices === 'boolean') gState.showServices = raw.showServices;
     } catch { /* ignore corrupt storage */ }
   };
 
@@ -219,6 +222,40 @@ const GraphView = (() => {
     }
     for (const link of collapsedAdj.values()) collapsedLinks.push(link);
 
+    // Service calls: a client of a service to each online node that serves it,
+    // as the backend matches them; one edge per pair, however many services.
+    const serviceLinks = [];
+    if (gState.showServices) {
+      const servers = new Map();  // service-ID -> keys of the online nodes serving it
+      for (const [key, node] of Object.entries(nodes)) {
+        if (node.has_disappeared || node.node_id == null || _isHiddenNode(node)) continue;
+        for (const sid of node.servers || []) {
+          if (!servers.has(sid)) servers.set(sid, []);
+          servers.get(sid).push(key);
+        }
+      }
+      const pairs = new Map();
+      for (const [key, node] of Object.entries(nodes)) {
+        if (node.node_id == null || _isHiddenNode(node)) continue;
+        for (const sid of node.clients || []) {
+          if (gState.hideSystem && _isSystemService(sid)) continue;
+          for (const serverKey of servers.get(sid) || []) {
+            if (serverKey === key) continue;
+            const pair = `${key}|${serverKey}`;
+            if (!pairs.has(pair)) {
+              pairs.set(pair, { source: `dev:${key}`, target: `dev:${serverKey}`, type: 'svc', services: [] });
+            }
+            pairs.get(pair).services.push(sid);
+          }
+        }
+      }
+      serviceLinks.push(...pairs.values());
+      for (const link of serviceLinks) {
+        addAdj(link.source, link.target);
+        addAdj(link.target, link.source);
+      }
+    }
+
     // In "Nodes only" a device's drawn neighbours are devices: the filter and
     // the highlight must reach them, not just the (undrawn) subjects between.
     if (!_showSubs()) {
@@ -228,7 +265,7 @@ const GraphView = (() => {
       }
     }
 
-    return { deviceNodes, subjectNodes, links, collapsedLinks, adjacency };
+    return { deviceNodes, subjectNodes, links, collapsedLinks, serviceLinks, adjacency };
   };
 
   // ── Traffic visualization helpers ──
@@ -298,10 +335,20 @@ const GraphView = (() => {
     d3.select(this)
       .attr('stroke-width', rateToWidth(rate))
       .classed('graph-link--live', live && !silent)
-      .classed('graph-link--silent', silent);
+      .classed('graph-link--silent', silent)
+      .classed('graph-link--svc', d.type === 'svc');
   };
 
-  // Publisher and device-to-device edges point at whoever receives the data.
+  // An edge's identity in a data join: a service edge and a data edge may
+  // join the same two devices.
+  const _linkKey = (d) => {
+    const src = typeof d.source === 'object' ? d.source.id : d.source;
+    const tgt = typeof d.target === 'object' ? d.target.id : d.target;
+    return `${d.type}:${src}|${tgt}`;
+  };
+
+  // Publisher and device-to-device edges point at whoever receives the data;
+  // a service edge, from client to server.
   const _hasArrow = (link) => link.type !== 'sub';
 
   // The Nodes table's health icons; NOMINAL, the usual, needs none.
@@ -319,15 +366,52 @@ const GraphView = (() => {
       .text(health ? HEALTH_ICONS[String(d.health).toUpperCase()] || '' : '');
   };
 
-  // What is unusual about a device, said under its name: since when it has
-  // been offline, or a mode other than OPERATIONAL. Null when all is usual.
+  // Recent lifecycle events the backend has noticed, by node-ID: a restart,
+  // two nodes on one node-ID, a subject published with another type. Polled
+  // while the tab is open; the times are on the server's clock.
+  const EVENTS_MS = 5000;
+  const EVENT_TYPES = 'restart_suspected,node_id_conflict,type_conflict';
+  let recentEvents = new Map();  // node-ID -> { event type -> its latest timestamp }
+  let serverClockOffset = 0;     // the server's clock minus ours, in seconds
+  let eventsTimer = null;
+
+  const _fetchEvents = async () => {
+    if (state.activeView !== 'graph' || !state.dashboardConnected) return;
+    try {
+      const data = await requestJson(`/api/nodes/events?range=15m&types=${EVENT_TYPES}`);
+      serverClockOffset = data.now_unix - Date.now() / 1000;
+      const byNode = new Map();
+      for (const ev of data.events || []) {  // newest first: keep the first of each type
+        const types = byNode.get(ev.node_id) || {};
+        if (!(ev.event_type in types)) types[ev.event_type] = ev.timestamp_unix;
+        byNode.set(ev.node_id, types);
+      }
+      recentEvents = byNode;
+    } catch {
+      recentEvents = new Map();  // no event logger, or no backend: nothing to mark
+    }
+  };
+
+  // "3m ago" for a time on the server's clock.
+  const _serverAgo = (unix) => formatLastSeen([new Date((unix - serverClockOffset) * 1000).toISOString()]);
+
+  // What is unusual about a device, said under its name, the gravest first:
+  // since when it has been offline, a node-ID it shares with another node, a
+  // recent restart, a subject published with another type, a mode other than
+  // OPERATIONAL. Null when all is usual.
   const _deviceStatus = (raw, nodeId) => {
     if (raw?.has_disappeared) {
       const ago = typeof formatLastSeen === 'function' ? formatLastSeen(raw.last_seen) : '-';
-      return { text: ago === '-' ? 'offline' : `offline · ${ago}`, level: 'err' };
+      return { text: ago === '-' ? 'offline' : `offline · ${ago}`, level: 'err', kind: 'offline' };
     }
+    const events = recentEvents.get(nodeId);
+    if (events?.node_id_conflict) return { text: 'node-ID conflict', level: 'err', kind: 'conflict' };
+    if (events?.restart_suspected) {
+      return { text: `restarted ${_serverAgo(events.restart_suspected)}`, level: 'warn', kind: 'restart' };
+    }
+    if (events?.type_conflict) return { text: 'type conflict', level: 'warn', kind: 'typeconflict' };
     const mode = getNodeModeValue(nodeId);
-    return mode && getStatusClass('mode', mode) ? { text: mode, level: 'warn' } : null;
+    return mode && getStatusClass('mode', mode) ? { text: mode, level: 'warn', kind: 'mode' } : null;
   };
 
   // What is unusual about a subject: subscribed to but published by no node,
@@ -516,6 +600,10 @@ const GraphView = (() => {
             <input type="checkbox" id="graphAnimate" ${gState.animateTraffic ? 'checked' : ''} />
             <span>Animate traffic</span>
           </label>
+          <label class="graph-toggle">
+            <input type="checkbox" id="graphShowServices" ${gState.showServices ? 'checked' : ''} />
+            <span>Service calls</span>
+          </label>
           <div class="graph-select-group">
             <label for="graphGravity">Gravity</label>
             <select id="graphGravity" class="graph-select" aria-label="Gravity metric">
@@ -555,6 +643,7 @@ const GraphView = (() => {
       <span class="graph-legend-item"><span class="graph-legend-line graph-legend-line--live"></span>traffic</span>
       <span class="graph-legend-item"><span class="graph-legend-line graph-legend-line--silent"></span>silent</span>
       <span class="graph-legend-item"><span class="graph-legend-line"></span>no data</span>
+      <span class="graph-legend-item"><span class="graph-legend-line graph-legend-line--svc"></span>service call</span>
     `;
     root.appendChild(legendBar);
 
@@ -701,6 +790,11 @@ const GraphView = (() => {
       save();
       gLinks.classed('graph-animate', gState.animateTraffic);
     });
+    document.getElementById('graphShowServices').addEventListener('change', (e) => {
+      gState.showServices = e.target.checked;
+      save();
+      _render(deriveGraph());
+    });
     document.getElementById('graphFit').addEventListener('click', () => _fitToView());
     // The Display menu closes on a click elsewhere, or on Escape.
     const display = document.getElementById('graphDisplay');
@@ -765,7 +859,7 @@ const GraphView = (() => {
   // ── Rendering ──
 
   const _render = (graph) => {
-    const { deviceNodes, subjectNodes, links, collapsedLinks, adjacency } = graph;
+    const { deviceNodes, subjectNodes, links, collapsedLinks, serviceLinks, adjacency } = graph;
 
     // Not connected, or no node on the bus yet: say so, not an empty canvas.
     const noNodes = !Object.keys(state.latestNodesPayload?.nodes || {}).length;
@@ -831,7 +925,7 @@ const GraphView = (() => {
 
     const allNodes = (showSubs ? [...deviceNodes, ...subjectNodes] : [...deviceNodes])
       .filter(n => visibleIds.has(n.id));
-    const allLinks = (showSubs ? links : collapsedLinks).filter(l => {
+    const allLinks = [...(showSubs ? links : collapsedLinks), ...serviceLinks].filter(l => {
       const src = typeof l.source === 'object' ? l.source.id : l.source;
       const tgt = typeof l.target === 'object' ? l.target.id : l.target;
       return visibleIds.has(src) && visibleIds.has(tgt);
@@ -885,11 +979,7 @@ const GraphView = (() => {
     simulation.alpha(oldPosMap.size === 0 ? 0.6 : 0.08).restart();
 
     // Links
-    const linkSel = gLinks.selectAll('.graph-link').data(allLinks, d => {
-      const src = typeof d.source === 'object' ? d.source.id : d.source;
-      const tgt = typeof d.target === 'object' ? d.target.id : d.target;
-      return `${src}|${tgt}`;
-    });
+    const linkSel = gLinks.selectAll('.graph-link').data(allLinks, _linkKey);
     linkSel.exit().remove();
     const linkEnter = linkSel.enter().append('line')
       .attr('class', 'graph-link')
@@ -978,11 +1068,7 @@ const GraphView = (() => {
       return;
     }
     const data = gLinks ? gLinks.selectAll('.graph-link').data() : [];
-    const sel = gLinkLabels.selectAll('.graph-link-label').data(data, d => {
-      const src = typeof d.source === 'object' ? d.source.id : d.source;
-      const tgt = typeof d.target === 'object' ? d.target.id : d.target;
-      return `${src}|${tgt}`;
-    });
+    const sel = gLinkLabels.selectAll('.graph-link-label').data(data, _linkKey);
     sel.exit().remove();
     const enter = sel.enter().append('text')
       .attr('class', 'graph-link-label')
@@ -1206,7 +1292,10 @@ const GraphView = (() => {
     { key: 'displaced', label: 'displaced', level: 'err', test: (d) => d.type === 'device' && d.ghost },
     { key: 'health', label: 'unusual health', level: 'warn',
       test: (d) => d.type === 'device' && !d.disappeared && !!getStatusClass('health', d.health) },
-    { key: 'mode', label: 'unusual mode', level: 'warn', test: (d) => d.type === 'device' && d.status?.level === 'warn' },
+    { key: 'conflict', label: 'node-ID conflict', level: 'err', test: (d) => d.type === 'device' && d.status?.kind === 'conflict' },
+    { key: 'restart', label: 'restarted', level: 'warn', test: (d) => d.type === 'device' && d.status?.kind === 'restart' },
+    { key: 'typeconflict', label: 'type conflict', level: 'warn', test: (d) => d.type === 'device' && d.status?.kind === 'typeconflict' },
+    { key: 'mode', label: 'unusual mode', level: 'warn', test: (d) => d.type === 'device' && d.status?.kind === 'mode' },
     { key: 'silent', label: 'silent', level: 'warn', test: (d) => d.type === 'subject' && _isSilentSubject(d.subjectId) },
     { key: 'orphan', label: 'no publisher', level: 'warn', test: (d) => d.type === 'subject' && d.status?.text === 'no publisher' },
     { key: 'untyped', label: 'type unknown', level: 'warn', test: (d) => d.type === 'subject' && d.status?.text === 'type unknown' },
@@ -1641,12 +1730,17 @@ const GraphView = (() => {
     _startRefresh();
     _syncViewBox();
     _refresh();
+    if (!eventsTimer) {
+      _fetchEvents();
+      eventsTimer = setInterval(_fetchEvents, EVENTS_MS);
+    }
   };
 
   const hide = () => {
     const root = document.getElementById('graphContainer');
     if (root) root.classList.add('hidden');
     if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+    if (eventsTimer) { clearInterval(eventsTimer); eventsTimer = null; }
   };
 
   return { init, show, hide };

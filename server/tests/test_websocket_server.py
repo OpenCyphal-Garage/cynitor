@@ -947,3 +947,37 @@ class TestAdapterListing:
     @pytest.mark.asyncio
     async def test_without_a_catalog_nothing_is_listed(self, client):
         assert (await (await client.get("/api/can/adapters")).json()) == {"adapters": []}
+
+
+class TestRecentNodeEvents:
+    """GET /api/nodes/events: every node's lifecycle events, for the graph."""
+
+    @pytest.mark.asyncio
+    async def test_returns_events_with_server_clock(self, client, session):
+        session.event_logger = MagicMock()
+        session.event_logger.get_node_history = AsyncMock(return_value=[
+            {"id": 1, "node_id": 10, "unique_id": None, "timestamp_unix": 100.0,
+             "event_type": "restart_suspected", "detail": None},
+        ])
+        resp = await client.get("/api/nodes/events?range=1h&types=restart_suspected,node_id_conflict&limit=50")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["events"][0]["event_type"] == "restart_suspected"
+        assert isinstance(data["now_unix"], float)
+        args, kwargs = session.event_logger.get_node_history.call_args
+        assert args == (None,)
+        assert kwargs["event_types"] == ["restart_suspected", "node_id_conflict"]
+        assert kwargs["limit"] == 50
+        assert data["now_unix"] - kwargs["since_unix"] == pytest.approx(3600, abs=1)
+
+    @pytest.mark.asyncio
+    async def test_rejects_bad_parameters(self, client, session):
+        session.event_logger = MagicMock()
+        session.event_logger.get_node_history = AsyncMock(return_value=[])
+        assert (await client.get("/api/nodes/events?range=2y")).status == 400
+        assert (await client.get("/api/nodes/events?limit=x")).status == 400
+        assert (await client.get("/api/nodes/events?limit=0")).status == 400
+
+    @pytest.mark.asyncio
+    async def test_needs_the_event_logger(self, client):
+        assert (await client.get("/api/nodes/events")).status == 503

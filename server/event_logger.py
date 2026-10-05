@@ -629,20 +629,24 @@ class EventLogger:
 
     def _get_node_history_sync(
         self,
-        node_id: int,
+        node_id: Optional[int],
         since_unix: Optional[float] = None,
         event_types: Optional[list[str]] = None,
         limit: int = 200,
         unique_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
+        """A node's lifecycle events, newest first; every node's when node_id is None."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             if unique_id:
                 query = "SELECT * FROM node_history WHERE unique_id = ?"
                 params: list[Any] = [unique_id]
-            else:
+            elif node_id is not None:
                 query = "SELECT * FROM node_history WHERE node_id = ?"
                 params = [node_id]
+            else:
+                query = "SELECT * FROM node_history WHERE 1 = 1"
+                params = []
             if since_unix is not None:
                 query += " AND timestamp_unix >= ?"
                 params.append(since_unix)
@@ -667,7 +671,7 @@ class EventLogger:
 
     async def get_node_history(
         self,
-        node_id: int,
+        node_id: Optional[int],
         since_unix: Optional[float] = None,
         event_types: Optional[list[str]] = None,
         limit: int = 200,

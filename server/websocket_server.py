@@ -262,6 +262,7 @@ class WebSocketServer:
         self.app.router.add_get('/api/registers/{node_id}', self._get_registers)
         self.app.router.add_post('/api/registers/{node_id}/set', self._set_register)
         self.app.router.add_post('/api/services/{node_id}/{service_id}/call', self._call_service)
+        self.app.router.add_get('/api/nodes/events', self._get_recent_node_events)
         self.app.router.add_get('/api/nodes/{node_id}/history', self._get_node_history)
         self.app.router.add_get('/api/nodes/{node_id}/history/subjects', self._get_node_subject_summary)
         self.app.router.add_get('/api/services/{service_id}/history', self._get_service_call_history)
@@ -886,6 +887,33 @@ class WebSocketServer:
             node_id, since_unix=since_unix, event_types=event_types, limit=limit, unique_id=unique_id,
         )
         return web.json_response({"node_id": node_id, "events": events})
+
+    async def _get_recent_node_events(self, request: web.Request) -> web.Response:
+        """Lifecycle events of every node, newest first, for an overview of the bus.
+
+        ``now_unix`` is the server's clock, so that a client can tell an
+        event's age without trusting its own.
+        """
+        if not self.session.event_logger:
+            return web.json_response({"error": "Event logger not available"}, status=503)
+
+        offset = self._TIME_RANGE_MAP.get(request.query.get("range", "15m"))
+        if offset is None:
+            return web.json_response({"error": "Invalid range parameter"}, status=400)
+        types_str = request.query.get("types")
+        event_types = types_str.split(",") if types_str else None
+        try:
+            limit = min(int(request.query.get("limit", "500")), 2000)
+        except (ValueError, TypeError):
+            return web.json_response({"error": "Invalid limit parameter"}, status=400)
+        if limit < 1:
+            return web.json_response({"error": "Invalid limit parameter"}, status=400)
+
+        now = time.time()
+        events = await self.session.event_logger.get_node_history(
+            None, since_unix=now - offset, event_types=event_types, limit=limit,
+        )
+        return web.json_response({"now_unix": now, "events": events})
 
     async def _get_node_subject_summary(self, request: web.Request) -> web.Response:
         node_id, err = _parse_int(request.match_info.get('node_id'), 'node_id', 0, MAX_NODE_ID)
@@ -1516,6 +1544,7 @@ class WebSocketServer:
                     "/api/can/transport": "Transport-layer diagnostics (MTU, frame stats, bus state)",
                     "/api/can/capture": "Raw frame-capture ring-buffer snapshot (WS 'capture' message streams live)",
                     "/api/nodes": "Get info about all discovered nodes",
+                    "/api/nodes/events": "Recent lifecycle events of every node (?range=15m&types=a,b&limit=500)",
                     "/api/latest/subject/{subject_id}": "Get latest event for a subject",
                     "/api/latest/node/{node_id}": "Get latest events from a node",
                     "/api/identity-map": "Get unique_id to node_id mappings",

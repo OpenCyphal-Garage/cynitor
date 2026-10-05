@@ -246,10 +246,11 @@ async def _(page):
 # cacheEvent(). A timer in the page plays the publishers. The first test opens
 # the tab and the last one closes it, so keep them in this order.
 
-def _graph_node(nid, name, pubs, subs, gone=False, uid_byte=0):
+def _graph_node(nid, name, pubs, subs, gone=False, uid_byte=0, servers=(), clients=()):
     return {"node_id": nid, "unique_id": [uid_byte] * 16, "unique_id_hex": bytes([uid_byte] * 16).hex(),
             "uptime": 100, "has_disappeared": gone, "has_responded_to_getinfo": True, "name": name,
-            "publishers": pubs, "subscribers": subs, "clients": [], "servers": [], "last_seen": []}
+            "publishers": pubs, "subscribers": subs, "clients": list(clients), "servers": list(servers),
+            "last_seen": []}
 
 
 def _graph_ghost(last_nid, name, pubs, uid_byte):
@@ -258,8 +259,8 @@ def _graph_ghost(last_nid, name, pubs, uid_byte):
 
 
 GRAPH_NODES = {"node_count": 4, "nodes": {
-    "10": _graph_node(10, "org.example.imu", [1100, 7509], [], uid_byte=1),
-    "20": _graph_node(20, "org.example.flight_controller", [1200, 7509], [1100, 7509], uid_byte=2),
+    "10": _graph_node(10, "org.example.imu", [1100, 7509], [], uid_byte=1, servers=[100]),
+    "20": _graph_node(20, "org.example.flight_controller", [1200, 7509], [1100, 7509], uid_byte=2, clients=[100]),
     "30": _graph_node(30, "org.example.esc", [7509], [1200], uid_byte=3),
     "40": _graph_node(40, "org.example.gps", [7509], [], gone=True, uid_byte=4),
     "uid:" + "aa" * 16: _graph_ghost(37, "org.example.old_sensor_a", [1500], 0xAA),
@@ -303,7 +304,7 @@ GRAPH_LINKS = """() => Object.fromEntries([...document.querySelectorAll('#graphC
     const end = (n) => typeof n === 'object' ? n.id : n;
     return [`${end(d.source)}->${end(d.target)}`, {live: el.classList.contains('graph-link--live'),
         silent: el.classList.contains('graph-link--silent'),
-        arrow: el.getAttribute('marker-end'), subjects: d.subjects || [d.subjectId]}];
+        arrow: el.getAttribute('marker-end'), subjects: d.subjects || (d.subjectId != null ? [d.subjectId] : [])}];
 }))"""
 
 GRAPH_NODES_DRAWN = """() => Object.fromEntries([...document.querySelectorAll('#graphContainer .graph-node')].map(el => {
@@ -461,7 +462,8 @@ async def _(page):
     await page.locator("#graphHideSystem").check()
     try:
         links = await page.evaluate(GRAPH_LINKS)
-        system_only = [key for key, link in links.items() if all(s >= 6144 for s in link["subjects"])]
+        system_only = [key for key, link in links.items()
+                       if link["subjects"] and all(s >= 6144 for s in link["subjects"])]
         assert links and not system_only, f"Edges made only of system subjects: {system_only}"
         unmarked = [key for key, link in links.items() if not link["arrow"]]
         assert not unmarked, f"Edges without an arrowhead: {unmarked}"
@@ -507,6 +509,32 @@ async def _(page):
             return r.left >= s.left && r.right <= s.right && r.top >= s.top && r.bottom <= s.bottom;
         });
     }""", timeout=WAIT_MS)
+
+
+@test("Graph: service calls are drawn from client to server")
+async def _(page):
+    links = await page.evaluate("""() => [...document.querySelectorAll('#graphContainer .graph-link--svc')]
+        .map(el => { const d = d3.select(el).datum(); return [d.source.id, d.target.id, d.services]; })""")
+    assert links == [["dev:20", "dev:10", [100]]], f"Service edges: {links}"
+
+
+@test("Graph: recent restarts and node-ID conflicts are said on the node")
+async def _(page):
+    # The backend's event log, answered here: node 10 restarted two minutes ago.
+    async def events(route):
+        now = time.time()
+        body = {"now_unix": now, "events": [{"id": 1, "node_id": 10, "unique_id": None, "detail": None,
+                                             "timestamp_unix": now - 125, "event_type": "restart_suspected"}]}
+        await route.fulfill(json=body, headers={"Access-Control-Allow-Origin": "*"})
+
+    await page.route("**/api/nodes/events*", events)
+    try:
+        # Polled every 5 s while the tab is open.
+        await page.wait_for_function(f"({GRAPH_NODES_DRAWN})()['dev:10'].status === 'restarted 2m ago'", timeout=8000)
+        chips = await page.locator("#graphStatus .graph-chip").all_inner_texts()
+        assert any("1 restarted" in " ".join(c.split()) for c in chips), f"Strip: {chips}"
+    finally:
+        await page.unroute("**/api/nodes/events*", events)
 
 
 @test("Graph: resizing the window keeps the drawing at screen scale")

@@ -40,7 +40,7 @@ Tests run in registration order on one page; the first one navigates.
 
 | File | Covers |
 |------|--------|
-| `test_landing_page.py` | Landing page: layout, semaphores, nodes table, theme toggle, sidebar collapse, accessibility labels. Graph tab: silent subjects, per-publisher edge rates, devices that lost their node-ID, colour only for the unusual, ID-first subject labels, click vs. drag, "Nodes only" view, opt-in traffic animation and reduced motion, Fit, resize, status strip, Open in Nodes |
+| `test_landing_page.py` | Landing page: layout, semaphores, nodes table, theme toggle, sidebar collapse, accessibility labels. Graph tab: silent subjects, per-publisher edge rates, devices that lost their node-ID, colour only for the unusual, ID-first subject labels, click vs. drag, "Nodes only" view, opt-in traffic animation and reduced motion, Fit, resize, status strip, Open in Nodes, service-call edges, recent restarts |
 
 ## Configuration
 
