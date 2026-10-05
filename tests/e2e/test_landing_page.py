@@ -118,7 +118,7 @@ async def _(page):
     await page.wait_for_selector(".tabulator-col-title", timeout=5000)
     raw_headers = await page.locator(".tabulator-col-title").all_text_contents()
     headers = [h.strip() for h in raw_headers if h.strip()]
-    expected = ["ID", "Name", "State", "Health", "Rate", "Uptime",
+    expected = ["ID", "Name", "State", "Health", "Mode", "SW", "Rate", "Uptime",
                 "Publishers", "Subscribers", "Servers", "Clients"]
     assert headers == expected, f"Expected headers {expected}, got {headers}"
 
@@ -129,10 +129,26 @@ async def _(page):
     assert "not connected" in text.lower(), f"Expected 'Not connected', got '{text}'"
 
 
-@test("Filter row has 10 inputs")
+@test("Filter row has 12 inputs")
 async def _(page):
     count = await page.locator(".tabulator-header-filter input").count()
-    assert count == 10, f"Expected 10 filter inputs, got {count}"
+    assert count == 12, f"Expected 12 filter inputs, got {count}"
+
+
+@test("Uptime reads at a glance; narrow tables drop the least telling columns")
+async def _(page):
+    shown = await page.evaluate("[59, 700, 7300, 266400].map(formatUptime)")
+    assert shown == ["59s", "11m 40s", "2h 1m", "3d 2h"], f"Uptime shown as {shown}"
+    size = page.viewport_size
+    await page.set_viewport_size({"width": 900, "height": size["height"]})
+    try:
+        await page.wait_for_timeout(300)
+        visible = await page.evaluate("nodesTabulator.getColumns().filter(c => c.isVisible()).map(c => c.getField())")
+        for field in ("_sortId", "name", "state"):
+            assert field in visible, f"{field} hidden at 900 px: {visible}"
+        assert "clients" not in visible, f"Clients should hide first: {visible}"
+    finally:
+        await page.set_viewport_size(size)
 
 
 @test("API URL input has default value")

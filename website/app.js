@@ -71,6 +71,15 @@ const bind = () => {
   const updateCollapseChevron = () => {
     collapseBtn.classList.toggle('pointing-up', state.detailPanelCollapsed);
   };
+
+  // A plot stops drawing while the panel is collapsed; expanded again, it
+  // has to be started again, or it stays frozen at the moment of collapse.
+  const resumePlot = () => {
+    if (!state.detailPanelCollapsed && !state.plotTimer
+        && el('selectedNodeContent')?.querySelector('.detail-plot-area')) {
+      startPlotAnim();
+    }
+  };
   updateCollapseChevron();
 
   collapseBtn.addEventListener('click', () => {
@@ -88,6 +97,7 @@ const bind = () => {
       state._subjectsDetailCollapsed = state.detailPanelCollapsed;
     }
     updateCollapseChevron();
+    resumePlot();
     saveSettings();
   });
 
@@ -139,6 +149,7 @@ const bind = () => {
         state._subjectsDetailCollapsed = state.detailPanelCollapsed;
       }
       updateCollapseChevron();
+      resumePlot();
       saveSettings();
     };
   })();
@@ -156,6 +167,7 @@ const bind = () => {
       state._subjectsDetailCollapsed = false;
     }
     updateCollapseChevron();
+    resumePlot();
     saveSettings();
   });
 

@@ -220,11 +220,12 @@ const formatUptime = (seconds) => {
   if (seconds == null) return '-';
   const s = Number(seconds);
   if (!Number.isFinite(s) || s < 0) return '-';
-  const d = Math.floor(s / 86400);
-  const h = Math.floor((s % 86400) / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = Math.floor(s % 60);
-  return `${d}d ${h}h ${m}m ${sec}s`;
+  // The two largest units: enough to read at a glance, short enough to fit.
+  const parts = [[Math.floor(s / 86400), 'd'], [Math.floor((s % 86400) / 3600), 'h'],
+    [Math.floor((s % 3600) / 60), 'm'], [Math.floor(s % 60), 's']];
+  const first = parts.findIndex(([n]) => n > 0);
+  if (first < 0) return '0s';
+  return parts.slice(first, first + 2).map(([n, unit]) => `${n}${unit}`).join(' ');
 };
 
 const formatLastSeen = (lastSeen) => {
@@ -357,12 +358,13 @@ const positionPopover = (popover, anchorEl) => {
 const getStatusClass = (attr, value) => {
   const v = String(value).toUpperCase();
   switch (attr) {
+    // Only what is not the usual gets a colour, as in the node table.
     case 'health':
+      if (v === 'NOMINAL' || v === '0') return '';
+      if (v === 'ADVISORY' || v === '1') return 'status-warn';
       return getHealthCssClass(value);
     case 'mode':
-      if (v === 'OPERATIONAL' || v === '0') return 'status-ok';
-      if (v === 'INITIALIZATION' || v === '1') return 'status-init';
-      return '';
+      return v === 'OPERATIONAL' || v === '0' ? '' : 'status-warn';
     default:
       return '';
   }

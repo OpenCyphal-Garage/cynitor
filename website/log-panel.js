@@ -158,12 +158,6 @@ const isAtBottom = (container) => {
   return container.scrollHeight - container.scrollTop - container.clientHeight <= AUTOSCROLL_STICKY_PX;
 };
 
-// A node by its alias or GetInfo name, when the dashboard knows one.
-const logNodeName = (nodeId) => {
-  const node = state.latestNodesPayload?.nodes?.[nodeId];
-  return node ? getNodeAlias(node.unique_id) || node.name || '' : '';
-};
-
 // Who a row comes from: [html, plain text for the filter, tooltip].
 const logRowSource = (entry) => {
   if (entry.source === 'server') {
@@ -171,7 +165,7 @@ const logRowSource = (entry) => {
     return [escapeHtml(logger), logger, `backend logger: ${logger}`];
   }
   if (entry.nodeId == null) return ['', '', ''];
-  const name = logNodeName(entry.nodeId);
+  const name = nodeDisplayName(entry.nodeId);
   const html = `<span class="log-row-nid">${entry.nodeId}</span>${name ? ` ${escapeHtml(name)}` : ''}`;
   return [html, `${entry.nodeId} ${name}`, `node ${entry.nodeId}${name ? ` (${name})` : ''}`];
 };

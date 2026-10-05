@@ -66,7 +66,8 @@ const getNodeRate = (nodeId) => {
   return total;
 };
 
-const getNodeHealthValue = (nodeId) => {
+// A field of the node's latest heartbeat (health, mode, ...), or null.
+const getNodeHeartbeatValue = (nodeId, attribute) => {
   const map = state.latestByNode.get(nodeId);
   if (!map) {
     return null;
@@ -76,13 +77,16 @@ const getNodeHealthValue = (nodeId) => {
       continue;
     }
     for (const attr of event.attributes) {
-      if (String(attr.attribute).toLowerCase() === 'health') {
+      if (String(attr.attribute).toLowerCase() === attribute) {
         return String(attr.value);
       }
     }
   }
   return null;
 };
+
+const getNodeHealthValue = (nodeId) => getNodeHeartbeatValue(nodeId, 'health');
+const getNodeModeValue = (nodeId) => getNodeHeartbeatValue(nodeId, 'mode');
 
 const getNodeVisualState = (node) => {
   if (!node) {
@@ -91,10 +95,11 @@ const getNodeVisualState = (node) => {
   if (node.has_disappeared) {
     return 'offline';
   }
+  // Cyphal health: ADVISORY is a minor note (the Health column shows it),
+  // CAUTION a degraded node, WARNING a failing one.
   const health = getNodeHealthValue(node.node_id);
-  if (health && health !== 'NOMINAL') {
-    return 'error';
-  }
+  if (health === 'WARNING') return 'warning';
+  if (health === 'CAUTION') return 'caution';
   return getNodeRate(node.node_id) > 0 ? 'active' : 'idle';
 };
 
@@ -106,6 +111,38 @@ const getTotalMessageRate = () => {
     total += getNodeRate(node.node_id);
   }
   return total;
+};
+
+// A node by its alias or GetInfo name, when the dashboard knows one.
+const nodeDisplayName = (nodeId) => {
+  const node = state.latestNodesPayload?.nodes?.[nodeId];
+  return node ? getNodeAlias(node.unique_id) || node.name || '' : '';
+};
+
+// "10, 11" -> "10 org.zubax.myxa (front_left)\n11 ...": node-IDs with names, for a tooltip.
+const nodeIdsTitle = (idsText) => String(idsText).split(', ').filter((id) => id && id !== '-')
+  .map((id) => `${id} ${nodeDisplayName(Number(id))}`.trim()).join('\n');
+
+// Cyphal's fixed port-IDs: subjects from 6144 and services from 256 are
+// the standard ones every node may have (heartbeat, GetInfo, registers, ...).
+const FIRST_FIXED_SERVICE_ID = 256;
+const isFixedPortId = (kind, id) =>
+  id >= (kind === 'service' ? FIRST_FIXED_SERVICE_ID : FIRST_FIXED_SUBJECT_ID);
+
+// The standard types on their fixed port-IDs (public regulated DSDL), for
+// naming a port before anything has been decoded on it.
+const STANDARD_SUBJECT_TYPES = {
+  7168: 'uavcan.time.Synchronization', 7509: 'uavcan.node.Heartbeat', 7510: 'uavcan.node.port.List',
+  8164: 'uavcan.pnp.cluster.Discovery', 8165: 'uavcan.pnp.NodeIDAllocationData (v2)',
+  8166: 'uavcan.pnp.NodeIDAllocationData (v1)', 8174: 'uavcan.internet.udp.OutgoingPacket',
+  8184: 'uavcan.diagnostic.Record',
+};
+const STANDARD_SERVICE_TYPES = {
+  384: 'uavcan.register.Access', 385: 'uavcan.register.List', 390: 'uavcan.pnp.cluster.AppendEntries',
+  391: 'uavcan.pnp.cluster.RequestVote', 405: 'uavcan.file.GetInfo', 406: 'uavcan.file.List',
+  407: 'uavcan.file.Modify', 408: 'uavcan.file.Read', 409: 'uavcan.file.Write', 430: 'uavcan.node.GetInfo',
+  434: 'uavcan.node.GetTransportStatistics', 435: 'uavcan.node.ExecuteCommand',
+  500: 'uavcan.internet.udp.HandleIncomingPacket', 510: 'uavcan.time.GetSynchronizationMasterInfo',
 };
 
 // Where a subject's type comes from: 'registers', 'user' (set in Subjects),
@@ -122,6 +159,18 @@ const isUntypedSubject = (subjectId) => {
     && !state.latestBySubject.get(subjectId)?.message_type;
 };
 
+// A subject's full type name: the one it is decoded as, else the class of
+// its last message, else the standard type on its fixed port-ID.
+const subjectTypeName = (sid, event) => {
+  if (isUntypedSubject(sid)) return 'type unknown';
+  const decodedAs = state.latestNodesPayload?.subject_types?.[sid]?.type;
+  if (decodedAs) return decodedAs;
+  const standard = STANDARD_SUBJECT_TYPES[sid];
+  const cls = event?.message_type;  // e.g. "Heartbeat_1_0": the class, versioned
+  if (standard && cls) return `${standard.slice(0, standard.lastIndexOf('.') + 1)}${cls}`;
+  return cls || standard || '-';
+};
+
 const buildSubjectDetailData = (subjectIds, nodeId) => {
   if (!Array.isArray(subjectIds) || !subjectIds.length) {
     return [];
@@ -132,9 +181,10 @@ const buildSubjectDetailData = (subjectIds, nodeId) => {
     const nodeEvent = perNodeEvents?.get(subjectId);
     const networkEvent = state.latestBySubject.get(subjectId);
     const event = nodeEvent || networkEvent;
+    const typeName = subjectTypeName(subjectId, event);
     return {
       subjectId,
-      messageType: event?.message_type || null,
+      messageType: typeName === '-' || typeName === 'type unknown' ? null : typeName,
       untyped: isUntypedSubject(subjectId),
       rate: event?.rate ?? null,
       attributes: Array.isArray(event?.attributes) ? event.attributes : [],
