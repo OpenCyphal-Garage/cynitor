@@ -4813,6 +4813,13 @@ details.svc-history-entry[open] > summary::before {
 
 .graph-node--offline .graph-node-id { fill: var(--muted); }
 
+/* Heard in Cyphal v1.1 only: present, but nothing about it is decoded */
+.graph-node--v11 .graph-device-circle {
+  stroke: var(--warn);
+  stroke-dasharray: 0.0625rem 0.25rem;
+  stroke-linecap: round;
+}
+
 /* Pinned by a drag: filled, as a dashed ring means offline */
 .graph-node--pinned .graph-device-circle,
 .graph-node--pinned .graph-subject-rect {
@@ -5053,6 +5060,13 @@ details.svc-history-entry[open] > summary::before {
 .graph-info-facts dt { color: var(--muted); }
 .graph-info-facts dd { margin: 0; color: var(--text); }
 
+.graph-info-note {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+}
+
 .graph-info-buttons {
   margin: 0.125rem 0 0.375rem;
 }
@@ -5223,6 +5237,11 @@ details.svc-history-entry[open] > summary::before {
 }
 
 .graph-legend-dot--pinned { background: var(--surface-3); }
+
+.graph-legend-dot--v11 {
+  border-color: var(--warn);
+  border-style: dotted;
+}
 
 /* Edges as drawn: no data, traffic, silent */
 .graph-legend-line {

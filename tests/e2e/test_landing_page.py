@@ -518,6 +518,22 @@ async def _(page):
         await close_graph_display(page)
 
 
+@test("Graph: a node heard only in Cyphal v1.1 is drawn, marked not decoded")
+async def _(page):
+    await page.evaluate("""() => { state.cyphalV11 = {transfers: 9, nodes: [10, 110], subject_count: 2,
+        subject_ids: [54580, 54581], last_seen_unix: Date.now() / 1000}; }""")
+    try:
+        await page.wait_for_function(f"({GRAPH_NODES_DRAWN})()['dev:v11:110'] !== undefined", timeout=5000)
+        nodes = await page.evaluate(GRAPH_NODES_DRAWN)
+        node = nodes["dev:v11:110"]
+        assert "graph-node--v11" in node["classes"] and node["status"] == "v1.1 · not decoded", f"v1.1 node: {node}"
+        assert "dev:v11:10" not in nodes, "Node 10, known from v1.0, drawn twice"
+        chips = " ".join(await page.locator("#graphStatus .graph-chip").all_inner_texts())
+        assert "1 Cyphal v1.1, not decoded" in " ".join(chips.split()), f"Strip: {chips}"
+    finally:
+        await page.evaluate("state.cyphalV11 = null")
+
+
 @test("Graph: the legend opens from its button")
 async def _(page):
     legend = page.locator("#graphLegend .graph-legend-menu")

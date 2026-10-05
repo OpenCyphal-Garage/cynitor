@@ -175,6 +175,18 @@ const GraphView = (() => {
       }
     }
 
+    // Nodes heard only in Cyphal v1.1, which this dashboard cannot decode:
+    // drawn so as not to be missed, with nothing known of their ports.
+    const knownIds = new Set(Object.values(nodes).map((n) => n.node_id));
+    for (const nid of _v11Nodes()) {
+      if (knownIds.has(nid) || hiddenNodeKeys.has(`nid:${nid}`)) continue;
+      deviceNodes.push({
+        id: `dev:v11:${nid}`, nodeId: nid, payloadKey: null, shownId: nid, ghost: false, v11: true,
+        type: 'device', label: 'Cyphal v1.1 node', fullName: 'Cyphal v1.1 node',
+        uniqueId: null, stableKey: `nid:${nid}`, health: null, disappeared: false, status: V11_STATUS,
+      });
+    }
+
     for (const [sid, meta] of subjectSet) {
       const ev = state.latestBySubject.get(sid);
       subjectNodes.push({
@@ -365,6 +377,7 @@ const GraphView = (() => {
       .classed('graph-node--offline', d.disappeared)
       .classed('graph-node--warn', health === 'status-warn')
       .classed('graph-node--err', health === 'status-err')
+      .classed('graph-node--v11', !!d.v11)
       .call((g) => g.select('title').text(`${d.fullName} (node ${d.shownId})`))
       .select('.graph-health-badge')
       .text(health ? HEALTH_ICONS[String(d.health).toUpperCase()] || '' : '');
@@ -483,6 +496,13 @@ const GraphView = (() => {
     if (payload > 0) parts.push(`${payload} B`);
     return parts.join(' · ');
   };
+
+  // ── Cyphal v1.1 ──
+  //
+  // /api/status reports the node-IDs Cyphal v1.1 traffic came from (and,
+  // bus-wide, its subject-IDs), only while a CAN session runs.
+  const V11_STATUS = { text: 'v1.1 · not decoded', level: 'warn', kind: 'v11' };
+  const _v11Nodes = () => (state.canConnected && state.cyphalV11?.nodes) || [];
 
   // ── Layered layout ──
   //
@@ -710,6 +730,7 @@ const GraphView = (() => {
           <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device graph-legend-dot--warn"></span>advisory ~, caution !</span>
           <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device graph-legend-dot--err"></span>warning !!</span>
           <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device graph-legend-dot--offline"></span>offline</span>
+          <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device graph-legend-dot--v11"></span>Cyphal v1.1, not decoded</span>
           <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device graph-legend-dot--pinned"></span>pinned</span>
           <span class="graph-legend-item"><span class="graph-legend-line graph-legend-line--live"></span>traffic, by rate</span>
           <span class="graph-legend-item"><span class="graph-legend-line graph-legend-line--silent"></span>silent</span>
@@ -987,7 +1008,7 @@ const GraphView = (() => {
     const { deviceNodes, subjectNodes, links, collapsedLinks, serviceLinks, adjacency } = graph;
 
     // Not connected, or no node on the bus yet: say so, not an empty canvas.
-    const noNodes = !Object.keys(state.latestNodesPayload?.nodes || {}).length;
+    const noNodes = !Object.keys(state.latestNodesPayload?.nodes || {}).length && !_v11Nodes().length;
     const placeholderHtml = (typeof eventSourcePlaceholder === 'function'
       ? eventSourcePlaceholder('view the topology graph') : null)
       || (noNodes && typeof svcStateMsg === 'function'
@@ -1597,6 +1618,7 @@ const GraphView = (() => {
     { key: 'conflict', label: 'node-ID conflict', level: 'err', test: (d) => d.type === 'device' && d.status?.kind === 'conflict' },
     { key: 'restart', label: 'restarted', level: 'warn', test: (d) => d.type === 'device' && d.status?.kind === 'restart' },
     { key: 'typeconflict', label: 'type conflict', level: 'warn', test: (d) => d.type === 'device' && d.status?.kind === 'typeconflict' },
+    { key: 'v11', label: 'Cyphal v1.1, not decoded', level: 'warn', test: (d) => d.type === 'device' && !!d.v11 },
     { key: 'mode', label: 'unusual mode', level: 'warn', test: (d) => d.type === 'device' && d.status?.kind === 'mode' },
     { key: 'silent', label: 'silent', level: 'warn', test: (d) => d.type === 'subject' && _isSilentSubject(d.subjectId) },
     { key: 'orphan', label: 'no publisher', level: 'warn', test: (d) => d.type === 'subject' && d.status?.text === 'no publisher' },
@@ -1744,7 +1766,30 @@ const GraphView = (() => {
     svg.transition().duration(300).call(zoomBehavior.translateTo, node.x, node.y);
   };
 
+  // A v1.1 node: its ID, and what the bus as a whole has shown of v1.1.
+  const _v11InfoHtml = (node) => {
+    const v11 = state.cyphalV11 || {};
+    const subjects = (v11.subject_ids || []).join(', ') + (v11.subject_count > (v11.subject_ids || []).length ? ', …' : '');
+    const last = v11.last_seen_unix ? formatLastSeen([new Date(v11.last_seen_unix * 1000).toISOString()]) : '-';
+    return `<div class="graph-info-header">
+      <span class="graph-info-type">Device</span>
+      <div class="graph-info-actions">
+        <button class="graph-info-close" id="graphInfoClose" aria-label="Close info panel">&times;</button>
+      </div>
+    </div>
+    <div class="graph-info-title">Cyphal v1.1 node</div>
+    ${_factsHtml([
+      ['Node-ID', escapeHtml(String(node.shownId))],
+      ['Status', `<span class="graph-info-status--warn">${escapeHtml(V11_STATUS.text)}</span>`],
+      ['v1.1 subjects', escapeHtml(subjects || '-')],
+      ['Last v1.1', escapeHtml(last)],
+    ])}
+    <p class="graph-info-note">This dashboard speaks Cyphal v1.0. A v1.1 device's topics show here
+      only when it pins them to a v1.0 subject-ID; until then its ports and health are not known.</p>`;
+  };
+
   const _deviceInfoHtml = (node) => {
+    if (node.v11) return _v11InfoHtml(node);
     const raw = state.latestNodesPayload?.nodes?.[node.payloadKey];
     const health = node.health || 'UNKNOWN';
     const hClass = getStatusClass('health', health);
@@ -1959,7 +2004,7 @@ ${_factsHtml([
     for (const [nid, node] of Object.entries(p.nodes)) {
       parts.push(`${nid}:${node.publishers?.join(',') || ''}:${node.subscribers?.join(',') || ''}:${node.has_disappeared}`);
     }
-    return parts.sort().join('|');
+    return `${parts.sort().join('|')}|v11:${_v11Nodes().join(',')}`;
   };
 
   const _refresh = () => {
@@ -1975,6 +2020,7 @@ ${_factsHtml([
 
   const _updateVisuals = () => {
     gNodes.selectAll('.graph-node--device').each(function(d) {
+      if (d.v11) return;  // nothing changes about them but their presence
       const raw = state.latestNodesPayload?.nodes?.[d.payloadKey];
       d.health = getNodeHealthValue(d.nodeId);
       d.disappeared = raw?.has_disappeared || false;
