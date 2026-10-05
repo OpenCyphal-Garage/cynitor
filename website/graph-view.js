@@ -178,7 +178,7 @@ const GraphView = (() => {
         id: `sub:${sid}`,
         subjectId: sid,
         type: 'subject',
-        label: _subjectLabel(sid, ev),
+        label: _subjectLabel(sid),
         fullType: _subjectFullType(sid, ev),
         pubs: meta.pubs,
         subs: meta.subs,
@@ -362,6 +362,7 @@ const GraphView = (() => {
       .classed('graph-node--offline', d.disappeared)
       .classed('graph-node--warn', health === 'status-warn')
       .classed('graph-node--err', health === 'status-err')
+      .call((g) => g.select('title').text(`${d.fullName} (node ${d.shownId})`))
       .select('.graph-health-badge')
       .text(health ? HEALTH_ICONS[String(d.health).toUpperCase()] || '' : '');
   };
@@ -424,7 +425,8 @@ const GraphView = (() => {
   };
 
   const _paintSubject = function(d) {
-    d3.select(this).classed('graph-node--warn', !!d.status);
+    d3.select(this).classed('graph-node--warn', !!d.status)
+      .select('title').text(`Subject ${d.subjectId}: ${d.fullType || 'type not known yet'}`);
   };
 
   // The node-ID a device is shown under: its own, or for one whose node-ID
@@ -466,11 +468,9 @@ const GraphView = (() => {
     return (parts.pop() || '').replace(/_\d+_\d+$/, '');
   };
 
-  // "1100 Vector3": the subject-ID first, as many subjects share a type.
-  const _subjectLabel = (sid, ev) => {
-    const short = _subjectShortType(sid, ev);
-    return _truncate(short ? `${sid} ${short}` : String(sid));
-  };
+  // A subject is labelled by its ID, which tells it apart where many share
+  // a type; the type is in its tooltip and the inspector.
+  const _subjectLabel = (sid) => String(sid);
 
   const _linkStatText = (link) => {
     const { silent, rate, payload } = _linkTraffic(link);
@@ -612,6 +612,21 @@ const GraphView = (() => {
           </div>
         </div>
       </details>
+      <details class="graph-display" id="graphLegend">
+        <summary class="graph-btn" aria-label="Legend">?</summary>
+        <div class="graph-display-menu graph-legend-menu">
+          <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device"></span>device</span>
+          <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--subject"></span>subject</span>
+          <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device graph-legend-dot--warn"></span>advisory ~, caution !</span>
+          <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device graph-legend-dot--err"></span>warning !!</span>
+          <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device graph-legend-dot--offline"></span>offline</span>
+          <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device graph-legend-dot--pinned"></span>pinned</span>
+          <span class="graph-legend-item"><span class="graph-legend-line graph-legend-line--live"></span>traffic, by rate</span>
+          <span class="graph-legend-item"><span class="graph-legend-line graph-legend-line--silent"></span>silent</span>
+          <span class="graph-legend-item"><span class="graph-legend-line"></span>no data</span>
+          <span class="graph-legend-item"><span class="graph-legend-line graph-legend-line--svc"></span>service call</span>
+        </div>
+      </details>
       <button class="graph-btn" id="graphFit" aria-label="Fit graph to view">Fit</button>
       <button class="graph-btn" id="graphResetLayout" aria-label="Reset graph layout">Reset layout</button>
       <button class="graph-btn" id="graphUnpinAll" aria-label="Unpin all nodes">Unpin all</button>
@@ -631,39 +646,30 @@ const GraphView = (() => {
     });
     root.appendChild(statusStrip);
 
-    const legendBar = document.createElement('div');
-    legendBar.className = 'graph-legend-bar';
-    legendBar.innerHTML = `
-      <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device"></span>device</span>
-      <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--subject"></span>subject</span>
-      <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device graph-legend-dot--warn"></span>advisory ~, caution !</span>
-      <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device graph-legend-dot--err"></span>warning !!</span>
-      <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device graph-legend-dot--offline"></span>offline</span>
-      <span class="graph-legend-item"><span class="graph-legend-dot graph-legend-dot--device graph-legend-dot--pinned"></span>pinned</span>
-      <span class="graph-legend-item"><span class="graph-legend-line graph-legend-line--live"></span>traffic</span>
-      <span class="graph-legend-item"><span class="graph-legend-line graph-legend-line--silent"></span>silent</span>
-      <span class="graph-legend-item"><span class="graph-legend-line"></span>no data</span>
-      <span class="graph-legend-item"><span class="graph-legend-line graph-legend-line--svc"></span>service call</span>
-    `;
-    root.appendChild(legendBar);
 
     document.getElementById('graphFilter').value = gState.filterText || '';
     document.getElementById('graphGravity').value = gState.gravityMetric || 'none';
     document.getElementById('graphView').value = gState.view || 'node-centric';
 
-    // SVG
+    // The canvas, and beside it the inspector of the selected node: docked,
+    // so that it narrows the canvas rather than covering part of it.
+    const body = document.createElement('div');
+    body.className = 'graph-body';
+    root.appendChild(body);
     const svgWrap = document.createElement('div');
     svgWrap.className = 'graph-svg-wrap';
-    root.appendChild(svgWrap);
-
-    // Info panel — placed inside svgWrap so positioning is in canvas pixel space.
-    const info = document.createElement('div');
+    body.appendChild(svgWrap);
+    const info = document.createElement('aside');
     info.className = 'graph-info hidden';
     info.id = 'graphInfo';
-    svgWrap.appendChild(info);
+    info.setAttribute('aria-label', 'Selected node');
+    body.appendChild(info);
     // One listener for the panel's buttons: the panel is refreshed in place,
     // so a button outlives any single render.
     info.addEventListener('click', (e) => {
+      // A port or device row: select that node, if it is drawn.
+      const target = e.target.closest('[data-select]')?.dataset.select;
+      if (target) { _selectNode(target); _ensureVisible(target); return; }
       const action = e.target.closest('button')?.id;
       if (action === 'graphInfoClose') { _selectNode(null); return; }
       const node = simulation?.nodes().find((n) => n.id === gState.selectedId);
@@ -687,14 +693,14 @@ const GraphView = (() => {
       .attr('id', 'graph-arrow-pub')
       .attr('viewBox', '0 0 10 6')
       .attr('refX', 10).attr('refY', 3)
-      .attr('markerWidth', 8).attr('markerHeight', 6)
+      .attr('markerUnits', 'userSpaceOnUse')
       .attr('orient', 'auto')
       .append('path').attr('d', 'M0,0 L10,3 L0,6').attr('fill', 'var(--muted)');
     defs.append('marker')
       .attr('id', 'graph-arrow-pub-hi')
       .attr('viewBox', '0 0 10 6')
       .attr('refX', 10).attr('refY', 3)
-      .attr('markerWidth', 8).attr('markerHeight', 6)
+      .attr('markerUnits', 'userSpaceOnUse')
       .attr('orient', 'auto')
       .append('path').attr('d', 'M0,0 L10,3 L0,6').attr('fill', 'var(--accent)');
 
@@ -727,20 +733,18 @@ const GraphView = (() => {
       .on('zoom', (e) => {
         if (e.sourceEvent) fitPending = false;  // the user has placed the view
         container.attr('transform', e.transform);
+        _sizeArrows(e.transform.k);
         gState.zoom = { k: e.transform.k, x: e.transform.x, y: e.transform.y };
-        if (gState.selectedId) _positionInfoPanel();
         save();
       });
     svg.call(zoomBehavior);
 
     if (typeof ResizeObserver !== 'undefined') {
-      const ro = new ResizeObserver(() => {
-        _syncViewBox();
-        if (gState.selectedId) _positionInfoPanel();
-      });
+      const ro = new ResizeObserver(() => _syncViewBox());
       ro.observe(svgWrap);
     }
 
+    _sizeArrows(1);
     if (gState.zoom) {
       svg.call(zoomBehavior.transform,
         d3.zoomIdentity.translate(gState.zoom.x, gState.zoom.y).scale(gState.zoom.k));
@@ -796,15 +800,24 @@ const GraphView = (() => {
       _render(deriveGraph());
     });
     document.getElementById('graphFit').addEventListener('click', () => _fitToView());
-    // The Display menu closes on a click elsewhere, or on Escape.
-    const display = document.getElementById('graphDisplay');
+    // The Display and Legend menus close on a click elsewhere, or on Escape.
+    const menus = [...root.querySelectorAll('details.graph-display')];
     document.addEventListener('click', (e) => {
-      if (display.open && !display.contains(e.target)) display.open = false;
+      for (const menu of menus) if (menu.open && !menu.contains(e.target)) menu.open = false;
     });
-    display.addEventListener('keydown', (e) => {
-      if (e.key !== 'Escape' || !display.open) return;
-      display.open = false;
-      display.querySelector('summary').focus();
+    for (const menu of menus) {
+      menu.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape' || !menu.open) return;
+        e.stopPropagation();
+        menu.open = false;
+        menu.querySelector('summary').focus();
+      });
+    }
+    // Escape closes the inspector, unless typing in a field.
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || state.activeView !== 'graph' || !gState.selectedId) return;
+      if (e.target.closest?.('input, textarea, select')) return;
+      _selectNode(null);
     });
     let _filterDebounce = null;
     document.getElementById('graphFilter').addEventListener('input', (e) => {
@@ -996,6 +1009,7 @@ const GraphView = (() => {
       .on('mouseenter', (e, d) => _hoverNode(d.id))
       .on('mouseleave', () => _hoverNode(null));
 
+    nodeEnter.append('title');  // the full name or type, on hover
     nodeEnter.each(function(d) {
       const g = d3.select(this);
       if (d.type === 'device') {
@@ -1132,7 +1146,6 @@ const GraphView = (() => {
         .attr('y', d => (d.source.y + d.target.y) / 2 - 3);
     }
 
-    if (gState.selectedId) _positionInfoPanel();
     // Fitted once the layout has nearly settled, not at its last tick.
     if (fitPending && simulation.alpha() < FIT_ALPHA && _fitToView()) fitPending = false;
   };
@@ -1344,6 +1357,10 @@ const GraphView = (() => {
     gState.selectedId = id;
     _applyHighlight(id, false);
     _renderInfo(id);
+    // The inspector has just opened or closed: measure the canvas now, and
+    // keep the selected node clear of the inspector's edge.
+    _syncViewBox();
+    if (id) _ensureVisible(id);
   };
 
   const _hoverNode = (id) => {
@@ -1418,45 +1435,24 @@ const GraphView = (() => {
     const fresh = document.createElement('div');
     fresh.innerHTML = node.type === 'device' ? _deviceInfoHtml(node) : _subjectInfoHtml(node);
     patchChildren(panel, fresh);
-    _positionInfoPanel();
   };
 
-  const _positionInfoPanel = () => {
-    const panel = document.getElementById('graphInfo');
-    if (!panel || !gState.selectedId || panel.classList.contains('hidden')) return;
-    const node = simulation?.nodes().find(n => n.id === gState.selectedId);
-    if (!node) return;
+  // Arrowheads keep one size on screen: 7 by 4 px at any zoom.
+  const _sizeArrows = (k) => {
+    svg?.selectAll('marker').attr('markerWidth', 7 / k).attr('markerHeight', 4.2 / k);
+  };
 
-    const svgEl = svg.node();
-    const wrap = svgEl.parentNode;
-    if (!wrap) return;
-    const wrapW = wrap.clientWidth || 800;
-    const wrapH = wrap.clientHeight || 600;
-
-    const t = d3.zoomTransform(svgEl);
-    const px = t.applyX(node.x);
-    const py = t.applyY(node.y);
-
-    const panelW = panel.offsetWidth || 256;
-    const panelH = panel.offsetHeight || 0;
-    const gap = 24;
-    const nodeR = node.type === 'device' ? 14 : 12;
-
-    const rightX = px + nodeR + gap;
-    const leftX = px - nodeR - gap - panelW;
-    const roomRight = wrapW - rightX;
-    const roomLeft = px - nodeR - gap;
-    let x;
-    if (roomRight >= panelW) x = rightX;
-    else if (roomLeft >= panelW) x = leftX;
-    else x = roomRight >= roomLeft ? rightX : leftX;
-    x = Math.max(8, Math.min(wrapW - panelW - 8, x));
-
-    let y = py - panelH / 2;
-    y = Math.max(8, Math.min(wrapH - panelH - 8, y));
-
-    panel.style.left = `${x}px`;
-    panel.style.top = `${y}px`;
+  // Pans the view, when needed, so that a node is not hidden at its edge,
+  // as when the inspector opens beside it and narrows the canvas.
+  const _ensureVisible = (id) => {
+    const node = simulation?.nodes().find((n) => n.id === id);
+    const box = svg?.node()?.viewBox.baseVal;
+    if (!node || !box?.width) return;
+    const t = d3.zoomTransform(svg.node());
+    const [x, y] = [t.applyX(node.x), t.applyY(node.y)];
+    const margin = 60;
+    if (x > margin && x < box.width - margin && y > margin && y < box.height - margin) return;
+    svg.transition().duration(300).call(zoomBehavior.translateTo, node.x, node.y);
   };
 
   const _deviceInfoHtml = (node) => {
@@ -1480,24 +1476,21 @@ const GraphView = (() => {
       </div>
     </div>
     <div class="graph-info-title" id="graphInfoTitle" data-uid="${escapeHtml(raw?.unique_id_hex || '')}">${escapeHtml(displayName)}</div>
-    <div class="graph-info-meta">
-      <span>${node.ghost ? 'Last ID' : 'ID'}: ${escapeHtml(String(node.shownId))}</span>
-      <span class="graph-info-health ${hClass}">${escapeHtml(health)}</span>
-      ${node.status ? `<span class="graph-info-status graph-info-status--${node.status.level}">${escapeHtml(node.status.text)}</span>` : ''}
-    </div>`;
+`;
 
-    // An online device's heartbeat: its mode (coloured when unusual, as in
-    // the Nodes table), uptime and vendor-specific status code.
-    if (raw && !node.disappeared) {
-      const mode = getNodeModeValue(node.nodeId);
-      const vssc = getNodeHeartbeatValue(node.nodeId, 'vssc');
-      const facts = [
-        mode ? `<span class="${getStatusClass('mode', mode)}">${escapeHtml(mode)}</span>` : '',
-        raw.uptime != null ? `<span>up ${escapeHtml(formatUptime(raw.uptime))}</span>` : '',
-        vssc != null ? `<span>VSSC ${escapeHtml(vssc)}</span>` : '',
-      ].join('');
-      if (facts) html += `<div class="graph-info-meta">${facts}</div>`;
-    }
+    // Its status, then an online device's heartbeat: health and mode
+    // (coloured when unusual, as in the Nodes table), uptime and VSSC.
+    const online = raw && !node.disappeared;
+    const mode = online ? getNodeModeValue(node.nodeId) : null;
+    const vssc = online ? getNodeHeartbeatValue(node.nodeId, 'vssc') : null;
+    html += _factsHtml([
+      [node.ghost ? 'Last ID' : 'Node-ID', escapeHtml(String(node.shownId))],
+      node.status && ['Status', `<span class="graph-info-status--${node.status.level}">${escapeHtml(node.status.text)}</span>`],
+      online && ['Health', `<span class="graph-info-health ${hClass}">${escapeHtml(health)}</span>`],
+      mode && ['Mode', `<span class="${getStatusClass('mode', mode)}">${escapeHtml(mode)}</span>`],
+      online && raw.uptime != null && ['Uptime', escapeHtml(formatUptime(raw.uptime))],
+      vssc != null && ['VSSC', escapeHtml(vssc)],
+    ]);
     html += '<div class="graph-info-buttons"><button type="button" class="graph-btn" id="graphInfoOpen">Open in Nodes</button></div>';
 
     if (raw) {
@@ -1505,11 +1498,11 @@ const GraphView = (() => {
       const online = !node.disappeared;
       html += _portSectionHtml('Publishers', raw.publishers, (sid) => {
         const ev = online ? state.latestByNode.get(node.nodeId)?.get(sid) : null;
-        return [_subjectShortType(sid, state.latestBySubject.get(sid)), ev, Number(ev?.rate) || 0];
+        return [_subjectShortType(sid, state.latestBySubject.get(sid)), ev, Number(ev?.rate) || 0, `sub:${sid}`];
       });
       html += _portSectionHtml('Subscribers', raw.subscribers, (sid) => {
         const ev = online ? state.latestBySubject.get(sid) : null;
-        return [_subjectShortType(sid, state.latestBySubject.get(sid)), ev, getSubjectRate(ev)];
+        return [_subjectShortType(sid, state.latestBySubject.get(sid)), ev, getSubjectRate(ev), `sub:${sid}`];
       });
       html += _portSectionHtml('Servers', raw.servers, (sid) => [_serviceShortName(sid)]);
       html += _portSectionHtml('Clients', raw.clients, (sid) => [_serviceShortName(sid)]);
@@ -1525,16 +1518,18 @@ const GraphView = (() => {
   };
 
   // One section of ports: ID, name and, where messages are judged, the rate
-  // or that it has gone silent. describe(id) gives [name, message, rate].
+  // or that it has gone silent. describe(id) gives [name, message, rate, the
+  // graph node the row selects].
   const _portSectionHtml = (title, ids, describe) => {
     if (!ids?.length) return '';
     const rows = ids.map((id) => {
-      const [name, ev, rate] = describe(id);
+      const [name, ev, rate, selects] = describe(id);
       const rateHtml = !ev ? ''
         : _isFresh(ev, Date.now()) ? `<span class="graph-info-rate">${Number(rate).toFixed(1)} Hz</span>`
         : '<span class="graph-info-rate graph-info-status--warn">silent</span>';
-      return `<div class="graph-info-row"><span class="graph-info-sid">${id}</span>`
-        + `<span class="graph-info-mtype">${escapeHtml(name || '')}</span>${rateHtml}</div>`;
+      const cells = `<span class="graph-info-sid">${id}</span>`
+        + `<span class="graph-info-mtype">${escapeHtml(name || '')}</span>${rateHtml}`;
+      return _rowHtml(selects, cells);
     }).join('');
     return `<div class="graph-info-section"><div class="graph-info-section-label">${title} (${ids.length})</div>${rows}</div>`;
   };
@@ -1597,11 +1592,29 @@ const GraphView = (() => {
     input.addEventListener('blur', () => commit(true));
   };
 
+  // A grid of label and value; a falsy entry is left out. Values are HTML,
+  // escaped by the caller.
+  const _factsHtml = (facts) => `<dl class="graph-info-facts">${facts.filter(Boolean)
+    .map(([label, value]) => `<dt>${label}</dt><dd>${value}</dd>`).join('')}</dl>`;
+
+  // A value for reading: floats to six significant digits.
+  const _formatValue = (v) => (typeof v === 'number' && !Number.isInteger(v) ? String(Number(v.toPrecision(6))) : String(v));
+
+  // A row of the inspector: a button selecting the node it names where that
+  // node is drawn, plain text otherwise.
+  const _rowHtml = (nodeId, cells) => {
+    const drawn = nodeId && (simulation?.nodes() || []).some((n) => n.id === nodeId);
+    return drawn
+      ? `<button type="button" class="graph-info-row graph-info-row--link" data-select="${escapeHtml(nodeId)}">${cells}</button>`
+      : `<div class="graph-info-row">${cells}</div>`;
+  };
+
   // A device listed in a subject's panel, by its /api/nodes key.
   const _deviceRowHtml = (key) => {
     const raw = state.latestNodesPayload?.nodes?.[key];
     const shownId = _shownNodeId(raw);
-    return `<div class="graph-info-row"><span class="graph-info-sid">${escapeHtml(String(shownId))}</span><span class="graph-info-mtype">${escapeHtml(_deviceFullName(raw, shownId))}</span></div>`;
+    return _rowHtml(`dev:${key}`, `<span class="graph-info-sid">${escapeHtml(String(shownId))}</span>`
+      + `<span class="graph-info-mtype">${escapeHtml(_deviceFullName(raw, shownId))}</span>`);
   };
 
   const _subjectInfoHtml = (node) => {
@@ -1619,11 +1632,11 @@ const GraphView = (() => {
       </div>
     </div>
     <div class="graph-info-title">${escapeHtml(node.fullType || `Subject ${node.subjectId}`)}</div>
-    <div class="graph-info-meta">
-      <span>ID: ${node.subjectId}</span>
-      ${rateHtml}
-      ${node.status ? `<span class="graph-info-status graph-info-status--warn">${escapeHtml(node.status.text)}</span>` : ''}
-    </div>
+${_factsHtml([
+      ['Subject-ID', String(node.subjectId)],
+      node.status && ['Status', `<span class="graph-info-status--warn">${escapeHtml(node.status.text)}</span>`],
+      rateHtml && ['Rate', rateHtml],
+    ])}
     <div class="graph-info-buttons"><button type="button" class="graph-btn" id="graphInfoPlot">Plot in Subjects</button></div>`;
 
     if (node.pubs?.length) {
@@ -1640,7 +1653,7 @@ const GraphView = (() => {
     if (ev?.attributes?.length) {
       html += `<div class="graph-info-section"><div class="graph-info-section-label">Attributes</div>`;
       html += ev.attributes.map(a =>
-        `<div class="graph-info-row"><span class="graph-info-sid">${escapeHtml(a.attribute)}</span><span class="graph-info-mtype">${escapeHtml(String(a.value))}${a.unit ? ' ' + escapeHtml(a.unit) : ''}</span></div>`
+        `<div class="graph-info-row"><span class="graph-info-sid">${escapeHtml(a.attribute)}</span><span class="graph-info-mtype">${escapeHtml(_formatValue(a.value))}${a.unit ? ' ' + escapeHtml(a.unit) : ''}</span></div>`
       ).join('');
       html += '</div>';
     }
@@ -1684,7 +1697,7 @@ const GraphView = (() => {
     // A subject's type is known from its first message on.
     gNodes.selectAll('.graph-node--subject').each(function(d) {
       const ev = state.latestBySubject.get(d.subjectId);
-      d.label = _subjectLabel(d.subjectId, ev);
+      d.label = _subjectLabel(d.subjectId);
       d.fullType = _subjectFullType(d.subjectId, ev);
       d.status = _subjectStatus(d.subjectId, d.pubs, d.subs);
       _paintSubject.call(this, d);

@@ -4682,8 +4682,16 @@ details.svc-history-entry[open] > summary::before {
   background: var(--surface-3);
 }
 
+/* The canvas and, beside it, the inspector of the selected node */
+.graph-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
 .graph-svg-wrap {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   background: var(--bg);
   position: relative;
@@ -4711,6 +4719,8 @@ details.svc-history-entry[open] > summary::before {
 .graph-link {
   stroke: var(--border);
   fill: none;
+  /* As wide on screen at any zoom: the width says the rate, not the zoom */
+  vector-effect: non-scaling-stroke;
   transition: opacity 0.15s;
 }
 
@@ -4869,22 +4879,14 @@ details.svc-history-entry[open] > summary::before {
   opacity: 0.1;
 }
 
-/* Info panel — positioned by JS next to the selected node inside .graph-svg-wrap */
+/* Inspector: docked beside the canvas while a node is selected */
 .graph-info {
-  position: absolute;
-  top: 0.5rem;
-  left: 0.5rem;
-  width: 16rem;
-  max-height: 60%;
+  flex: 0 0 20rem;
   overflow-y: auto;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0.625rem;
+  border-left: 1px solid var(--border);
+  padding: 0.75rem 0.875rem;
   font-size: 0.75rem;
-  box-shadow: 0 0.125rem 0.5rem rgba(0, 0, 0, 0.12);
-  z-index: 10;
-  pointer-events: auto;
 }
 
 .graph-info.hidden {
@@ -4985,16 +4987,6 @@ details.svc-history-entry[open] > summary::before {
   word-break: break-all;
 }
 
-.graph-info-meta {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-family: var(--mono);
-  font-size: 0.6875rem;
-  color: var(--muted);
-  margin-bottom: 0.5rem;
-}
-
 .graph-info-health {
   font-weight: 600;
 }
@@ -5003,6 +4995,19 @@ details.svc-history-entry[open] > summary::before {
   color: var(--error);
   font-weight: 600;
 }
+
+/* The selected node's facts: label and value, aligned */
+.graph-info-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.1875rem 0.75rem;
+  margin: 0.25rem 0 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+}
+
+.graph-info-facts dt { color: var(--muted); }
+.graph-info-facts dd { margin: 0; color: var(--text); }
 
 .graph-info-buttons {
   margin: 0.125rem 0 0.375rem;
@@ -5031,6 +5036,23 @@ details.svc-history-entry[open] > summary::before {
   letter-spacing: 0.04em;
   color: var(--muted);
   margin-bottom: 0.125rem;
+}
+
+/* A row naming a drawn node: selects it */
+.graph-info-row.graph-info-row--link {
+  width: calc(100% + 0.5rem);
+  margin-left: -0.25rem;
+  padding: 0.125rem 0.25rem;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.graph-info-row.graph-info-row--link:hover {
+  background: var(--surface-2);
 }
 
 .graph-info-row {
@@ -5119,19 +5141,11 @@ details.svc-history-entry[open] > summary::before {
   border-color: var(--accent);
 }
 
-/* Legend bar — own row below the toolbar */
-.graph-legend-bar {
-  display: flex;
-  align-items: center;
-  gap: 1.25rem;
-  padding: 0.375rem 0.75rem;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+/* Legend: in a popover beside Display */
+.graph-legend-menu {
   font-family: var(--sans);
   font-size: 0.75rem;
   color: var(--muted);
-  flex-shrink: 0;
-  flex-wrap: wrap;
 }
 
 .graph-legend-item {

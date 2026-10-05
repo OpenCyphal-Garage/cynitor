@@ -429,6 +429,32 @@ async def _(page):
     assert changes == 0, f"Info panel changed {changes} times in 2.5 s without new data"
 
 
+@test("Graph: the inspector docks beside the canvas, follows its rows, and Esc closes it")
+async def _(page):
+    await page.evaluate("""() => [...document.querySelectorAll('#graphContainer .graph-node')]
+        .find(e => d3.select(e).datum().id === 'dev:20').dispatchEvent(new MouseEvent('click', {bubbles: true}))""")
+    inspector = page.locator("#graphInfo")
+    await inspector.wait_for(state="visible", timeout=WAIT_MS)
+    canvas = await page.locator("#graphContainer .graph-svg-wrap").bounding_box()
+    panel = await inspector.bounding_box()
+    assert canvas["x"] + canvas["width"] <= panel["x"] + 1, f"Inspector overlaps the canvas: {canvas} / {panel}"
+    await inspector.locator('[data-select="sub:1200"]').click()
+    text = await inspector.inner_text()
+    assert "Subject-ID" in text and "1200" in text, f"A port row did not select its subject: {text}"
+    await page.keyboard.press("Escape")
+    await inspector.wait_for(state="hidden", timeout=WAIT_MS)
+
+
+@test("Graph: the legend opens from its button")
+async def _(page):
+    legend = page.locator("#graphLegend .graph-legend-menu")
+    assert await legend.is_hidden(), "Legend shown without being asked for"
+    await page.locator("#graphLegend > summary").click()
+    assert await legend.is_visible() and "silent" in await legend.inner_text(), "Legend did not open"
+    await page.keyboard.press("Escape")
+    assert await legend.is_hidden(), "Escape did not close the legend"
+
+
 @test("Graph: the status strip counts what needs a look, and picks it out")
 async def _(page):
     chips = [" ".join(t.split()) for t in await page.locator("#graphStatus .graph-chip").all_inner_texts()]
