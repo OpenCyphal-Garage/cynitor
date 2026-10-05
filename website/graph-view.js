@@ -29,6 +29,7 @@ const GraphView = (() => {
     showLinkStats: false,
     animateTraffic: false,
     showServices: true,
+    layout: 'layered',
     focus: null,  // a status-strip kind picked out of the graph; not saved
     initialized: false,
   };
@@ -54,7 +55,7 @@ const GraphView = (() => {
     { value: 'payload', label: 'payload size' },
   ];
 
-  let svg, container, simulation, gLinks, gNodes, gLabels, gLinkLabels;
+  let svg, container, simulation, gLinks, gLinkHits, gNodes, gLabels, gLinkLabels;
   let zoomBehavior;
   let refreshTimer = null;
   let prevSnapshot = null;
@@ -78,6 +79,7 @@ const GraphView = (() => {
       showLinkStats: gState.showLinkStats,
       animateTraffic: gState.animateTraffic,
       showServices: gState.showServices,
+      layout: gState.layout,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   };
@@ -110,6 +112,7 @@ const GraphView = (() => {
       if (typeof raw.showLinkStats === 'boolean') gState.showLinkStats = raw.showLinkStats;
       if (typeof raw.animateTraffic === 'boolean') gState.animateTraffic = raw.animateTraffic;
       if (typeof raw.showServices === 'boolean') gState.showServices = raw.showServices;
+      if (raw.layout === 'layered' || raw.layout === 'force') gState.layout = raw.layout;
     } catch { /* ignore corrupt storage */ }
   };
 
@@ -481,6 +484,82 @@ const GraphView = (() => {
     return parts.join(' · ');
   };
 
+  // ── Layered layout ──
+  //
+  // Devices in one band, subjects in the other, each ordered by where its
+  // neighbours across the gap stand (a few sweeps of the barycenter
+  // heuristic), which takes most crossings out. A band longer than the
+  // canvas is wide wraps into rows stacked away from the gap, so that the
+  // whole fits at about full size. The same bus is laid out the same way every
+  // time. "Nodes only" has no bands and keeps the force layout.
+  const BANDS = {
+    device: { gap: 150, rowGap: 90 },
+    subject: { gap: 64, rowGap: 64 },
+  };
+  const BAND_MARGIN = 80;
+  const LABEL_CHAR = 6.6;  // px per character of a label, monospaced
+  const BAND_GAP = 220;
+  const _isLayered = () => gState.layout === 'layered' && _showSubs();
+
+  const _layoutLayered = (nodes, links, subjectsOnTop, width, height) => {
+    const endId = (n) => (typeof n === 'object' ? n.id : n);
+    const neighbours = new Map(nodes.map((n) => [n.id, []]));
+    for (const l of links) {
+      if (l.type !== 'pub' && l.type !== 'sub') continue;
+      neighbours.get(endId(l.source))?.push(endId(l.target));
+      neighbours.get(endId(l.target))?.push(endId(l.source));
+    }
+    let devices = nodes.filter((n) => n.type === 'device')
+      .sort((a, b) => (a.ghost - b.ghost) || (Number(a.shownId) - Number(b.shownId)));
+    let subjects = nodes.filter((n) => n.type === 'subject').sort((a, b) => a.subjectId - b.subjectId);
+    // Positions as fractions of a band, so that bands of any length compare.
+    const fractions = (list) => new Map(list.map((n, i) => [n.id, list.length > 1 ? i / (list.length - 1) : 0.5]));
+    const reorder = (list, across) => {
+      const there = fractions(across);
+      const here = fractions(list);
+      const key = (n) => {
+        const xs = neighbours.get(n.id).map((id) => there.get(id)).filter((x) => x != null);
+        return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : here.get(n.id);
+      };
+      return [...list].sort((a, b) => (key(a) - key(b)) || (here.get(a.id) - here.get(b.id)));
+    };
+    for (let sweep = 0; sweep < 4; sweep++) {
+      subjects = reorder(subjects, devices);
+      devices = reorder(devices, subjects);
+    }
+    // Each node gets the room its longest label line needs, the band's gap at
+    // least; a row ends where the next node would pass the canvas edge.
+    const roomOf = (n, band) => Math.max(band.gap,
+      Math.max(String(n.label || '').length, n.status?.text.length || 0) * LABEL_CHAR + 16);
+    const place = (list, band, gapY, away) => {
+      const rows = [[]];
+      let used = 0;
+      for (const n of list) {
+        const room = roomOf(n, band);
+        if (rows[rows.length - 1].length && used + room > width - 2 * BAND_MARGIN) {
+          rows.push([]);
+          used = 0;
+        }
+        rows[rows.length - 1].push(n);
+        used += room;
+      }
+      rows.forEach((row, r) => {
+        let x = width / 2 - row.reduce((sum, n) => sum + roomOf(n, band), 0) / 2;
+        for (const n of row) {
+          const room = roomOf(n, band);
+          n.tx = x + room / 2;
+          n.ty = gapY + away * r * band.rowGap;
+          x += room;
+        }
+      });
+    };
+    const [top, bottom] = subjectsOnTop ? [subjects, devices] : [devices, subjects];
+    // The gap grows with the canvas: edges between the bands get less steep.
+    const gap = Math.max(BAND_GAP, height * 0.4);
+    place(top, BANDS[subjectsOnTop ? 'subject' : 'device'], height / 2 - gap / 2, -1);
+    place(bottom, BANDS[subjectsOnTop ? 'device' : 'subject'], height / 2 + gap / 2, 1);
+  };
+
   // ── Gravity ──
 
   const _deviceSubjectIds = (raw) => [
@@ -531,7 +610,7 @@ const GraphView = (() => {
   };
 
   const _applyGravity = () => {
-    if (!simulation) return;
+    if (!simulation || _isLayered()) return;  // the layers place every node
     const metric = gState.gravityMetric || 'none';
     if (metric === 'none') {
       simulation.force('gravity', null);
@@ -584,7 +663,7 @@ const GraphView = (() => {
         <input type="checkbox" id="graphHideSystem" ${gState.hideSystem ? 'checked' : ''} />
         <span>Hide system</span>
       </label>
-      <input type="text" id="graphFilter" class="graph-filter" placeholder="Filter by id, name, or type…" aria-label="Filter graph" />
+      <input type="text" id="graphFilter" class="graph-filter" placeholder="Filter by id, name, type; Enter goes to it" aria-label="Filter graph; Enter goes to the first match" />
       <details class="graph-display" id="graphDisplay">
         <summary class="graph-btn">Display</summary>
         <div class="graph-display-menu">
@@ -604,6 +683,17 @@ const GraphView = (() => {
             <input type="checkbox" id="graphShowServices" ${gState.showServices ? 'checked' : ''} />
             <span>Service calls</span>
           </label>
+          <div class="graph-display-row">
+            <button type="button" class="graph-btn" id="graphExportSvg">Export SVG</button>
+            <button type="button" class="graph-btn" id="graphExportPng">Export PNG</button>
+          </div>
+          <div class="graph-select-group">
+            <label for="graphLayout">Layout</label>
+            <select id="graphLayout" class="graph-select" aria-label="Layout">
+              <option value="layered">layered</option>
+              <option value="force">force</option>
+            </select>
+          </div>
           <div class="graph-select-group">
             <label for="graphGravity">Gravity</label>
             <select id="graphGravity" class="graph-select" aria-label="Gravity metric">
@@ -649,6 +739,7 @@ const GraphView = (() => {
 
     document.getElementById('graphFilter').value = gState.filterText || '';
     document.getElementById('graphGravity').value = gState.gravityMetric || 'none';
+    document.getElementById('graphLayout').value = gState.layout;
     document.getElementById('graphView').value = gState.view || 'node-centric';
 
     // The canvas, and beside it the inspector of the selected node: docked,
@@ -659,6 +750,11 @@ const GraphView = (() => {
     const svgWrap = document.createElement('div');
     svgWrap.className = 'graph-svg-wrap';
     body.appendChild(svgWrap);
+    const tooltip = document.createElement('div');
+    tooltip.className = 'graph-tooltip hidden';
+    tooltip.id = 'graphTooltip';
+    tooltip.setAttribute('role', 'tooltip');
+    svgWrap.appendChild(tooltip);
     const info = document.createElement('aside');
     info.className = 'graph-info hidden';
     info.id = 'graphInfo';
@@ -723,6 +819,8 @@ const GraphView = (() => {
       .attr('pointer-events', 'none');
     gLinks = container.append('g').attr('class', 'graph-links')
       .classed('graph-animate', gState.animateTraffic);
+    // Edges are thin; a wider, invisible twin of each takes the pointer.
+    gLinkHits = container.append('g').attr('class', 'graph-link-hits');
     gNodes = container.append('g').attr('class', 'graph-nodes');
     gLabels = container.append('g').attr('class', 'graph-labels');
     gLinkLabels = container.append('g').attr('class', 'graph-link-labels');
@@ -734,6 +832,7 @@ const GraphView = (() => {
         if (e.sourceEvent) fitPending = false;  // the user has placed the view
         container.attr('transform', e.transform);
         _sizeArrows(e.transform.k);
+        _hideTooltip();
         gState.zoom = { k: e.transform.k, x: e.transform.x, y: e.transform.y };
         save();
       });
@@ -799,7 +898,15 @@ const GraphView = (() => {
       save();
       _render(deriveGraph());
     });
+    document.getElementById('graphLayout').addEventListener('change', (e) => {
+      gState.layout = e.target.value;
+      fitPending = true;  // the nodes move somewhere else: show them all once settled
+      save();
+      _render(deriveGraph());
+    });
     document.getElementById('graphFit').addEventListener('click', () => _fitToView());
+    document.getElementById('graphExportSvg').addEventListener('click', () => _exportImage('svg'));
+    document.getElementById('graphExportPng').addEventListener('click', () => _exportImage('png'));
     // The Display and Legend menus close on a click elsewhere, or on Escape.
     const menus = [...root.querySelectorAll('details.graph-display')];
     document.addEventListener('click', (e) => {
@@ -828,6 +935,11 @@ const GraphView = (() => {
         _filterDebounce = null;
         _render(deriveGraph());
       }, 150);
+    });
+    document.getElementById('graphFilter').addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      _goToMatch(e.target.value);
     });
     document.getElementById('graphResetLayout').addEventListener('click', () => {
       gState.positions = {};
@@ -976,20 +1088,36 @@ const GraphView = (() => {
 
     // Update simulation
     simulation.nodes(allNodes);
-    simulation.force('link', d3.forceLink(allLinks).id(d => d.id).distance(d => showSubs ? 80 : 110).strength(0.4));
-    if (showSubs) {
-      const top = height * 0.33;
-      const bottom = height * 0.67;
-      simulation.force('bipartite', d3.forceY(d => {
-        const isSubject = d.type === 'subject';
-        const goTop = subjectsOnTop ? isSubject : !isSubject;
-        return goTop ? top : bottom;
-      }).strength(0.06));
+    if (_isLayered()) {
+      // Each node eases to its place in the layers. The link force stays, at
+      // no strength, for it also turns the links' IDs into their nodes.
+      _layoutLayered(allNodes, allLinks, subjectsOnTop, width, height);
+      simulation.force('link', d3.forceLink(allLinks).id(d => d.id).strength(0))
+        .force('charge', null).force('collide', null).force('center', null)
+        .force('bipartite', null).force('gravity', null)
+        .force('lx', d3.forceX(d => d.tx).strength(0.3))
+        .force('ly', d3.forceY(d => d.ty).strength(0.3));
+      simulation.alpha(0.5).restart();
     } else {
-      simulation.force('bipartite', null);
+      simulation.force('lx', null).force('ly', null)
+        .force('charge', d3.forceManyBody().strength(-160))
+        .force('collide', d3.forceCollide().radius(d => d.type === 'device' ? 32 : 22))
+        .force('center', d3.forceCenter(width / 2, height / 2).strength(0.03));
+      simulation.force('link', d3.forceLink(allLinks).id(d => d.id).distance(d => showSubs ? 80 : 110).strength(0.4));
+      if (showSubs) {
+        const top = height * 0.33;
+        const bottom = height * 0.67;
+        simulation.force('bipartite', d3.forceY(d => {
+          const isSubject = d.type === 'subject';
+          const goTop = subjectsOnTop ? isSubject : !isSubject;
+          return goTop ? top : bottom;
+        }).strength(0.06));
+      } else {
+        simulation.force('bipartite', null);
+      }
+      _applyGravity();
+      simulation.alpha(oldPosMap.size === 0 ? 0.6 : 0.08).restart();
     }
-    _applyGravity();
-    simulation.alpha(oldPosMap.size === 0 ? 0.6 : 0.08).restart();
 
     // Links
     const linkSel = gLinks.selectAll('.graph-link').data(allLinks, _linkKey);
@@ -999,6 +1127,14 @@ const GraphView = (() => {
       .attr('marker-end', d => _hasArrow(d) ? 'url(#graph-arrow-pub)' : null);
     linkEnter.merge(linkSel).each(_paintLink);
 
+    const hitSel = gLinkHits.selectAll('.graph-link-hit').data(allLinks, _linkKey);
+    hitSel.exit().remove();
+    hitSel.enter().append('line')
+      .attr('class', 'graph-link-hit')
+      .on('mouseenter', (e, d) => _showLinkTooltip(e, d))
+      .on('mousemove', (e) => _moveTooltip(e))
+      .on('mouseleave', () => _hideTooltip());
+
     // Nodes
     const nodeSel = gNodes.selectAll('.graph-node').data(allNodes, d => d.id);
     nodeSel.exit().remove();
@@ -1007,7 +1143,15 @@ const GraphView = (() => {
       .call(_dragBehavior())
       .on('click', (e, d) => { e.stopPropagation(); _selectNode(d.id); })
       .on('mouseenter', (e, d) => _hoverNode(d.id))
-      .on('mouseleave', () => _hoverNode(null));
+      .on('mouseleave', () => _hoverNode(null))
+      // Reachable without a mouse: Tab to a node, Enter or Space selects it.
+      .attr('tabindex', 0)
+      .attr('role', 'button')
+      .on('keydown', (e, d) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        _selectNode(d.id);
+      });
 
     nodeEnter.append('title');  // the full name or type, on hover
     nodeEnter.each(function(d) {
@@ -1037,6 +1181,9 @@ const GraphView = (() => {
 
     const merged = nodeEnter.merge(nodeSel);
     merged.classed('graph-node--pinned', d => !!gState.positions[d.id]?.pinned);
+    merged.attr('aria-label', d => (d.type === 'device'
+      ? `Device ${d.shownId}, ${d.fullName}${d.status ? `, ${d.status.text}` : ''}`
+      : `Subject ${d.subjectId}${d.status ? `, ${d.status.text}` : ''}`));
     merged.filter(d => d.type === 'device').each(_paintDevice);
     merged.filter(d => d.type === 'subject').each(_paintSubject);
 
@@ -1130,6 +1277,10 @@ const GraphView = (() => {
       .attr('y1', d => d.source.y)
       .attr('x2', d => _shortenTarget(d).x)
       .attr('y2', d => _shortenTarget(d).y);
+
+    gLinkHits.selectAll('.graph-link-hit')
+      .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+      .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
 
     gNodes.selectAll('.graph-node')
       .attr('transform', d => `translate(${d.x},${d.y})`);
@@ -1295,6 +1446,144 @@ const GraphView = (() => {
       d3.select(this).classed('graph-node--pinned', true);
       save();
     });
+
+  // ── Search ──
+  //
+  // Enter in the filter goes to the best match: a node-ID or subject-ID
+  // typed in full first, then a name or type containing the text.
+  const _goToMatch = (text) => {
+    const q = String(text).trim().toLowerCase();
+    if (!q) return;
+    const nodes = simulation?.nodes() || [];
+    const exact = (n) => String(n.type === 'device' ? n.shownId : n.subjectId) === q;
+    const partial = (n) => [n.fullName, n.label, n.fullType].some((v) => String(v || '').toLowerCase().includes(q));
+    const match = nodes.find(exact) || nodes.find(partial);
+    if (!match) return;
+    _selectNode(match.id);
+    const box = svg.node().viewBox.baseVal;
+    const k = Math.max(d3.zoomTransform(svg.node()).k, 1.2);
+    const t = d3.zoomIdentity.translate(box.width / 2 - k * match.x, box.height / 2 - k * match.y).scale(k);
+    const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    (still ? svg : svg.transition().duration(400)).call(zoomBehavior.transform, t);
+  };
+
+  // ── Export ──
+  //
+  // The drawing as it stands, as an SVG or PNG file. Its looks come from the
+  // page's style sheet and theme, which a file does not have: each element's
+  // computed paint is written onto it. Hover targets and the grid stay out.
+  const EXPORT_PROPS = ['fill', 'fill-opacity', 'stroke', 'stroke-width', 'stroke-opacity', 'stroke-dasharray',
+    'stroke-linecap', 'stroke-linejoin', 'paint-order', 'opacity', 'font-family', 'font-size', 'font-weight',
+    'text-anchor', 'dominant-baseline', 'vector-effect', 'visibility'];
+  const EXPORT_MARGIN = 24;
+
+  const _exportSvgText = () => {
+    const source = svg.node();
+    const copy = source.cloneNode(true);
+    const originals = source.querySelectorAll('*');
+    copy.querySelectorAll('*').forEach((el, i) => {
+      const style = getComputedStyle(originals[i]);
+      el.setAttribute('style', EXPORT_PROPS.map((p) => `${p}:${style.getPropertyValue(p)}`).join(';'));
+    });
+    copy.querySelectorAll('marker').forEach((m) => { m.setAttribute('markerWidth', 7); m.setAttribute('markerHeight', 4.2); });
+    copy.querySelector('.graph-link-hits')?.remove();
+    copy.querySelector('.graph-grid-bg')?.remove();
+    // Framed on the drawing, not on the canvas, at its own scale.
+    const layer = copy.querySelector('.graph-layer');
+    layer.removeAttribute('transform');
+    const parts = ['.graph-links', '.graph-nodes', '.graph-labels'].map((sel) => container.select(sel).node().getBBox());
+    const x0 = Math.min(...parts.map((b) => b.x)) - EXPORT_MARGIN;
+    const y0 = Math.min(...parts.map((b) => b.y)) - EXPORT_MARGIN;
+    const x1 = Math.max(...parts.map((b) => b.x + b.width)) + EXPORT_MARGIN;
+    const y1 = Math.max(...parts.map((b) => b.y + b.height)) + EXPORT_MARGIN;
+    copy.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    copy.setAttribute('viewBox', `${x0} ${y0} ${x1 - x0} ${y1 - y0}`);
+    copy.setAttribute('width', Math.round(x1 - x0));
+    copy.setAttribute('height', Math.round(y1 - y0));
+    const background = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    for (const [k, v] of Object.entries({ x: x0, y: y0, width: x1 - x0, height: y1 - y0 })) background.setAttribute(k, v);
+    background.setAttribute('fill', getComputedStyle(source.parentNode).backgroundColor);
+    copy.insertBefore(background, layer);
+    return { text: new XMLSerializer().serializeToString(copy), width: x1 - x0, height: y1 - y0 };
+  };
+
+  const _download = (blob, name) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+
+  const _exportImage = (format) => {
+    if (!simulation?.nodes().length) return;
+    const { text, width, height } = _exportSvgText();
+    const name = `cynitor-graph-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`;
+    const svgBlob = new Blob([text], { type: 'image/svg+xml' });
+    if (format === 'svg') { _download(svgBlob, `${name}.svg`); return; }
+    // PNG at twice the size, for sharp text on a report or a ticket.
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(width * 2);
+      canvas.height = Math.round(height * 2);
+      const ctx = canvas.getContext('2d');
+      ctx.scale(2, 2);
+      ctx.drawImage(image, 0, 0, width, height);
+      URL.revokeObjectURL(image.src);
+      canvas.toBlob((png) => png && _download(png, `${name}.png`), 'image/png');
+    };
+    image.src = URL.createObjectURL(svgBlob);
+  };
+
+  // ── Edge tooltip ──
+  //
+  // What an edge carries, shown while the pointer is on it: the subject and
+  // its type, who publishes or receives it, and its rate, or that it has gone
+  // silent; for a service edge, the services one node may call on the other.
+  const _deviceText = (d) => `${d.shownId} ${d.fullName}`;
+  const _subjectText = (d) => `subject ${d.subjectId}${d.fullType ? ` · ${d.fullType}` : ''}`;
+
+  const _linkTooltipHtml = (d) => {
+    const { live, silent, rate } = _linkTraffic(d);
+    const flow = silent ? '<span class="graph-info-status--warn">silent</span>'
+      : live ? `${rate.toFixed(1)} Hz` : '<span class="graph-tooltip-muted">no data</span>';
+    const lines = {
+      pub: [_subjectText(d.target), `published by ${_deviceText(d.source)}`],
+      sub: [_subjectText(d.source), `received by ${_deviceText(d.target)}`],
+      dev: [`${_deviceText(d.source)} → ${_deviceText(d.target)}`, `subjects ${(d.subjects || []).join(', ')}`],
+      svc: [`${_deviceText(d.source)} calls ${_deviceText(d.target)}`,
+        `services ${(d.services || []).map((id) => [id, _serviceShortName(id)].filter(Boolean).join(' ')).join(', ')}`],
+    }[d.type] || [];
+    return lines.map((line) => `<div>${escapeHtml(line)}</div>`).join('')
+      + (d.type === 'svc' ? '' : `<div>${flow}</div>`);
+  };
+
+  const _showLinkTooltip = (e, d) => {
+    const tooltip = document.getElementById('graphTooltip');
+    if (!tooltip || e.buttons) return;  // not while dragging or panning
+    tooltip.innerHTML = _linkTooltipHtml(d);
+    tooltip.classList.remove('hidden');
+    gLinks.selectAll('.graph-link').classed('graph-link--hover', (l) => l === d);
+    _moveTooltip(e);
+  };
+
+  // Beside the pointer, kept inside the canvas.
+  const _moveTooltip = (e) => {
+    const tooltip = document.getElementById('graphTooltip');
+    const wrap = tooltip?.parentNode;
+    if (!tooltip || tooltip.classList.contains('hidden') || !wrap) return;
+    const box = wrap.getBoundingClientRect();
+    const x = Math.min(e.clientX - box.left + 14, box.width - tooltip.offsetWidth - 8);
+    const y = Math.min(e.clientY - box.top + 14, box.height - tooltip.offsetHeight - 8);
+    tooltip.style.left = `${Math.max(8, x)}px`;
+    tooltip.style.top = `${Math.max(8, y)}px`;
+  };
+
+  const _hideTooltip = () => {
+    document.getElementById('graphTooltip')?.classList.add('hidden');
+    gLinks?.selectAll('.graph-link--hover').classed('graph-link--hover', false);
+  };
 
   // ── Status strip ──
   //
@@ -1730,7 +2019,7 @@ ${_factsHtml([
     const w = wrap.clientWidth;
     const h = wrap.clientHeight;
     svg.attr('viewBox', `0 0 ${w} ${h}`);
-    if (simulation) simulation.force('center', d3.forceCenter(w / 2, h / 2).strength(0.03));
+    if (simulation?.force('center')) simulation.force('center', d3.forceCenter(w / 2, h / 2).strength(0.03));
   };
 
   // ── Public API ──

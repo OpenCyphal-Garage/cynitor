@@ -402,6 +402,32 @@ async def _(page):
     assert labels and not wrong, f"Subject labels not led by their ID: {wrong}"
 
 
+@test("Graph: the layered layout puts devices and subjects in bands of their own")
+async def _(page):
+    await page.wait_for_function("""() => {
+        const ys = (type) => [...document.querySelectorAll(`#graphContainer .graph-node--${type}`)]
+            .map(el => d3.select(el).datum().y);
+        return Math.max(...ys('device')) < Math.min(...ys('subject'));
+    }""", timeout=5000)
+
+
+@test("Graph: hovering an edge says what it carries")
+async def _(page):
+    mid = await page.evaluate("""() => {
+        const el = [...document.querySelectorAll('#graphContainer .graph-link-hit')].find(e => {
+            const d = d3.select(e).datum(); return d.source.id === 'dev:20' && d.target.id === 'sub:1200'; });
+        const r = el.getBoundingClientRect();
+        return {x: r.x + r.width / 2, y: r.y + r.height / 2};
+    }""")
+    await page.mouse.move(mid["x"], mid["y"])
+    tooltip = page.locator("#graphTooltip")
+    await tooltip.wait_for(state="visible", timeout=WAIT_MS)
+    text = await tooltip.inner_text()
+    await page.mouse.move(5, 5)
+    assert "subject 1200" in text and "published by 20" in text and "Hz" in text, f"Tooltip reads: {text}"
+    await tooltip.wait_for(state="hidden", timeout=WAIT_MS)
+
+
 @test("Graph: a click selects a node without moving or pinning it")
 async def _(page):
     box = await page.evaluate("""() => {
@@ -443,6 +469,37 @@ async def _(page):
     assert "Subject-ID" in text and "1200" in text, f"A port row did not select its subject: {text}"
     await page.keyboard.press("Escape")
     await inspector.wait_for(state="hidden", timeout=WAIT_MS)
+
+
+@test("Graph: Enter in the filter goes to the match; a focused node selects on Enter")
+async def _(page):
+    await page.fill("#graphFilter", "30")
+    await page.press("#graphFilter", "Enter")
+    inspector = page.locator("#graphInfo")
+    await inspector.wait_for(state="visible", timeout=WAIT_MS)
+    assert "org.example.esc" in await inspector.inner_text(), "Enter did not select node 30"
+    await page.fill("#graphFilter", "")
+    await page.keyboard.press("Escape")
+    await page.evaluate("document.querySelector('#graphContainer .graph-node--device').focus()")
+    label = await page.evaluate("document.activeElement.getAttribute('aria-label')")
+    await page.keyboard.press("Enter")
+    await inspector.wait_for(state="visible", timeout=WAIT_MS)
+    await page.keyboard.press("Escape")
+    assert label and label.startswith("Device "), f"Focused node is named {label!r}"
+
+
+@test("Graph: the drawing exports as an SVG file")
+async def _(page):
+    await open_graph_display(page)
+    try:
+        async with page.expect_download() as download:
+            await page.locator("#graphExportSvg").click()
+        path = await (await download.value).path()
+        text = Path(path).read_text()
+        assert text.startswith("<svg") and "org.example.esc" in text and "graph-link-hit" not in text, \
+            f"Export is not the drawing: {text[:120]}"
+    finally:
+        await close_graph_display(page)
 
 
 @test("Graph: the legend opens from its button")
