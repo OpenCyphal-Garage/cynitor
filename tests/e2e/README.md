@@ -40,7 +40,7 @@ Tests run in registration order on one page; the first one navigates.
 
 | File | Covers |
 |------|--------|
-| `test_landing_page.py` | Landing page: layout, semaphores, nodes table, theme toggle, sidebar collapse, accessibility labels. Graph tab: silent subjects, per-publisher edge rates, devices that lost their node-ID, colour only for the unusual, ID-first subject labels, click vs. drag, "Nodes only" view, opt-in traffic animation and reduced motion, Fit, resize, status strip, Open in Nodes, service-call edges, recent restarts, docked inspector, legend popover, layered layout, edge tooltips, search-to-zoom, keyboard selection, SVG export, Cyphal v1.1 nodes |
+| `test_landing_page.py` | Landing page: layout, semaphores, nodes table, theme toggle, sidebar collapse, accessibility labels. Graph tab: silent subjects, per-publisher edge rates, devices that lost their node-ID, colour only for the unusual, ID-first subject labels, click vs. drag, "Nodes only" view, opt-in traffic animation and reduced motion, Fit, resize, status strip, Open in Nodes, service-call edges, recent restarts, docked inspector, legend popover, layered layout, edge tooltips, search-to-zoom, keyboard selection, SVG export, Cyphal v1.1 nodes. Nodes and Subjects tables: silent subjects lose their rate (table, card, total), card rates follow the live rate, a subscriber's card shows the subject's total, severity sort with ghost rows kept last, Subjects refreshes with nothing arriving, scroll kept across tab switches |
 
 ## Configuration
 

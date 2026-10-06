@@ -59,6 +59,25 @@ const getSelectedNode = () => {
 // own publisher's; recordings made before `subject_rate` existed fall back to it.
 const getSubjectRate = (event) => Number(event?.subject_rate ?? event?.rate) || 0;
 
+// A rate arrives only with a message, so a publisher that stops keeps its
+// last one. A message counts as current for three of its periods (two
+// seconds at least); the period is the rate's, or the gap between messages
+// when that is longer, as for subjects too slow to report a rate. Of the
+// last two gaps the shorter counts: one stray message after a long pause
+// does not make a stopped subject look slow and alive.
+// A paused or finished replay keeps the picture it stopped at.
+const FRESH_PERIODS = 3;
+const FRESH_MIN_MS = 2000;
+
+const isEventFresh = (ev, now = Date.now()) => {
+  if (!ev) return false;
+  if (state.replayPaused || state.replayFinished) return true;
+  const gapMs = Math.min(ev._gapMs ?? Infinity, ev._prevGapMs ?? Infinity);
+  const periodMs = Math.max(ev.rate > 0 ? 1000 / ev.rate : 0, Number.isFinite(gapMs) ? gapMs : 0);
+  return now - (ev._rxMs || 0) <= Math.max(FRESH_MIN_MS, FRESH_PERIODS * periodMs);
+};
+
+// Messages per second a node sends now: subjects it stopped publishing count for nothing.
 const getNodeRate = (nodeId) => {
   const nodes = state.latestNodesPayload?.nodes;
   const node = nodes ? nodes[String(nodeId)] : null;
@@ -69,9 +88,10 @@ const getNodeRate = (nodeId) => {
   if (!map) {
     return 0;
   }
+  const now = Date.now();
   let total = 0;
   for (const event of map.values()) {
-    total += Number(event.rate) || 0;
+    if (isEventFresh(event, now)) total += Number(event.rate) || 0;
   }
   return total;
 };
@@ -186,17 +206,23 @@ const buildSubjectDetailData = (subjectIds, nodeId) => {
     return [];
   }
   const perNodeEvents = Number.isInteger(nodeId) ? state.latestByNode.get(nodeId) : null;
+  const now = Date.now();
 
   return subjectIds.map((subjectId) => {
     const nodeEvent = perNodeEvents?.get(subjectId);
     const networkEvent = state.latestBySubject.get(subjectId);
     const event = nodeEvent || networkEvent;
     const typeName = subjectTypeName(subjectId, event);
+    const fresh = isEventFresh(event, now);
+    // A publisher's card shows its own rate; a subscriber's, the subject's
+    // over all publishers. None once messages stopped: the card says silent.
+    const rate = Number.isInteger(nodeId) ? Number(event?.rate) || 0 : getSubjectRate(event);
     return {
       subjectId,
       messageType: typeName === '-' || typeName === 'type unknown' ? null : typeName,
       untyped: isUntypedSubject(subjectId),
-      rate: event?.rate ?? null,
+      rate: !event ? null : fresh ? rate : 0,
+      silent: Boolean(event) && !fresh,
       attributes: Array.isArray(event?.attributes) ? event.attributes : [],
     };
   });

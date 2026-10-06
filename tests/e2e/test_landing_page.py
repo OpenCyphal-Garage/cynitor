@@ -671,6 +671,171 @@ async def _(page):
         await page.evaluate(GRAPH_STOP)
 
 
+# ── Nodes and Subjects tables ──
+#
+# /api/nodes is answered here and polled as in a live session; messages go
+# through cacheEvent(), from a timer in the page. Nothing else refreshes the
+# tables, as with a bus gone quiet. The first test starts it all and the last
+# one stops it, so keep them in this order.
+
+TABLES_NODES = {"node_count": 6, "nodes": {
+    "10": _graph_node(10, "org.example.imu", [1100, 7509], [], uid_byte=1),
+    "20": _graph_node(20, "org.example.flight_controller", [1200, 1300, 7509], [1100], uid_byte=2),
+    "21": _graph_node(21, "org.example.fc_backup", [1300, 7509], [], uid_byte=5),
+    "30": _graph_node(30, "org.example.esc", [7509], [1200, 1300], uid_byte=3),
+    "40": _graph_node(40, "org.example.gps", [7509], [], gone=True, uid_byte=4),
+    "uid:" + "aa" * 16: _graph_ghost(37, "org.example.old_sensor", [1500], 0xAA),
+}}
+
+# 10 publishes 1100 until e2eFeeds[1100] is cleared; 20 publishes 1200 at the
+# rate in e2eFeeds.rate1200; 1300 has two publishers, 20 at 10 Hz and 21 at
+# 5 Hz; 10, 20, 21 and 30 send Heartbeat at 1 Hz.
+TABLES_START = """() => {
+    state.dashboardConnected = true;
+    state.canConnected = true;
+    const ev = (subject_id, publisher_node_id, rate, subject_rate, attributes = []) =>
+        ({subject_id, publisher_node_id, message_type: 'Real32_1_0', rate, subject_rate, payload_bytes: 4,
+          attributes, timestamp_unix: Date.now() / 1000});
+    const value = (v) => [{attribute: 'value', value: v}];
+    let tick = 0;
+    window.e2eFeeds = {1100: true, rate1200: 10};
+    window.e2eTablesFeed = setInterval(() => {
+        if (e2eFeeds[1100]) cacheEvent(ev(1100, 10, 10, 10, value(1)));
+        cacheEvent(ev(1200, 20, e2eFeeds.rate1200, e2eFeeds.rate1200, value(2)));
+        cacheEvent(ev(1300, 20, 10, 15, value(3)));
+        if (tick % 2 === 0) cacheEvent(ev(1300, 21, 5, 15, value(300)));
+        if (tick++ % 10) return;
+        for (const [nid, health] of [[10, 'NOMINAL'], [20, 'NOMINAL'], [21, 'WARNING'], [30, 'CAUTION']]) {
+            cacheEvent({...ev(7509, nid, 1, 4, [{attribute: 'health', value: health}]), message_type: 'Heartbeat_1_0'});
+        }
+    }, 100);
+    getAllNodes();
+    startNodesPolling();
+}"""
+
+TABLES_STOP = """() => {
+    clearInterval(window.e2eTablesFeed);
+    stopNodesPolling();
+    switchView('nodes');
+    clearSelectedNode();
+    state.dashboardConnected = false;
+    state.canConnected = false;
+    state.latestNodesPayload = null;
+    state.latestBySubject.clear();
+    state.latestByNode.clear();
+    renderNodesTable();
+}"""
+
+TABLES_PAYLOAD = {"body": TABLES_NODES}
+
+
+async def _answer_nodes(route):
+    await route.fulfill(json=TABLES_PAYLOAD["body"], headers={"Access-Control-Allow-Origin": "*"})
+
+
+def _cell(table, row, field):
+    # null until the row is there (getRow gives false)
+    return f"({table}.getRow({row!r}) || null)?.getCell('{field}').getElement().innerText.trim()"
+
+
+def _card_rate(subject_id):
+    return f"document.querySelector('#selectedNodeContent .subject-card[data-subject=\"{subject_id}\"] .card-rate')?.innerText.trim()"
+
+
+@test("Tables: a subject that stops publishing loses its rate, in the table and on its card")
+async def _(page):
+    await page.route("**/api/nodes", _answer_nodes)
+    await page.evaluate(TABLES_START)
+    await page.evaluate("setSelectedNode(10)")
+    # 10 Hz on 1100 and Heartbeat's 1 Hz.
+    await page.wait_for_function(f"{_cell('nodesTabulator', 10, 'rate')} === '11.0 Hz'", timeout=5000)
+    await page.wait_for_function(f"{_card_rate(1100)} === '10.0 Hz'", timeout=3000)
+    before = await page.evaluate("getTotalMessageRate()")
+    await page.evaluate("e2eFeeds[1100] = false")
+    # Silent after three message periods, two seconds at least; no message
+    # refreshes the table, the node poll does.
+    await page.wait_for_function(f"{_cell('nodesTabulator', 10, 'rate')} === '1.0 Hz'", timeout=5000)
+    await page.wait_for_function(f"{_card_rate(1100)} === 'silent'", timeout=3000)
+    dot = await page.evaluate("!!document.querySelector('.subject-card[data-subject=\"1100\"] .live-dot')")
+    assert not dot, "A silent subject's card still shows the live dot"
+    after = await page.evaluate("getTotalMessageRate()")
+    assert abs(before - after - 10) < 0.5, f"Total rate went from {before} to {after}, not 10 less"
+
+
+@test("Tables: a card's rate follows the live rate; a subscriber's card shows the subject's")
+async def _(page):
+    await page.evaluate("setSelectedNode(20)")
+    await page.wait_for_function(f"{_card_rate(1200)} === '10.0 Hz'", timeout=3000)
+    await page.evaluate("e2eFeeds.rate1200 = 50")
+    await page.wait_for_function(f"{_card_rate(1200)} === '50.0 Hz'", timeout=3000)
+    # Node 30 subscribes 1300, which 20 sends at 10 Hz and 21 at 5 Hz.
+    await page.evaluate("setSelectedNode(30)")
+    await page.locator('.detail-tab[data-tab="subscribers"]').click()
+    try:
+        await page.wait_for_function(f"{_card_rate(1300)} === '15.0 Hz'", timeout=3000)
+    finally:
+        await page.locator('.detail-tab[data-tab="publishers"]').click()
+        await page.evaluate("e2eFeeds.rate1200 = 10")
+
+
+@test("Tables: offline nodes that lost their node-ID stay last; health sorts by severity")
+async def _(page):
+    ids = "nodesTabulator.getRows('active').map(r => r.getData().id)"
+    try:
+        await page.evaluate("nodesTabulator.setSort('_sortId', 'desc')")
+        order = await page.evaluate(ids)
+        assert order[0] == 40 and order[-1] == "uid:" + "aa" * 16, f"ID descending: {order}"
+        await page.evaluate("nodesTabulator.setSort('health', 'desc')")
+        health = await page.evaluate("nodesTabulator.getRows('active').map(r => r.getData().health)")
+        assert health[:4] == ["WARNING", "CAUTION", "NOMINAL", "NOMINAL"], f"Health descending: {health}"
+        assert (await page.evaluate(ids))[-1] == "uid:" + "aa" * 16, "Health descending: the ghost is not last"
+    finally:
+        await page.evaluate("nodesTabulator.setSort('_sortId', 'asc')")
+
+
+@test("Tables: Subjects says silent, and refreshes with nothing arriving")
+async def _(page):
+    await page.locator("#viewTabSubjects").click()
+    await page.wait_for_function(f"{_cell('subjectsTabulator', 'sub:1100', 'rate')} === 'silent'", timeout=5000)
+    shown = await page.evaluate(_cell('subjectsTabulator', 'sub:1300', 'rate'))
+    assert shown == "15.0 Hz", f"Subject 1300, published by two nodes, shows {shown}"
+    # The bus goes quiet: no message arrives to refresh anything.
+    await page.evaluate("clearInterval(window.e2eTablesFeed)")
+    silent = " && ".join(f"{_cell('subjectsTabulator', row, 'rate')} === 'silent'"
+                         for row in ("sub:1200", "sub:1300", "sub:7509"))
+    await page.wait_for_function(silent, timeout=6000)
+
+
+@test("Tables: a table scrolled down is still there after a tab switch")
+async def _(page):
+    # Enough nodes, each with a subject of its own, to scroll both tables.
+    many = {str(n): _graph_node(n, f"org.example.node_{n}", [2000 + n], [], uid_byte=n) for n in range(50, 170)}
+    TABLES_PAYLOAD["body"] = {"nodes": {**TABLES_NODES["nodes"], **many}}
+    in_view = """(id) => { const h = document.querySelector('#' + id + ' .tabulator-tableholder');
+        const r = h.getBoundingClientRect();
+        return {top: Math.round(h.scrollTop), rows: [...h.querySelectorAll('.tabulator-row')].filter(x => {
+            const b = x.getBoundingClientRect(); return b.bottom > r.top && b.top < r.bottom; }).length}; }"""
+    try:
+        for here, there in (("nodes", "subjects"), ("subjects", "nodes")):
+            table = f"{here}Table"
+            await page.locator(f"#viewTab{here.capitalize()}").click()
+            await page.wait_for_function(f"{here}Tabulator.getDataCount() > 100", timeout=5000)
+            # Until the table has laid out its new rows, it cannot scroll that far.
+            await page.wait_for_function(f"""(() => {{ const h = document.querySelector('#{table} .tabulator-tableholder');
+                h.scrollTop = 1500; return h.scrollTop === 1500; }})()""", timeout=5000)
+            await page.wait_for_timeout(500)
+            await page.locator(f"#viewTab{there.capitalize()}").click()
+            await page.wait_for_timeout(500)
+            await page.locator(f"#viewTab{here.capitalize()}").click()
+            await page.wait_for_timeout(1000)
+            seen = await page.evaluate(in_view, table)
+            assert seen["rows"] > 0 and abs(seen["top"] - 1500) < 2, f"{here.capitalize()} after a tab switch: {seen}"
+    finally:
+        TABLES_PAYLOAD["body"] = TABLES_NODES
+        await page.evaluate(TABLES_STOP)
+        await page.unroute("**/api/nodes", _answer_nodes)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

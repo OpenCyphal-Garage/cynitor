@@ -20,6 +20,11 @@ const idsHeaderFilter = (headerValue, rowValue) => {
   return terms.some((t) => cellStr.includes(t));
 };
 
+// Health and state sort by how much they need a look, not alphabetically.
+const HEALTH_ORDER = ['-', 'NOMINAL', 'ADVISORY', 'CAUTION', 'WARNING'];
+const STATE_ORDER = ['active', 'idle', 'caution', 'warning', 'offline'];
+const severitySorter = (order) => (a, b) => order.indexOf(a) - order.indexOf(b);
+
 const stateFormatter = (cell) => {
   const v = cell.getValue();
   return `<span class="state-cell ${escapeHtml(v)}"><span class="state-dot ${escapeHtml(v)}"></span><span class="state-label">${escapeHtml(v)}</span></span>`;
@@ -387,8 +392,8 @@ const initNodesTable = () => {
         return String(rowData._ghost ? (rowData._lastNodeId ?? '') : rowData.id).includes(headerValue);
       } }),
       colDef('Name', 'name', { responsive: 0, sorter: 'string', minWidth: 120, widthGrow: 2, formatter: nameFormatter, headerFilterPlaceholder: 'name', cssClass: 'cell-scroll cell-name', cellDblClick: (_e, cell) => { startNameEdit(cell); } }),
-      colDef('State', 'state', { responsive: 0, sorter: 'string', minWidth: 90, widthGrow: 0.7, formatter: stateFormatter, headerFilterPlaceholder: 'state', cssClass: 'td-state' }),
-      colDef('Health', 'health', { responsive: 1, sorter: 'string', minWidth: 100, widthGrow: 0.8, formatter: healthFormatter, headerFilterPlaceholder: 'health', cssClass: 'cell-scroll' }),
+      colDef('State', 'state', { responsive: 0, sorter: severitySorter(STATE_ORDER), minWidth: 90, widthGrow: 0.7, formatter: stateFormatter, headerFilterPlaceholder: 'state', cssClass: 'td-state' }),
+      colDef('Health', 'health', { responsive: 1, sorter: severitySorter(HEALTH_ORDER), minWidth: 100, widthGrow: 0.8, formatter: healthFormatter, headerFilterPlaceholder: 'health', cssClass: 'cell-scroll' }),
       colDef('Mode', 'mode', { responsive: 5, sorter: 'string', minWidth: 110, widthGrow: 0.8, formatter: modeFormatter, headerFilterPlaceholder: 'mode', cssClass: 'cell-scroll' }),
       colDef('SW', 'sw', { responsive: 6, sorter: 'string', minWidth: 56, widthGrow: 0.4, headerFilterPlaceholder: 'sw', cssClass: 'cell-scroll', headerTooltip: 'Software version' }),
       colDef('Rate', 'rate', { responsive: 2, sorter: 'number', minWidth: 70, widthGrow: 0.7, formatter: rateFormatter, headerFilterPlaceholder: 'rate', cssClass: 'cell-scroll', headerFilterFunc: (headerValue, rowValue) => { if (!headerValue) return true; return Number(rowValue).toFixed(1).includes(headerValue); } }),

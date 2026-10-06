@@ -291,24 +291,7 @@ const GraphView = (() => {
     return [];
   };
 
-  // A rate arrives only with a message, so a publisher that stops keeps its
-  // last one. A message counts as current for three of its periods (two
-  // seconds at least); the period is the rate's, or the gap between messages
-  // when that is longer, as for subjects too slow to report a rate. Of the
-  // last two gaps the shorter counts: one stray message after a long pause
-  // does not make a stopped subject look slow and alive.
-  // A paused or finished replay keeps the picture it stopped at.
-  const FRESH_PERIODS = 3;
-  const FRESH_MIN_MS = 2000;
-
-  const _isFresh = (ev, now) => {
-    if (!ev) return false;
-    if (state.replayPaused || state.replayFinished) return true;
-    const gapMs = Math.min(ev._gapMs ?? Infinity, ev._prevGapMs ?? Infinity);
-    const periodMs = Math.max(ev.rate > 0 ? 1000 / ev.rate : 0, Number.isFinite(gapMs) ? gapMs : 0);
-    return now - (ev._rxMs || 0) <= Math.max(FRESH_MIN_MS, FRESH_PERIODS * periodMs);
-  };
-
+  // Whether a message is still current: isEventFresh (cache.js), shared with the tables.
   const _isOnline = (nodeId) => nodeId != null && !isNodeDisappeared(nodeId);
 
   // The message an edge's traffic is judged by, or null when an end of the
@@ -330,7 +313,7 @@ const GraphView = (() => {
     for (const sid of _linkSubjectIds(link)) {
       const ev = _edgeEvent(link, sid);
       if (!ev) continue;
-      if (!_isFresh(ev, now)) { traffic.silent = true; continue; }
+      if (!isEventFresh(ev, now)) { traffic.silent = true; continue; }
       traffic.live = true;
       traffic.rate += link.type === 'sub' ? getSubjectRate(ev) : (Number(ev.rate) || 0);
       traffic.payload += ev.payload_bytes || 0;
@@ -1662,7 +1645,7 @@ const GraphView = (() => {
   // A subject that has sent before and has now gone quiet.
   const _isSilentSubject = (sid) => {
     const ev = state.latestBySubject.get(sid);
-    return !!ev && !_isFresh(ev, Date.now());
+    return !!ev && !isEventFresh(ev, Date.now());
   };
 
   const _renderStatusStrip = () => {
@@ -1895,7 +1878,7 @@ const GraphView = (() => {
     const rows = ids.map((id) => {
       const [name, ev, rate, selects, edge] = describe(id);
       const rateHtml = !ev ? ''
-        : _isFresh(ev, Date.now()) ? `<span class="graph-info-rate">${Number(rate).toFixed(1)} Hz</span>`
+        : isEventFresh(ev, Date.now()) ? `<span class="graph-info-rate">${Number(rate).toFixed(1)} Hz</span>`
         : '<span class="graph-info-rate graph-info-status--warn">silent</span>';
       const cells = `<span class="graph-info-sid">${id}</span>`
         + `<span class="graph-info-mtype">${escapeHtml(name || '')}</span>${edge ? _sparkHtml(edge) : ''}${rateHtml}`;
@@ -1990,7 +1973,7 @@ const GraphView = (() => {
   const _subjectInfoHtml = (node) => {
     const ev = state.latestBySubject.get(node.subjectId);
     const rateHtml = !ev ? ''
-      : _isFresh(ev, Date.now()) ? `<span>${getSubjectRate(ev).toFixed(1)} msg/s</span>`
+      : isEventFresh(ev, Date.now()) ? `<span>${getSubjectRate(ev).toFixed(1)} msg/s</span>`
       : '<span class="graph-info-status graph-info-status--warn">silent</span>';
     let html = `<div class="graph-info-header">
       <span class="graph-info-type">Subject</span>

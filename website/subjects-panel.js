@@ -54,6 +54,7 @@ const kindFormatter = (cell) =>
   `<span class="kind-badge kind-${cell.getValue() === 'Service' ? 'service' : 'subject'}">${escapeHtml(cell.getValue())}</span>`;
 
 const subjectRateFormatter = (cell) => {
+  if (cell.getRow().getData()._silent) return '<span class="status-warn">silent</span>';
   const v = Number(cell.getValue());
   if (!(v > 0)) return '<span class="text-muted">-</span>';
   return v < 1 ? '&lt;1 Hz' : `${v.toFixed(1)} Hz`;
@@ -107,10 +108,12 @@ const buildSubjectsRows = () => {
   }
 
   const rows = [];
+  const now = Date.now();
 
   for (const [sid, info] of subjectMap) {
     if (state.hiddenSubjectIds.has(sid)) continue;
     const event = state.latestBySubject.get(sid);
+    const fresh = isEventFresh(event, now);
     rows.push({
       _rowId: `sub:${sid}`,
       id: sid,
@@ -120,7 +123,9 @@ const buildSubjectsRows = () => {
       _userType: subjectTypeSource(sid) === 'user',
       publishers: info.publishers.sort((a, b) => a - b).join(', ') || '-',
       subscribers: info.subscribers.sort((a, b) => a - b).join(', ') || '-',
-      rate: getSubjectRate(event),
+      // A row redraws a cell only when its value changes: none, not 0, once silent.
+      rate: fresh ? getSubjectRate(event) : null,
+      _silent: Boolean(event) && !fresh,  // it published, and has stopped
       lastTime: event?.timestamp_unix || null,
       _lastNode: event?.publisher_node_id ?? null,
       _fav: state.favouriteSubjectIds.has(sid),
@@ -298,7 +303,7 @@ const initSubjectsTable = () => {
       col('Message / Service Type', 'messageType', { minWidth: 160, widthGrow: 2.2, headerFilterPlaceholder: 'type', cssClass: 'cell-scroll', formatter: subjectTypeFormatter }),
       col('Publishers / Servers', 'publishers', { minWidth: 90, widthGrow: 1, headerFilterPlaceholder: 'pub/srv', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll', formatter: nodeIdsFormatter }),
       col('Subscribers / Clients', 'subscribers', { minWidth: 90, widthGrow: 1, headerFilterPlaceholder: 'sub/clt', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll', formatter: nodeIdsFormatter }),
-      col('Rate', 'rate', { sorter: 'number', minWidth: 70, widthGrow: 0.4, headerFilterPlaceholder: 'rate', formatter: subjectRateFormatter }),
+      col('Rate', 'rate', { sorter: 'number', minWidth: 90, widthGrow: 0.4, headerFilterPlaceholder: 'rate', formatter: subjectRateFormatter }),
       col('Last seen', 'lastTime', { sorter: 'number', minWidth: 90, widthGrow: 0.6, headerFilter: false, formatter: lastSeenFormatter, headerTooltip: 'Last message, or last call from this dashboard' }),
       { title: '', field: '_actions', formatter: subjectActionsFormatter, width: 56, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-actions', titleFormatter: () => { const btn = document.createElement('button'); btn.type = 'button'; btn.id = 'hiddenSubjectsChip'; btn.className = 'hidden-chip hidden'; btn.setAttribute('aria-label', 'Show hidden subjects'); btn.addEventListener('click', (e) => { e.stopPropagation(); toggleHiddenSubjectsPopover(); }); return btn; }, cellClick: (e, cell) => { e.stopPropagation(); hideSubject(cell.getRow().getData()); } },
     ],
@@ -752,6 +757,35 @@ const _restoreDetailPanelState = (viewKey) => {
   detailPanel.classList.remove('no-transition');
 };
 
+// A table hidden while scrolled down came back blank: Tabulator (6.4) redraws
+// it while hidden and loses its place. It is hidden at its top instead, and
+// goes back to where it was after the redraw that showing it brings.
+const TABLE_RESTORE_MS = 1000;
+const _tablePlaces = {};  // table element id -> {top, restore}
+
+const _tableHolder = (id) => el(id)?.querySelector('.tabulator-tableholder');
+
+const _parkTable = (tabulator, id) => {
+  const holder = tabulator && _tableHolder(id);
+  if (!holder) return;
+  const pending = _tablePlaces[id]?.restore ? _tablePlaces[id] : null;
+  if (pending) tabulator.off('renderComplete', pending.restore);  // left again before it got its place back
+  _tablePlaces[id] = { top: pending ? pending.top : holder.scrollTop };
+  holder.scrollTop = 0;
+};
+
+const _unparkTable = (tabulator, id) => {
+  const place = _tablePlaces[id];
+  if (!tabulator || !place?.top) return;
+  const shownAt = Date.now();
+  place.restore = () => {
+    tabulator.off('renderComplete', place.restore);
+    place.restore = null;
+    if (Date.now() - shownAt < TABLE_RESTORE_MS) _tableHolder(id).scrollTop = place.top;
+  };
+  tabulator.on('renderComplete', place.restore);
+};
+
 const switchView = (view) => {
   if (state.activeView === view) return;
   const prevView = state.activeView;
@@ -778,8 +812,10 @@ const switchView = (view) => {
       state._stashedServiceCard = card;
       card.remove();
     }
+    _parkTable(subjectsTabulator, 'subjectsTable');
   } else if (prevView === 'nodes') {
     state._nodesPlotSubject = state.selectedPlotSubject;
+    _parkTable(nodesTabulator, 'nodesTable');
   } else if (prevView === 'compare') {
     stopCompareAnim();
   } else if (prevView === 'graph') {
@@ -816,6 +852,7 @@ const switchView = (view) => {
     if (hasDetail) _restoreDetailPanelState('subjects');
     initSubjectsTable();
     refreshSubjectsTable();
+    _unparkTable(subjectsTabulator, 'subjectsTable');
     if (hasDetail) {
       el('selectedNodeContent').replaceChildren();  // the nodes view's content
       const slots = _detailSlots();
@@ -857,6 +894,7 @@ const switchView = (view) => {
     state.selectedPlotSubject = state._nodesPlotSubject ?? null;
     stopPlotAnim();
     nodesEl.classList.remove('hidden');
+    _unparkTable(nodesTabulator, 'nodesTable');
     detailHandle.classList.remove('hidden');
     detailPanel.classList.remove('hidden');
     const tabs = detailPanel.querySelector('.detail-tabs');

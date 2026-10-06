@@ -371,20 +371,24 @@ const getStatusClass = (attr, value) => {
   }
 };
 
+// Favourites first and ghost rows last, whichever way the column sorts; empty
+// values last too. Tabulator hands a descending sort its rows swapped, so a
+// pinned order is flipped back for it.
 const makeFavPinSorter = ({ ghostField } = {}) => (baseSorter) =>
   (a, b, aRow, bRow, column, dir, sorterParams) => {
+    const pin = (order) => (dir === 'asc' ? order : -order);
     if (ghostField) {
       const aGhost = aRow.getData()[ghostField] ? 1 : 0;
       const bGhost = bRow.getData()[ghostField] ? 1 : 0;
-      if (aGhost !== bGhost) return aGhost - bGhost;
+      if (aGhost !== bGhost) return pin(aGhost - bGhost);
     }
     const aFav = aRow.getData()._fav ? 1 : 0;
     const bFav = bRow.getData()._fav ? 1 : 0;
-    if (aFav !== bFav) return dir === 'asc' ? bFav - aFav : aFav - bFav;
+    if (aFav !== bFav) return pin(bFav - aFav);
     if (typeof baseSorter === 'function') return baseSorter(a, b, aRow, bRow, column, dir, sorterParams);
     if (a == null && b == null) return 0;
-    if (a == null) return 1;
-    if (b == null) return -1;
+    if (a == null) return pin(1);
+    if (b == null) return pin(-1);
     if (baseSorter === 'number') {
       const aNum = Number(a), bNum = Number(b);
       const aNaN = isNaN(aNum), bNaN = isNaN(bNum);

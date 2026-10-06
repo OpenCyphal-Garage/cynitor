@@ -710,6 +710,8 @@ const getAllNodes = async () => {
       state.selectedNodeId = null;
     }
     renderNodesTable();
+    // Here too, not only on messages: a bus gone quiet sends none.
+    refreshSubjectsTable();
     renderSelectedNodeContent();
   } catch (error) {
     state.latestNodesPayload = { node_count: 0, nodes: {} };

@@ -13,14 +13,19 @@ const renderMetric = (a, subjectId) => {
   return `<span class="metric" data-subject="${subjectId}" data-attr="${escapeHtml(a.attribute)}"><span class="metric-key">${escapeHtml(a.attribute)}</span><span class="${valCls}" title="${escapeHtml(rawStr)}"><span class="metric-val-text" style="min-width:${minW}ch">${escapeHtml(displayStr)}</span>${unitStr}</span></span>`;
 };
 
+// A card's rate, with a dot while messages flow; "silent" once they stopped.
+const cardRateHtml = (s) => {
+  if (s.silent) return '<span class="status-warn">silent</span>';
+  if (s.rate == null) return '';
+  const text = s.rate < 1 ? '<1 Hz' : `${Number(s.rate).toFixed(1)} Hz`;
+  return `${s.rate > 0 ? '<span class="live-dot"></span>' : ''}${escapeHtml(text)}`;
+};
+
 const renderSubjectTable = (title, subjects) => {
   if (!subjects.length) {
     return `<div class="subject-cards"><div class="detail-empty">No ${title.toLowerCase()} discovered.</div></div>`;
   }
   const cards = subjects.map((s) => {
-    const rateStr = s.rate != null ? (s.rate < 1 ? '<1 Hz' : `${Number(s.rate).toFixed(1)} Hz`) : '';
-    const liveDot = s.rate != null && s.rate > 0
-      ? '<span class="live-dot"></span>' : '';
     const metrics = s.attributes.length
       ? `<div class="card-metrics">${s.attributes.map((a) => renderMetric(a, s.subjectId)).join('')}</div>`
       : '<div class="card-metrics"><span class="metrics-empty">no message yet</span></div>';
@@ -30,7 +35,7 @@ const renderSubjectTable = (title, subjects) => {
         <span class="card-subject-id">${escapeHtml(String(s.subjectId))}</span>
         <span class="card-type" title="${escapeHtml(s.messageType || '')}">${escapeHtml(
           s.messageType || (s.untyped ? 'type unknown · set it in Subjects' : 'type not known yet'))}</span>
-        <span class="card-rate">${liveDot}${escapeHtml(rateStr)}</span>
+        <span class="card-rate">${cardRateHtml(s)}</span>
       </div>
       ${metrics}
     </div>`;
@@ -50,6 +55,13 @@ const updateSubjectTableInPlace = (container, subjects) => {
   }
 
   for (const s of subjects) {
+    // The rate too, not only the values: it changes, and stops.
+    const rateEl = wrap.querySelector(`.subject-card[data-subject="${s.subjectId}"] .card-rate`);
+    if (!rateEl) return false;
+    const freshRate = document.createElement('span');
+    freshRate.innerHTML = cardRateHtml(s);
+    patchChildren(rateEl, freshRate);
+
     for (const a of s.attributes) {
       const metric = wrap.querySelector(`.metric[data-subject="${s.subjectId}"][data-attr="${a.attribute}"]`);
       if (!metric) return false;
