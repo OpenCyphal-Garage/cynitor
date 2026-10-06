@@ -165,7 +165,7 @@ The compare view provides independent graphs for multi-series comparison.
 - **Zoom and pan** — mouse wheel to zoom, drag to pan the X axis. Click to pause/resume, double-click to reset zoom. A paused graph keeps the points it showed, in a replay too.
 - **Crosshair sync** — hovering over one graph shows synchronized crosshairs with live value readouts on all graphs
 - **Presets** — save/load named graph configurations, whole: series, derived series, thresholds, markers, drawings, time window and display settings (Clone copies the same). A graph saved without a name gets a free one ("Untitled 2"), so it does not replace another
-- **Export/Import** — full workspace export/import as JSON files
+- **Export/Import** — full workspace export/import as JSON files. Import reads and checks the whole file before it changes anything, skips what is not valid, and asks before it replaces the graphs here
 - **Per-graph controls** — time window, fill rate interpolation, stroke size, disconnected points, grid
 - **Says why a plot is empty** — not connected to the backend, CAN bus not connected, waiting for data, or no data in view; a live graph's time axis goes on when data stops
 

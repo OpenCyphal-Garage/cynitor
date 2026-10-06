@@ -181,24 +181,29 @@ const initCompareView = () => {
       if (!file) return;
       const reader = new FileReader();
       reader.onload = () => {
+        // The whole file is read and checked before anything changes.
+        let graphs, saved;
         try {
           const data = JSON.parse(reader.result);
-          if (!Array.isArray(data.graphs)) throw new Error('Invalid format');
-          stopCompareAnim();
-          state.compareGraphs.length = 0;
-          for (const g of data.graphs) state.compareGraphs.push(newCompareGraph(g));
-          if (Array.isArray(data.saved)) state.savedCompareConfigs = data.saved;
-          saveSettings();
-          cardsContainer.innerHTML = '';
-          for (const graph of state.compareGraphs) {
-            const card = _buildGraphCard(graph);
-            cardsContainer.appendChild(card);
-          }
-          startCompareAnim();
-          showToast('Session imported', 'info', 2000);
+          if (!Array.isArray(data?.graphs)) throw new Error('no graphs in this file');
+          graphs = data.graphs.map(sanitizeCompareGraph).filter(Boolean);
+          if (data.graphs.length && !graphs.length) throw new Error('no valid graph in this file');
+          saved = Array.isArray(data.saved) ? data.saved.map(sanitizeCompareGraph).filter(Boolean) : null;
         } catch (err) {
           showToast(`Import failed: ${err.message}`, 'error', 3000);
+          return;
         }
+        const replaces = state.compareGraphs.length || (saved && state.savedCompareConfigs.length);
+        if (replaces && !window.confirm(
+          `Import ${file.name}? It replaces the graphs here${saved ? ' and the saved graphs' : ''}.`)) return;
+        state.compareGraphs.length = 0;
+        for (const g of graphs) state.compareGraphs.push(newCompareGraph(g));
+        if (saved) state.savedCompareConfigs = saved;
+        saveSettings();
+        cardsContainer.innerHTML = '';
+        for (const graph of state.compareGraphs) cardsContainer.appendChild(_buildGraphCard(graph));
+        startCompareAnim();
+        showToast('Session imported', 'info', 2000);
       };
       reader.readAsText(file);
     });

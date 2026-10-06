@@ -1373,6 +1373,49 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+async def compare_import(page, text):
+    async with page.expect_file_chooser() as chooser:
+        await page.locator(".compare-add-btn", has_text="Import Workspace").click()
+    await (await chooser.value).set_files({"name": "workspace.json", "mimeType": "application/json",
+                                           "buffer": text.encode()})
+    await page.wait_for_timeout(300)
+
+
+@test("Compare: Import checks the file first, and asks before it replaces the graphs")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    asked = []
+    accept = {"answer": False}
+
+    async def on_dialog(dialog):
+        asked.append(dialog.message)
+        await (dialog.accept() if accept["answer"] else dialog.dismiss())
+
+    page.on("dialog", on_dialog)
+    shown = "() => [state.compareGraphs.length, document.querySelectorAll('.compare-graph-card').length]"
+    try:
+        await page.wait_for_timeout(300)
+        await compare_graph(page, (1100, "value"))
+        await compare_graph(page, (1700, "current"))
+        await compare_import(page, "not a workspace")
+        assert await page.evaluate(shown) == [2, 2], "A file that is not JSON changed the graphs"
+        await compare_import(page, '{"graphs": []}')
+        assert asked, "Import replaced the graphs without asking"
+        assert await page.evaluate(shown) == [2, 2], "Answered no, Import still replaced the graphs"
+        accept["answer"] = True
+        await compare_import(page, '{"graphs": [{"name": "imported", "series": [{"subjectId": 1100, "attribute": "value"}],'
+                                   ' "drawings": [{"color": "#f00"}]}, 5], "saved": [null, {"name": "kept", "series": []}]}')
+        assert await page.evaluate(shown) == [1, 1], f"Imported, the graphs and cards are {await page.evaluate(shown)}"
+        saved = await page.evaluate("state.savedCompareConfigs.map(c => c.name)")
+        assert saved == ["kept"], f"Saved graphs from the file: {saved}"
+        await page.locator(".compare-saved-btn").click()
+        assert await page.locator(".compare-saved-name", has_text="kept").is_visible(), "The saved graphs do not open"
+        await page.keyboard.press("Escape")
+    finally:
+        page.remove_listener("dialog", on_dialog)
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
