@@ -122,7 +122,13 @@ const _processSmooth = (cfg, keys) => {
   const now = Date.now();
   for (const key of keys) {
     const raw = plotData(key);
-    if (!raw || raw.length < 1) continue;
+    if (!raw?.length) {
+      // Its history was cleared (a disconnect): what Fill Rate made of it goes too.
+      cfg._smoothBufs.delete(key);
+      cfg._rawCursors.delete(key);
+      cfg._activeInterps.delete(key);
+      continue;
+    }
 
     if (!cfg._smoothBufs.has(key)) cfg._smoothBufs.set(key, []);
     const buf = cfg._smoothBufs.get(key);

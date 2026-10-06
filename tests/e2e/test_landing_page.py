@@ -1570,6 +1570,24 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: with Fill Rate on, a cleared history leaves no old line")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    drawn = "(c) => [...c.querySelectorAll('.compare-line')].filter(l => l.getAttribute('d')).length"
+    try:
+        await page.wait_for_timeout(300)
+        card = await compare_graph(page, (1100, "value"))
+        await card.locator('input[aria-label="Fill rate interpolation"]').check()
+        await page.wait_for_timeout(1500)
+        assert await card.evaluate(drawn) == 1, "With Fill Rate on, the series is not drawn"
+        # A disconnect clears the history, and nothing comes after it.
+        await page.evaluate("clearInterval(window.e2eCompareFeed); state.subjectHistory.clear()")
+        await page.wait_for_timeout(1500)
+        assert await card.evaluate(drawn) == 0, "The history cleared, Fill Rate still draws the old line"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
