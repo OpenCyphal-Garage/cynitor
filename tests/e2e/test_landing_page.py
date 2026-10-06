@@ -1660,6 +1660,47 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+# Counts the page's mousemove listeners and the graphs' crosshair-sync ones
+# that are added and not yet removed, from now on.
+COUNT_LISTENERS = """() => {
+    if (!window.e2eListeners) {
+        const counted = window.e2eListeners = {moves: new Set(), syncs: new Set()};
+        const proto = EventTarget.prototype, add = proto.addEventListener, remove = proto.removeEventListener;
+        const kept = (target, type) => (type === 'mousemove' && target === window ? counted.moves
+            : type === 'crosshair-sync' ? counted.syncs : null);
+        proto.addEventListener = function (type, fn, opts) { kept(this, type)?.add(fn); return add.call(this, type, fn, opts); };
+        proto.removeEventListener = function (type, fn, opts) { kept(this, type)?.delete(fn); return remove.call(this, type, fn, opts); };
+        window.e2eListenersOff = () => { proto.addEventListener = add; proto.removeEventListener = remove; delete window.e2eListeners; };
+    }
+    return [e2eListeners.moves.size, e2eListeners.syncs.size];
+}"""
+
+
+@test("Compare: graphs made, dragged and removed leave no listeners behind")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    try:
+        await page.wait_for_timeout(300)
+        before = await page.evaluate(COUNT_LISTENERS)
+        for _ in range(5):
+            card = await compare_graph(page, (1100, "value"))
+            await page.wait_for_timeout(200)
+            box = await card.locator(".plot-overlay").bounding_box()
+            await page.mouse.move(box["x"] + 200, box["y"] + 30)
+            await page.mouse.down()  # a drag pans the plot
+            await page.mouse.move(box["x"] + 260, box["y"] + 30)
+            await page.mouse.up()
+            await card.locator('[aria-label="Remove graph"]').click()
+        # A crosshair moving over the graphs lets removed ones' handlers go.
+        await page.evaluate("""document.querySelector('.compare-cards')
+            .dispatchEvent(new CustomEvent('crosshair-sync', {detail: {t: 0, source: null}}))""")
+        after = await page.evaluate(COUNT_LISTENERS)
+        assert after == before, f"Five graphs later, [page mousemove, crosshair-sync] listeners went {before} -> {after}"
+    finally:
+        await page.evaluate("window.e2eListenersOff?.()")
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

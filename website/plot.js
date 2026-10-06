@@ -1664,13 +1664,20 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
   if (syncContainer) {
     if (plotArea._crosshairSync) syncContainer.removeEventListener('crosshair-sync', plotArea._crosshairSync);
     if (plotArea._crosshairHide) syncContainer.removeEventListener('crosshair-hide', plotArea._crosshairHide);
+    // A removed graph's handlers go at the next event: nothing else removes them.
+    const removed = () => {
+      if (plotArea.isConnected) return false;
+      syncContainer.removeEventListener('crosshair-sync', plotArea._crosshairSync);
+      syncContainer.removeEventListener('crosshair-hide', plotArea._crosshairHide);
+      return true;
+    };
     plotArea._crosshairSync = (e) => {
-      if (e.detail.source === plotArea) return;
+      if (removed() || e.detail.source === plotArea) return;
       plotArea._syncedT = e.detail.t;
       showAtTimestamp(e.detail.t);
     };
     plotArea._crosshairHide = (e) => {
-      if (e.detail.source === plotArea) return;
+      if (removed() || e.detail.source === plotArea) return;
       plotArea._syncedT = null;
       hideCrosshair();
     };
@@ -1773,8 +1780,12 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
     let downShift = false;
     let drawingStroke = null;
 
+    // The page follows the pointer only while a button is down on the plot:
+    // listeners left on it would outlive the graph.
     svgEl.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
+      window.addEventListener('mousemove', onDragMove);
+      window.addEventListener('mouseup', onDragEnd);
       const [mx, my] = d3.pointer(e, overlay.node());
       if (e.altKey) {
         e.preventDefault();
@@ -1801,7 +1812,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
       downShift = e.shiftKey;
       downMx = mx;
     });
-    window.addEventListener('mousemove', (e) => {
+    const onDragMove = (e) => {
       if (drawingStroke) {
         const [mx, my] = d3.pointer(e, overlay.node());
         const ctx = plotArea._plotCtx || {};
@@ -1837,8 +1848,10 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
       cfg._panOffset = dragPanStart - dx / pxPerSec;
       cfg._fingerprint = '';
       if (plotArea._zoomRestart) plotArea._zoomRestart();
-    });
-    window.addEventListener('mouseup', (e) => {
+    };
+    const onDragEnd = () => {
+      window.removeEventListener('mousemove', onDragMove);
+      window.removeEventListener('mouseup', onDragEnd);
       if (drawingStroke) {
         g.select('.plot-drawing-temp').remove();
         if (drawingStroke.points.length >= 2) {
@@ -1908,7 +1921,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
           if (plotArea._zoomRestart) plotArea._zoomRestart();
         }, 250);
       }
-    });
+    };
 
     svgEl.addEventListener('dblclick', (e) => {
       e.preventDefault();
