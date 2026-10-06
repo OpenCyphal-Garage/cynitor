@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Demo Cyphal nodes for trying Cynitor without hardware.
 
-    python3 tools/demo_nodes.py [--iface vcan0] [--fd] [--conflict]
+    python3 tools/demo_nodes.py [--iface vcan0] [--fd] [--conflict] [--node-id 50]
 
 Run it next to Cynitor on the same virtual CAN interface (Linux):
 
@@ -28,7 +28,9 @@ Node 50, "demo.sensor":
 
 --conflict starts a second node on the same node-ID 50 after 10 s, which
 Cynitor should flag as a node-ID conflict. --fd runs Cyphal/CAN FD; the
-interface must be set up for it (e.g. a vcan with mtu 72).
+interface must be set up for it (e.g. a vcan with mtu 72). --node-id puts the
+node on another node-ID: a second demo on 51 publishes the same subjects, so
+each has two publishers, as redundant sensors do.
 """
 
 import argparse
@@ -52,7 +54,7 @@ import uavcan.primitive  # noqa: E402
 import uavcan.si.sample.temperature  # noqa: E402
 import uavcan.si.unit.velocity  # noqa: E402
 
-NODE_ID = 50
+DEFAULT_NODE_ID = 50
 TEMPERATURE_SUBJECT_ID = 1620
 UNNAMED_SUBJECT_ID = 1700
 STATUS_SUBJECT_ID = 1800
@@ -73,11 +75,11 @@ DIAGNOSTICS = [
 Command = uavcan.node.ExecuteCommand_1_3
 
 
-def make_node(name: str, iface: str, fd: bool, minor: int = 0) -> pycyphal.application.Node:
+def make_node(name: str, node_id: int, iface: str, fd: bool, minor: int = 0) -> pycyphal.application.Node:
     env = {
         "UAVCAN__CAN__IFACE": iface,
         "UAVCAN__CAN__MTU": "64" if fd else "8",
-        "UAVCAN__NODE__ID": str(NODE_ID),
+        "UAVCAN__NODE__ID": str(node_id),
         "UAVCAN__PUB__TEMPERATURE__ID": str(TEMPERATURE_SUBJECT_ID),
         "UAVCAN__PUB__STATUS__ID": str(STATUS_SUBJECT_ID),
     }
@@ -87,9 +89,9 @@ def make_node(name: str, iface: str, fd: bool, minor: int = 0) -> pycyphal.appli
     return node
 
 
-async def run_bootloader(iface: str, fd: bool, minor: int, server_node_id: int, path: str) -> bool:
+async def run_bootloader(node_id: int, iface: str, fd: bool, minor: int, server_node_id: int, path: str) -> bool:
     """Read the firmware file the way a bootloader does; whether it arrived whole."""
-    node = make_node("demo.sensor", iface, fd, minor)
+    node = make_node("demo.sensor", node_id, iface, fd, minor)
     node.heartbeat_publisher.mode = uavcan.node.Mode_1_0.SOFTWARE_UPDATE
     client = node.make_client(uavcan.file.Read_1_1, server_node_id)
     print(f"demo.sensor: bootloader reading {path} from node {server_node_id}", flush=True)
@@ -111,15 +113,15 @@ async def run_bootloader(iface: str, fd: bool, minor: int, server_node_id: int, 
         node.close()
 
 
-async def run_sensor(iface: str, fd: bool) -> None:
+async def run_sensor(node_id: int, iface: str, fd: bool) -> None:
     minor = 0
     update = None  # (server node-ID, file) once an update is asked for
     while True:  # one pass per (re)start
         if update is not None:
-            if await run_bootloader(iface, fd, minor, *update):
+            if await run_bootloader(node_id, iface, fd, minor, *update):
                 minor += 1
             update = None
-        node = make_node("demo.sensor", iface, fd, minor)
+        node = make_node("demo.sensor", node_id, iface, fd, minor)
         temperature = node.make_publisher(uavcan.si.sample.temperature.Scalar_1_0, "temperature")
         diagnostics = node.make_publisher(uavcan.diagnostic.Record_1_1)
         status = node.make_publisher(uavcan.primitive.String_1_0, "status")
@@ -141,7 +143,7 @@ async def run_sensor(iface: str, fd: bool) -> None:
             return Command.Response(status=Command.Response.STATUS_BAD_COMMAND)
 
         node.get_server(Command).serve_in_background(on_command)
-        print(f"demo.sensor: node-ID {NODE_ID} on {iface}{' (CAN FD)' if fd else ''}", flush=True)
+        print(f"demo.sensor: node-ID {node_id} on {iface}{' (CAN FD)' if fd else ''}", flush=True)
         tick = 0
         while not restart.is_set():
             kelvin = 293.15 + 5 * math.sin(time.monotonic() / 5)
@@ -165,10 +167,10 @@ async def run_sensor(iface: str, fd: bool) -> None:
         node.close()  # and straight back: well within Cynitor's 3 s offline threshold
 
 
-async def run_twin(iface: str, fd: bool, delay: float = 10.0) -> None:
+async def run_twin(node_id: int, iface: str, fd: bool, delay: float = 10.0) -> None:
     await asyncio.sleep(delay)  # a later start, so its uptime differs
-    make_node("demo.twin", iface, fd)
-    print(f"demo.twin: also on node-ID {NODE_ID}", flush=True)
+    make_node("demo.twin", node_id, iface, fd)
+    print(f"demo.twin: also on node-ID {node_id}", flush=True)
     await asyncio.Event().wait()
 
 
@@ -177,11 +179,13 @@ async def main() -> None:
     parser.add_argument("--iface", default="vcan0", help="SocketCAN name, or a pycyphal spec (default vcan0)")
     parser.add_argument("--fd", action="store_true", help="run Cyphal/CAN FD (MTU 64)")
     parser.add_argument("--conflict", action="store_true", help="add a second node on the same node-ID")
+    parser.add_argument("--node-id", type=int, default=DEFAULT_NODE_ID, choices=range(1, 126), metavar="1..125",
+                        help=f"the node-ID to run on (default {DEFAULT_NODE_ID})")
     args = parser.parse_args()
     iface = args.iface if ":" in args.iface else f"socketcan:{args.iface}"
-    tasks = [run_sensor(iface, args.fd)]
+    tasks = [run_sensor(args.node_id, iface, args.fd)]
     if args.conflict:
-        tasks.append(run_twin(iface, args.fd))
+        tasks.append(run_twin(args.node_id, iface, args.fd))
     await asyncio.gather(*tasks)
 
 

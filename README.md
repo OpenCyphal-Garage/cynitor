@@ -80,6 +80,10 @@ sudo ip link add dev vcan0 type vcan && sudo ip link set vcan0 up
 python3 tools/demo_nodes.py --iface vcan0     # add --fd on a CAN FD vcan (mtu 72)
 ```
 
+The demo must speak what Cynitor does: Cynitor runs CAN FD on a vcan whose
+MTU is 72 (`cat /sys/class/net/vcan0/mtu`), and there a demo without `--fd`
+receives none of its requests (no name, no services).
+
 Then connect Cynitor to `vcan0`. Node 50 (`demo.sensor`) publishes a
 temperature named in its registers (decoded and plotted), a velocity no
 register names (click subject 1700 in Subjects to have its type guessed),
@@ -88,6 +92,8 @@ and diagnostics every 3 s at every severity from DEBUG to CRITICAL (the log
 panel). Its Services tab restarts it, and
 **Update firmware…** makes it act like a bootloader reading the file from
 Cynitor. `--conflict` adds a second node on the same node-ID after 10 s.
+`--node-id 51` runs a second demo beside the first: each subject then has
+two publishers, which the plots and Compare show apart.
 
 ## Features
 
