@@ -771,7 +771,7 @@ const buildComparePanel = (graph, onUpdate) => {
   pubSel.className = 'plot-compare-publisher hidden';
   pubSel.setAttribute('aria-label', 'Publisher to compare');
   const fillPublishers = (sid) => {
-    const nids = sid ? _subjectPublishers(sid) : [];
+    const nids = sid != null ? _subjectPublishers(sid) : [];
     pubSel.innerHTML = nids.map((nid) =>
       `<option value="${nid}">${escapeHtml(`n${nid} ${nodeDisplayName(nid)}`.trim())}</option>`).join('');
     pubSel.classList.toggle('hidden', nids.length < 2);
@@ -786,14 +786,17 @@ const buildComparePanel = (graph, onUpdate) => {
 
   subjectSel.addEventListener('mousedown', () => _refreshCompareSubjects(panel));
 
+  // The subject picked, or null; 0 is a subject-ID like any other.
+  const pickedSubject = () => (subjectSel.value === '' ? null : Number(subjectSel.value));
+
   subjectSel.addEventListener('change', () => {
-    const sid = Number(subjectSel.value);
+    const sid = pickedSubject();
     attrSel.innerHTML = '';
     const def = document.createElement('option');
     def.value = '';
     def.textContent = 'Attribute…';
     attrSel.appendChild(def);
-    if (sid) {
+    if (sid != null) {
       const subjects = _getCompareSubjects();
       for (const a of subjects.get(sid) || []) {
         const opt = document.createElement('option');
@@ -810,8 +813,8 @@ const buildComparePanel = (graph, onUpdate) => {
   });
 
   attrSel.addEventListener('mousedown', () => {
-    const sid = Number(subjectSel.value);
-    if (!sid) return;
+    const sid = pickedSubject();
+    if (sid == null) return;
     const prev = attrSel.value;
     attrSel.innerHTML = '';
     const def = document.createElement('option');
@@ -833,9 +836,9 @@ const buildComparePanel = (graph, onUpdate) => {
   });
 
   addBtn.addEventListener('click', () => {
-    const sid = Number(subjectSel.value);
+    const sid = pickedSubject();
     const attr = attrSel.value;
-    if (!sid || !attr) return;
+    if (sid == null || !attr) return;
     const series = { subjectId: sid, attribute: attr };
     if (pubSel.value !== '') series.nodeId = Number(pubSel.value);
     if (graph.series.some((c) => compareSeriesKey(c) === compareSeriesKey(series))) return;

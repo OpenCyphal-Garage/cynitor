@@ -1525,6 +1525,26 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: subject 0 is compared like any other")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    try:
+        await page.evaluate("""() => { const now = Date.now() / 1000;
+            state.subjectHistory.set('0:value', Array.from({length: 20}, (_, i) => ({t: now - 2 + i / 10, v: 7, n: 10}))); }""")
+        card = await compare_graph(page)
+        subject = card.locator(".plot-compare-subject")
+        await subject.dispatch_event("mousedown")
+        await subject.select_option("0")
+        field = card.locator(".plot-compare-attr")
+        assert not await field.is_disabled(), "Subject 0 picked, its fields stay disabled"
+        await field.select_option("value")
+        await card.locator(".plot-compare-picker .plot-compare-add").first.click()
+        legend = await card.evaluate(COMPARE_LEGEND)
+        assert legend == ["S0 · value · n10"], f"The legend reads {legend}"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
