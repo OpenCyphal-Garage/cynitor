@@ -69,13 +69,8 @@ const initCompareView = () => {
   pauseAllBtn.className = 'compare-add-btn compare-pause-all';
   pauseAllBtn.type = 'button';
   pauseAllBtn.setAttribute('aria-label', 'Pause/resume all graphs');
-  const _updatePauseAllLabel = () => {
-    const allPaused = state.compareGraphs.length > 0 && state.compareGraphs.every(g => g.paused);
-    pauseAllBtn.textContent = allPaused ? 'Resume All' : 'Pause All';
-  };
-  _updatePauseAllLabel();
   pauseAllBtn.addEventListener('click', () => {
-    const allPaused = state.compareGraphs.length > 0 && state.compareGraphs.every(g => g.paused);
+    const allPaused = _allComparePaused();
     const now = Date.now() / 1000;
     for (const graph of state.compareGraphs) {
       graph.paused = !allPaused;
@@ -86,9 +81,7 @@ const initCompareView = () => {
       }
     }
     saveSettings();
-    if (allPaused) startCompareAnim();
-    else stopCompareAnim();
-    _updatePauseAllLabel();
+    _syncPauseAll();
     for (const graph of state.compareGraphs) {
       const card = cardsContainer.querySelector(`[data-graph-id="${graph.id}"]`);
       if (!card) continue;
@@ -97,10 +90,7 @@ const initCompareView = () => {
         btn.textContent = graph.paused ? '▶' : '⏸';
         btn.classList.toggle('active', graph.paused);
       }
-      if (!graph.paused) {
-        const plotArea = card.querySelector('.detail-plot-area');
-        _renderOneGraph(graph);
-      }
+      if (!graph.paused) _renderOneGraph(graph);
     }
   });
   toolbar.appendChild(pauseAllBtn);
@@ -527,11 +517,24 @@ const _renderOneGraph = (graph) => {
   if (plotArea) _renderCompareGraphNow(graph, plotArea);
 };
 
+const _allComparePaused = () => state.compareGraphs.length > 0 && state.compareGraphs.every((g) => g.paused);
+
+// Pause All says what a click on it does, however the graphs got paused: by
+// it, by their own buttons, by a click on their plots.
+const _syncPauseAll = () => {
+  const btn = document.querySelector('.compare-pause-all');
+  const label = _allComparePaused() ? 'Resume All' : 'Pause All';
+  if (btn && btn.textContent !== label) btn.textContent = label;
+};
+
+// Runs while the tab is open, paused graphs or not: a graph resumed on its
+// own moves on at the next tick.
 const _compareAnimTick = () => {
   if (state.activeView !== 'compare') { _compareAnimTimer = null; return; }
   for (const graph of state.compareGraphs) {
     if (!graph.paused) _renderOneGraph(graph);
   }
+  _syncPauseAll();
   _compareAnimTimer = window.setTimeout(_compareAnimTick, PLOT_TICK_MS);
 };
 
@@ -539,6 +542,7 @@ const startCompareAnim = () => {
   for (const graph of state.compareGraphs) {
     if (graph.paused) _renderOneGraph(graph);
   }
+  _syncPauseAll();
   if (!_compareAnimTimer) {
     _compareAnimTimer = window.setTimeout(_compareAnimTick, PLOT_TICK_MS);
   }

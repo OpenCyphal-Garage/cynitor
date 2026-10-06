@@ -1174,6 +1174,38 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+# How far behind now a graph's plot is: a live 1m plot ends 12 s (20% of its
+# window) after now.
+COMPARE_LAG = "(c) => Date.now() / 1000 + 12 - c.querySelector('.detail-plot-area')._plotCtx.xScale.domain()[1]"
+
+
+@test("Compare: a graph resumed after Pause All moves on, and Pause All says what it does")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    try:
+        await page.wait_for_timeout(300)
+        first = await compare_graph(page, (1100, "value"))
+        await compare_graph(page, (1100, "value"))
+        pause_all = page.locator(".compare-pause-all")
+        await pause_all.click()
+        await first.locator(".plot-pause-btn").click()  # the first one alone goes on
+        await page.wait_for_timeout(2500)  # past the 2 s glide back to live
+        lag = await first.evaluate(COMPARE_LAG)
+        assert lag < 0.5, f"The resumed graph is {lag:.1f} s behind"
+        label = await pause_all.inner_text()
+        assert label == "Pause All", f"With one graph going on, the toolbar says {label!r}"
+        # Paused by a click on its plot, the first is paused again: all are.
+        await first.locator(".detail-plot-area svg").click(position={"x": 300, "y": 40})
+        await page.wait_for_timeout(400)
+        label = await pause_all.inner_text()
+        assert label == "Resume All", f"With every graph paused, the toolbar says {label!r}"
+        await pause_all.click()
+        paused = await page.evaluate("state.compareGraphs.map(g => g.paused)")
+        assert paused == [False, False], f"Resume All left these paused: {paused}"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
