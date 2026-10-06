@@ -163,7 +163,7 @@ The compare view provides independent graphs for multi-series comparison.
 - **Timeline markers** — Shift+click to place a named marker with optional note, color, and line style. Click on an existing marker to edit. Markers persist and export with the graph config.
 - **Freehand drawing** — Alt+drag to draw annotations directly on the plot. Controls for color, line style, and size are in the toolbar. Alt+double-click to clear all drawings.
 - **Zoom and pan** — Ctrl+wheel (or a trackpad pinch) to zoom, drag to pan the X axis; the wheel alone scrolls the page. Click to pause/resume, double-click to reset zoom. A paused graph keeps the points it showed, in a replay too.
-- **Crosshair sync** — hovering over one graph shows synchronized crosshairs with live value readouts on all graphs
+- **Crosshair sync** — hovering over one graph shows synchronized crosshairs with live value readouts on all graphs. Values keep six significant digits; a series with no sample near the cursor (in a gap, or gone quiet) reads –
 - **Presets** — save/load named graph configurations, whole: series, derived series, thresholds, markers, drawings, time window and display settings (Clone copies the same). A graph saved without a name gets a free one ("Untitled 2"), so it does not replace another
 - **Export/Import** — full workspace export/import as JSON files. Import reads and checks the whole file before it changes anything, skips what is not valid, and asks before it replaces the graphs here
 - **Per-graph controls** — time window, fill rate interpolation, stroke size, disconnected points, grid

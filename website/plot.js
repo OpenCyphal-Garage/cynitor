@@ -1579,6 +1579,11 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
   label.text('Compare').attr('fill', 'var(--muted)');
 };
 
+// A value as a tooltip reads it: a whole number as it is, others to six
+// significant digits, so a small one keeps its digits (0.00095, not 0.00).
+const formatPlotValue = (v) => (typeof v === 'number' && !Number.isInteger(v)
+  ? String(Number(v.toPrecision(6))) : String(v));
+
 const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = null, restart = null) => {
   plotArea._plotCtx = { visible, xScale, w };
   if (restart) plotArea._zoomRestart = restart;
@@ -1589,6 +1594,17 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
   const card = plotArea.closest('.compare-graph-card');
   const syncContainer = card ? card.closest('.compare-cards') : null;
 
+  // A series' sample at time t: the nearest one where its line is drawn, or
+  // near either end of it; none in a gap, as once it stopped (shown "–").
+  const sampleAt = (data, t) => {
+    const i = bisect(data, t);
+    const a = data[i - 1];
+    const b = data[i];
+    const nearest = !b ? a : !a ? b : (Math.abs(a.t - t) < Math.abs(b.t - t) ? a : b);
+    if (a && b && !b._gap) return nearest;
+    return nearest && Math.abs(nearest.t - t) <= PLOT_GAP_THRESHOLD ? nearest : null;
+  };
+
   const showCrosshairAt = (mx) => {
     if (mx < 0 || mx > w || !visible.length) {
       crosshair.attr('opacity', 0);
@@ -1596,25 +1612,19 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
       return;
     }
     const t0 = xScale.invert(mx);
-    const samples = visible.map((s) => {
-      const i = bisect(s.data, t0);
-      const a = s.data[i - 1];
-      const b = s.data[i];
-      const sample = !b ? a : !a ? b : (Math.abs(a.t - t0) < Math.abs(b.t - t0) ? a : b);
-      return { name: s.name, sample };
-    }).filter((x) => x.sample);
-    if (!samples.length) {
+    const samples = visible.map((s) => ({ name: s.name, sample: sampleAt(s.data, t0) }));
+    const first = samples.find((x) => x.sample);
+    if (!first) {
       crosshair.attr('opacity', 0);
       tooltipEl.style.display = 'none';
       return;
     }
     crosshair.attr('opacity', 1).attr('x1', mx).attr('x2', mx);
-    const formattedT = formatPlotTime(samples[0].sample.t);
+    const formattedT = formatPlotTime(first.sample.t);
     const rows = samples.map((s) => {
       const idx = visible.findIndex((v) => v.name === s.name);
       const color = visible[idx]?.color || PLOT_COLORS[idx % PLOT_COLORS.length];
-      const v = typeof s.sample.v === 'number' && !Number.isInteger(s.sample.v)
-        ? s.sample.v.toFixed(2) : String(s.sample.v);
+      const v = s.sample ? formatPlotValue(s.sample.v) : '–';
       return `<div class="plot-tooltip-row"><span class="plot-tooltip-swatch" style="background:${_safeColor(color)}"></span><span class="plot-tooltip-name">${escapeHtml(s.name)}</span><span class="plot-tooltip-val">${escapeHtml(v)}</span></div>`;
     }).join('');
     tooltipEl.innerHTML = `<div class="plot-tooltip-time">${formattedT}</div>${rows}`;

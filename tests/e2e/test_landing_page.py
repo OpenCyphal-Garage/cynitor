@@ -1500,6 +1500,31 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: the tooltip keeps a value's digits, and has none for a series gone quiet")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    try:
+        await page.wait_for_timeout(300)
+        card = await compare_graph(page, (1700, "current"), (1400, "value"))
+        # 1400 went quiet 10 s ago.
+        await page.evaluate("""() => { e2eCompare.mute1400 = true;
+            for (const p of state.subjectHistory.get('1400:value')) p.t -= 10; }""")
+        await page.wait_for_timeout(300)
+        x = await card.evaluate("(c) => c.querySelector('.detail-plot-area')._plotCtx.xScale(Date.now() / 1000 - 0.3)")
+        box = await card.locator(".plot-overlay").bounding_box()
+        await page.mouse.move(box["x"] + x, box["y"] + 20)
+        await page.wait_for_timeout(200)
+        values = dict(await card.evaluate("""(c) => [...c.querySelectorAll('.plot-tooltip-row')]
+            .map(r => [r.querySelector('.plot-tooltip-name').textContent, r.querySelector('.plot-tooltip-val').textContent])"""))
+        current = values.get("S1700 · current · n10")
+        assert current and 0.0008 < float(current) < 0.0011, f"A current of about 1 mA reads {current!r}"
+        quiet = values.get("S1400 · value · n10")
+        assert quiet == "–", f"Quiet for 10 s, S1400 reads {quiet!r} now"
+    finally:
+        await page.mouse.move(0, 0)
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
