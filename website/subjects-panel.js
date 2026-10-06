@@ -140,7 +140,7 @@ const buildSubjectsRows = () => {
       _rowId: `svc:${sid}`,
       id: sid,
       kind: 'Service',
-      messageType: lookedUp !== '-' ? lookedUp : STANDARD_SERVICE_TYPES[sid] || '-',
+      messageType: lookedUp !== '-' ? dsdlTypeName(lookedUp) : STANDARD_SERVICE_TYPES[sid] || '-',
       publishers: info.servers.sort((a, b) => a - b).join(', ') || '-',
       subscribers: info.clients.sort((a, b) => a - b).join(', ') || '-',
       rate: null,  // a service has calls, not a message rate

@@ -156,7 +156,10 @@ const PLOT_TICK_MS = 100;
 
 const el = (id) => document.getElementById(id);
 
+// A unique-ID as hex: from its bytes, or as it is when already hex (an offline
+// node that lost its node-ID is known by its unique_id_hex).
 const uniqueIdKey = (uid) => {
+  if (typeof uid === 'string') return uid || null;
   if (!Array.isArray(uid) || !uid.length) return null;
   return uid.map((b) => b.toString(16).padStart(2, '0')).join('');
 };

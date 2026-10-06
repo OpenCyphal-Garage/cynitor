@@ -829,6 +829,50 @@ async def _(page):
     assert grey != "rgb(102, 102, 102)", "The table under the rows is the theme's grey"
 
 
+@test("Tables: a node that lost its node-ID keeps its alias, and is forgotten only when confirmed")
+async def _(page):
+    ghost = "uid:" + "aa" * 16
+    forgotten = []
+
+    async def identity(route):
+        forgotten.append(route.request.method)
+        await route.fulfill(json={"status": "ok"}, headers={"Access-Control-Allow-Origin": "*"})
+
+    await page.route("**/api/identity/*", identity)
+    try:
+        await page.locator(f"#nodesTable .tabulator-row", has_text="old_sensor").locator(
+            '.tabulator-cell[tabulator-field="name"]').dblclick()
+        await page.locator(".name-input").fill("bench sensor")
+        await page.keyboard.press("Enter")
+        await page.wait_for_function(f"""nodesTabulator.getRow('{ghost}').getCell('name').getElement()
+            .querySelector('.name-display')?.textContent === 'bench sensor'""", timeout=3000)
+        delete = page.locator("#nodesTable .tabulator-row", has_text="bench sensor").locator(".ghost-delete-btn")
+        page.once("dialog", lambda dialog: asyncio.ensure_future(dialog.dismiss()))
+        await delete.click()
+        await page.wait_for_timeout(300)
+        assert forgotten == [], f"Forgotten without asking: {forgotten}"
+        page.once("dialog", lambda dialog: asyncio.ensure_future(dialog.accept()))
+        await delete.click()
+        await page.wait_for_timeout(300)
+        assert forgotten == ["DELETE"], f"Not forgotten once confirmed: {forgotten}"
+    finally:
+        await page.unroute("**/api/identity/*", identity)
+        await page.evaluate(f"setNodeAlias('{'aa' * 16}', ''); clearSelectedNode()")
+
+
+@test("Tables: the Clients tab says the bus is not connected")
+async def _(page):
+    await page.evaluate("setSelectedNode(20); state.canConnected = false")
+    await page.locator('.detail-tab[data-tab="clients"]').click()
+    try:
+        text = await page.locator("#selectedNodeContent").inner_text()
+        assert "CAN bus not connected" in text, f"Clients tab, CAN down: {text!r}"
+    finally:
+        await page.evaluate("state.canConnected = true")
+        await page.locator('.detail-tab[data-tab="publishers"]').click()
+        await page.evaluate("clearSelectedNode()")
+
+
 PLOT_PANELS = "[...document.querySelectorAll('.detail-plot-area .panel-label')].map(e => e.textContent)"
 
 
@@ -858,6 +902,9 @@ async def _(page):
         await page.wait_for_function(f"{PLOT_PANELS}.join() === 'value · n20,value · n21'", timeout=3000)
     finally:
         await row.click()  # closes the plot
+    # Types read one way, though the backend gives a class name (Heartbeat_1_0).
+    shown = await page.evaluate(_cell('subjectsTabulator', 'sub:7509', 'messageType'))
+    assert shown == "uavcan.node.Heartbeat.1.0", f"Heartbeat's type reads {shown!r}"
 
 
 @test("Tables: Subjects says silent, and refreshes with nothing arriving")

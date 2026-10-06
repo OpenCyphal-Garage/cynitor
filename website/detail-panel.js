@@ -96,7 +96,7 @@ const updateSubjectTableInPlace = (container, subjects) => {
 const renderClientCards = (clients, enrichedMap) => {
   const cards = clients.map((clientId) => {
     const info = enrichedMap.get(clientId);
-    const typeName = info?.full_type || '';
+    const typeName = dsdlTypeName(info?.full_type) || '';
     const serverNodes = info?.server_nodes || [];
     const serverHtml = serverNodes.length
       ? `<span class="svc-client-servers" title="Nodes serving this service">→ node ${serverNodes.join(', ')}</span>`
@@ -116,8 +116,9 @@ const renderClientsTab = async () => {
   const content = el('selectedNodeContent');
   const nodeId = state.selectedNodeId;
 
-  if (!state.dashboardConnected || state.canState !== CONN.CONNECTED) {
-    content.innerHTML = svcStateMsg('○', 'No clients advertised', 'Connect to the CAN bus to see client info.');
+  const placeholder = connectionPlaceholder('see client info');
+  if (placeholder) {
+    content.innerHTML = placeholder;
     return;
   }
   if (nodeId == null) {

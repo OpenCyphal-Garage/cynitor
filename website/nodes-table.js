@@ -3,12 +3,15 @@
 // stored on the global `nodesTabulator` (declared in state.js) so other
 // files can read column widths/header filters when persisting settings.
 
-const deleteGhostNode = async (uniqueIdHex) => {
+// Forgets, for good, an offline node that lost its node-ID: asks first.
+const deleteGhostNode = async (row) => {
+  const label = `${row.name || 'this node'} (last node-ID ${row._lastNodeId ?? '-'})`;
+  if (!window.confirm(`Forget ${label}? Cynitor drops what it remembers of this device.`)) return;
   try {
-    await requestJson(`/api/identity/${uniqueIdHex}`, { method: 'DELETE' });
-    if (state.selectedNodeId === `uid:${uniqueIdHex}`) clearSelectedNode();
+    await requestJson(`/api/identity/${row._uid}`, { method: 'DELETE' });
+    if (state.selectedNodeId === `uid:${row._uid}`) clearSelectedNode();
   } catch (e) {
-    console.error('Failed to delete ghost node:', e);
+    showToast(`Could not forget ${label}: ${e.message}`, 'error');
   }
 };
 
@@ -324,7 +327,7 @@ const buildTableData = () => {
     if (state.hiddenNodeIds.has(nodeStableKey(node))) continue;
     const isGhost = node._ghost === true;
     const nodeState = getNodeVisualState(node);
-    const alias = getNodeAlias(isGhost ? null : node.unique_id);
+    const alias = getNodeAlias(isGhost ? node.unique_id_hex : node.unique_id);
     const offline = isGhost || node.has_disappeared;
     const lastSeen = offline ? formatLastSeen(node.last_seen) : '-';
     rows.push({
@@ -405,7 +408,7 @@ const initNodesTable = () => {
         e.stopPropagation();
         const row = cell.getRow().getData();
         if (e.target.closest('.ghost-delete-btn')) {
-          if (row._uid) deleteGhostNode(row._uid);
+          if (row._uid) deleteGhostNode(row);
           return;
         }
         hideNode(row.id);

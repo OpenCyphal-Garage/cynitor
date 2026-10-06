@@ -207,16 +207,20 @@ const isUntypedSubject = (subjectId) => {
     && !state.latestBySubject.get(subjectId)?.message_type;
 };
 
+// A DSDL type named one way everywhere, "uavcan.node.Heartbeat.1.0", where the
+// backend may give its Python class's way ("Heartbeat_1_0").
+const dsdlTypeName = (name) => (name ? String(name).replace(/_(\d+)_(\d+)$/, '.$1.$2') : name);
+
 // A subject's full type name: the one it is decoded as, else the class of
 // its last message, else the standard type on its fixed port-ID.
 const subjectTypeName = (sid, event) => {
   if (isUntypedSubject(sid)) return 'type unknown';
   const decodedAs = state.latestNodesPayload?.subject_types?.[sid]?.type;
-  if (decodedAs) return decodedAs;
+  if (decodedAs) return dsdlTypeName(decodedAs);
   const standard = STANDARD_SUBJECT_TYPES[sid];
   const cls = event?.message_type;  // e.g. "Heartbeat_1_0": the class, versioned
-  if (standard && cls) return `${standard.slice(0, standard.lastIndexOf('.') + 1)}${cls}`;
-  return cls || standard || '-';
+  if (standard && cls) return dsdlTypeName(`${standard.slice(0, standard.lastIndexOf('.') + 1)}${cls}`);
+  return dsdlTypeName(cls) || standard || '-';
 };
 
 const buildSubjectDetailData = (subjectIds, nodeId) => {
