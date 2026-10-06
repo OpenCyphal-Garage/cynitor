@@ -1820,6 +1820,43 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+# A graph's legend rows: series -> [label, last, min, max].
+COMPARE_LEGEND_ROWS = """(c) => Object.fromEntries([...c.querySelectorAll('.plot-legend-item')].map(r =>
+    [r.dataset.series, [r.querySelector('.plot-legend-label').textContent,
+     ...[...r.querySelectorAll('.plot-legend-value')].map(v => v.textContent)]]))"""
+
+
+@test("Compare: the legend lists each series' last, lowest and highest value in view, lined up")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    try:
+        # 1500 read 1 to 10 over the last 10 s, and 99 an hour ago; 1600's value is in volts.
+        await page.evaluate("""() => { const now = Date.now() / 1000;
+            state.subjectHistory.set('1500:value', [{t: now - 3600, v: 99, n: 10},
+                ...Array.from({length: 10}, (_, i) => ({t: now - 10 + i, v: i + 1, n: 10}))]);
+            for (const t of [now - 1, now]) cacheEvent({subject_id: 1600, publisher_node_id: 10, message_type: 'Scalar_1_0',
+                rate: 1, subject_rate: 1, payload_bytes: 4, attributes: [{attribute: 'value', value: 12, unit: 'volt'}],
+                timestamp_unix: t}); }""")
+        await page.wait_for_timeout(300)  # 1400 heard
+        card = await compare_graph(page, (1500, "value"), (1400, "value"), (1600, "value"))
+        await card.locator('.plot-window-btn[data-secs="30"]').click()
+        await page.wait_for_timeout(400)
+        rows = await card.evaluate(COMPARE_LEGEND_ROWS)
+        assert rows.get("S1500 · value · n10", [])[1:] == ["10", "1", "10"], f"S1500 in view: {rows.get('S1500 · value · n10')}"
+        assert rows.get("S1400 · value · n10", [])[1:] == ["10", "10", "10"], f"S1400 in view: {rows.get('S1400 · value · n10')}"
+        assert "volt" in rows.get("S1600 · value · n10", [""])[0], f"S1600's row names no unit: {rows.get('S1600 · value · n10')}"
+        lefts = await card.evaluate("""(c) => [...c.querySelectorAll('.plot-legend-item')]
+            .map(r => Math.round(r.querySelector('.plot-legend-value').getBoundingClientRect().left))""")
+        assert len(set(lefts)) == 1, f"The values do not line up: their columns start at {lefts}"
+        # 1400 goes quiet, its history cleared: its row stays, with no values.
+        await page.evaluate("e2eCompare.mute1400 = true; state.subjectHistory.delete('1400:value')")
+        await page.wait_for_timeout(1300)
+        quiet = (await card.evaluate(COMPARE_LEGEND_ROWS)).get("S1400 · value · n10", [])[1:]
+        assert quiet == ["–", "–", "–"], f"Gone quiet, S1400 reads {quiet}"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

@@ -1983,14 +1983,24 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
   }
 };
 
+// The values a Compare legend row gives, and how a cell reads one: blank for a
+// threshold, – for a series with nothing in view (see _statsInView).
+const LEGEND_STATS = ['last', 'min', 'max'];
+const _legendValue = (s, stat) => (s._stats === undefined ? '' : s._stats ? formatPlotValue(s._stats[stat]) : '–');
+
 const updatePlotLegend = (plotArea, allSeries, hidden) => {
   const legend = plotArea.querySelector('.plot-legend');
   if (!legend) return;
   const isCompare = !!plotArea.closest('.compare-graph-card');
-  const seriesKey = allSeries.map((s) => `${s.name}:${s.color || ''}:${s._lineStyle || ''}:${s._derivedId || ''}:${s._thresholdIdx ?? ''}:${s._silent ? 's' : ''}`).join('|');
+  // Compare's legend is a table: a row a series, its last, lowest and highest
+  // value in view in columns that line up across the rows.
+  legend.classList.toggle('plot-legend--table', isCompare);
+  const seriesKey = allSeries.map((s) => `${s.name}:${s.color || ''}:${s._lineStyle || ''}:${s._derivedId || ''}:${s._thresholdIdx ?? ''}:${s._silent ? 's' : ''}:${s._unit || ''}`).join('|');
   if (legend.dataset.seriesKey !== seriesKey) {
     legend.dataset.seriesKey = seriesKey;
-    legend.innerHTML = allSeries.map((s, i) => {
+    const head = isCompare ? '<div class="plot-legend-head" aria-hidden="true"><span class="plot-legend-head-name">in view</span>'
+      + `${LEGEND_STATS.map((stat) => `<span class="plot-legend-value">${stat}</span>`).join('')}<span class="plot-legend-head-end"></span></div>` : '';
+    legend.innerHTML = head + allSeries.map((s, i) => {
       const isActive = !hidden.has(s.name);
       const color = s.color || PLOT_COLORS[i % PLOT_COLORS.length];
       const derivedAttr = s._derivedId ? ` data-derived-id="${escapeHtml(s._derivedId)}"` : '';
@@ -2007,13 +2017,26 @@ const updatePlotLegend = (plotArea, allSeries, hidden) => {
       const cls = (s._derived ? ' plot-legend-derived' : s._threshold ? ' plot-legend-threshold' : '')
         + (s._silent ? ' plot-legend-silent' : '');
       const silentAttr = s._silent ? ' title="Nothing to plot: no data from it yet, or none kept"' : '';
-      return `<div class="plot-legend-item${isActive ? ' active' : ''}${cls}" data-series="${name}"${derivedAttr}${threshAttr}${silentAttr}><span class="plot-legend-swatch" style="background:${_safeColor(color)}" data-hex="${escapeHtml(color)}"></span>${styleHtml}<button type="button" class="plot-legend-label" aria-pressed="${isActive}">${name}</button>${removeHtml}</div>`;
+      const unitHtml = s._unit ? `<span class="plot-legend-unit">${escapeHtml(s._unit)}</span>` : '';
+      const valuesHtml = isCompare ? LEGEND_STATS.map((stat) =>
+        `<span class="plot-legend-value" data-stat="${stat}">${escapeHtml(_legendValue(s, stat))}</span>`).join('') : '';
+      return `<div class="plot-legend-item${isActive ? ' active' : ''}${cls}" data-series="${name}"${derivedAttr}${threshAttr}${silentAttr}><span class="plot-legend-swatch" style="background:${_safeColor(color)}" data-hex="${escapeHtml(color)}"></span>${styleHtml}<button type="button" class="plot-legend-label" aria-pressed="${isActive}">${name}${unitHtml}</button>${valuesHtml}${removeHtml}</div>`;
     }).join('');
   } else {
     for (const item of legend.querySelectorAll('.plot-legend-item[data-series]')) {
       const isActive = !hidden.has(item.dataset.series);
       item.classList.toggle('active', isActive);
       item.querySelector('.plot-legend-label')?.setAttribute('aria-pressed', String(isActive));
+    }
+  }
+  if (!isCompare) return;
+  // The values change with every draw: written into their cells, the rows stay.
+  const byName = new Map(allSeries.map((s) => [s.name, s]));
+  for (const item of legend.querySelectorAll('.plot-legend-item[data-series]')) {
+    const s = byName.get(item.dataset.series);
+    for (const cell of item.querySelectorAll('.plot-legend-value')) {
+      const text = s ? _legendValue(s, cell.dataset.stat) : '';
+      if (cell.textContent !== text) cell.textContent = text;
     }
   }
 };

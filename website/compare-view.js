@@ -444,6 +444,31 @@ const _graphPoints = (graph, key, raw = false) => {
   return graph._frozen.get(id);
 };
 
+// A series' last, lowest and highest value in view, or null when none is.
+const _statsInView = (data, tLeft, tRight) => {
+  let last = null;
+  let min = Infinity;
+  let max = -Infinity;
+  for (let i = data.length - 1; i >= 0 && data[i].t >= tLeft; i--) {
+    const { t, v } = data[i];
+    if (t > tRight) continue;
+    if (last === null) last = v;
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  return last === null ? null : { last, min, max };
+};
+
+// A series' unit, as the latest message on its subject names it ("volt" for
+// an SI wrapper's field), or ''.
+const _seriesUnit = (cmp) => {
+  const event = cmp.nodeId != null
+    ? state.latestByNode.get(cmp.nodeId)?.get(cmp.subjectId)
+    : state.latestBySubject.get(cmp.subjectId);
+  const field = cmp.attribute.replace(/\[\d+\]$/, '');
+  return event?.attributes?.find((a) => a.attribute === field)?.unit || '';
+};
+
 // Said over a graph that shows nothing, or why it stopped: nothing can
 // arrive (a replay aside), nothing came yet, or none of it is in view.
 const _compareNote = (problem, compareSeries, xScale) => {
@@ -485,6 +510,7 @@ const _renderCompareGraphNow = (graph, plotArea) => {
       name: compareSeriesName(cmp),
       color: cmp.color || PLOT_COLORS[i % PLOT_COLORS.length],
       _lineStyle: cmp.lineStyle || 'solid',
+      _unit: _seriesUnit(cmp),
     }, buf);
   }
 
@@ -572,6 +598,10 @@ const _renderCompareGraphNow = (graph, plotArea) => {
 
   bindPlotTooltip(g, plotArea, visibleSeries, xScale, w, HEADER_H, rect, graph, () => _renderOneGraph(graph));
   setPlotNote(plotArea, _compareNote(problem, compareSeries, xScale));
+  // The legend's values: each series' last, lowest and highest in view.
+  const [tLeft, tRight] = xScale.domain();
+  const statsByName = new Map(compareSeries.map((s) => [s.name, _statsInView(s.data, tLeft, tRight)]));
+  for (const entry of legendSeries) entry._stats = statsByName.get(entry.name) ?? null;
   if (graph.thresholds?.length) {
     for (let i = 0; i < graph.thresholds.length; i++) {
       const th = graph.thresholds[i];
