@@ -94,7 +94,7 @@
   --row-bg: var(--surface);
   --row-alt-bg: #f6f8fa;
   --row-hover-bg: #e8ecf0;
-  --row-select-bg: #e8ecf0;
+  --row-select-bg: rgba(221, 238, 255, 0.65);
   --row-select-border: rgba(0, 0, 0, 0.06);
 }
 
@@ -133,7 +133,7 @@
   --row-bg: var(--bg);
   --row-alt-bg: #262b33;
   --row-hover-bg: rgba(255, 255, 255, 0.06);
-  --row-select-bg: rgba(255, 255, 255, 0.07);
+  --row-select-bg: rgba(88, 166, 255, 0.10);
   --row-select-border: rgba(255, 255, 255, 0.10);
 }
 
@@ -2828,6 +2828,12 @@ button:focus-visible,
   background: var(--row-bg);
 }
 
+/* The Midnight theme paints the table #666, which showed through wherever
+   rows do not cover it: a translucent selected row, rows still being drawn. */
+.tabulator .tabulator-tableholder .tabulator-table {
+  background: var(--row-bg);
+}
+
 .tabulator .tabulator-row {
   background: var(--row-bg);
   border-bottom: 1px solid var(--border-subtle);
@@ -2853,12 +2859,8 @@ button:focus-visible,
 
 .tabulator .tabulator-row.selected-row,
 .tabulator .tabulator-row.selected-row:hover {
-  background: rgba(221, 238, 255, 0.65) !important;
+  background: var(--row-select-bg) !important;
   box-shadow: inset 0 0 0 2px var(--accent);
-}
-[data-theme="dark"] .tabulator .tabulator-row.selected-row,
-[data-theme="dark"] .tabulator .tabulator-row.selected-row:hover {
-  background: rgba(88, 166, 255, 0.10) !important;
 }
 
 .ghost-delete-btn {

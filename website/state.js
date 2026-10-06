@@ -301,6 +301,7 @@ const eventSourcePlaceholder = (context) => {
   return connectionPlaceholder(context);
 };
 
+// Updates rows in place; returns the fields whose values changed in any row.
 const diffUpdateTable = (tabulator, data, keyField) => {
   const currentRowMap = new Map();
   for (const row of tabulator.getRows()) {
@@ -308,6 +309,7 @@ const diffUpdateTable = (tabulator, data, keyField) => {
   }
   const newRows = [];
   const newIds = new Set();
+  const changed = new Set();
   for (const d of data) {
     newIds.add(d[keyField]);
     const existing = currentRowMap.get(d[keyField]);
@@ -315,7 +317,7 @@ const diffUpdateTable = (tabulator, data, keyField) => {
     const cur = existing.getData();
     const diff = {};
     for (const k of Object.keys(d)) {
-      if (d[k] !== cur[k]) diff[k] = d[k];
+      if (d[k] !== cur[k]) { diff[k] = d[k]; changed.add(k); }
     }
     if (Object.keys(diff).length) existing.update(diff);
   }
@@ -323,6 +325,25 @@ const diffUpdateTable = (tabulator, data, keyField) => {
     if (!newIds.has(id)) row.delete();
   }
   if (newRows.length) tabulator.addData(newRows);
+  return changed;
+};
+
+// Tabulator sorts only when asked, so a row whose sorted value changed stays
+// where it was. A live table sorts again once that happened, every few seconds
+// at most, and not under the pointer: a row moving away takes a click with it.
+const RESORT_MIN_MS = 3000;
+const _resorts = new WeakMap();  // tabulator -> {last: ms, pending: bool}
+
+const resortChanged = (tabulator, changed) => {
+  const sorters = tabulator.getSorters();
+  const resort = _resorts.get(tabulator) || { last: 0, pending: false };
+  _resorts.set(tabulator, resort);
+  if (sorters.some((s) => changed.has(s.field))) resort.pending = true;
+  const now = Date.now();
+  if (!resort.pending || now - resort.last < RESORT_MIN_MS || tabulator.element.matches(':hover')) return;
+  resort.last = now;
+  resort.pending = false;
+  tabulator.setSort(sorters.map((s) => ({ column: s.field, dir: s.dir })));
 };
 
 // Put fresh content into `target`, replacing only the nodes that changed and

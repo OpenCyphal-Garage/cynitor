@@ -12,12 +12,13 @@ const deleteGhostNode = async (uniqueIdHex) => {
   }
 };
 
+// IDs in a filter are whole: "10, 20" finds 10 or 20 in a cell's list, not 110 or 7510.
+const idList = (text) => String(text ?? '').split(',').map((t) => t.trim()).filter(Boolean);
 const idsHeaderFilter = (headerValue, rowValue) => {
-  if (!headerValue) return true;
-  const terms = headerValue.split(',').map((t) => t.trim()).filter(Boolean);
+  const terms = idList(headerValue);
   if (!terms.length) return true;
-  const cellStr = String(rowValue);
-  return terms.some((t) => cellStr.includes(t));
+  const ids = idList(rowValue);
+  return terms.some((t) => ids.includes(t));
 };
 
 // Health and state sort by how much they need a look, not alphabetically.
@@ -387,10 +388,8 @@ const initNodesTable = () => {
         if (!row._ghost) return escapeHtml(String(row.id));
         // An offline node that lost its node-ID: the one it last had.
         return `<span class="ghost-id" title="Last node-ID; the node is offline">${escapeHtml(String(row._lastNodeId ?? '-'))}</span>`;
-      }, headerFilterFunc: (headerValue, _rowValue, rowData) => {
-        if (!headerValue) return true;
-        return String(rowData._ghost ? (rowData._lastNodeId ?? '') : rowData.id).includes(headerValue);
-      } }),
+      }, headerFilterFunc: (headerValue, _rowValue, rowData) =>
+        idsHeaderFilter(headerValue, rowData._ghost ? rowData._lastNodeId : rowData.id) }),
       colDef('Name', 'name', { responsive: 0, sorter: 'string', minWidth: 120, widthGrow: 2, formatter: nameFormatter, headerFilterPlaceholder: 'name', cssClass: 'cell-scroll cell-name', cellDblClick: (_e, cell) => { startNameEdit(cell); } }),
       colDef('State', 'state', { responsive: 0, sorter: severitySorter(STATE_ORDER), minWidth: 90, widthGrow: 0.7, formatter: stateFormatter, headerFilterPlaceholder: 'state', cssClass: 'td-state' }),
       colDef('Health', 'health', { responsive: 1, sorter: severitySorter(HEALTH_ORDER), minWidth: 100, widthGrow: 0.8, formatter: healthFormatter, headerFilterPlaceholder: 'health', cssClass: 'cell-scroll' }),
@@ -464,7 +463,7 @@ const renderNodesTable = () => {
     return;
   }
 
-  diffUpdateTable(nodesTabulator, data, 'id');
+  resortChanged(nodesTabulator, diffUpdateTable(nodesTabulator, data, 'id'));
 
   for (const row of nodesTabulator.getRows()) {
     row.getElement().classList.toggle('selected-row', row.getData().id === state.selectedNodeId);

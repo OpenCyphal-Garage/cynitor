@@ -689,8 +689,8 @@ TABLES_NODES = {"node_count": 6, "nodes": {
 
 # 10 publishes 1100 until e2eFeeds[1100] is cleared; 20 publishes 1200, a
 # vector, at the rate in e2eFeeds.rate1200; 1300 has two publishers, 20 at
-# 10 Hz (value 3) and 21 at 5 Hz (value 300); 10, 20, 21 and 30 send
-# Heartbeat at 1 Hz.
+# 10 Hz (value 3) and 21 at e2eFeeds.rate21, 5 Hz (value 300); 10, 20, 21 and
+# 30 send Heartbeat at 1 Hz.
 TABLES_START = """() => {
     state.dashboardConnected = true;
     state.canConnected = true;
@@ -699,12 +699,12 @@ TABLES_START = """() => {
           attributes, timestamp_unix: Date.now() / 1000});
     const value = (v) => [{attribute: 'value', value: v}];
     let tick = 0;
-    window.e2eFeeds = {1100: true, rate1200: 10};
+    window.e2eFeeds = {1100: true, rate1200: 10, rate21: 5};
     window.e2eTablesFeed = setInterval(() => {
         if (e2eFeeds[1100]) cacheEvent(ev(1100, 10, 10, 10, value(1)));
         cacheEvent(ev(1200, 20, e2eFeeds.rate1200, e2eFeeds.rate1200, [{attribute: 'velocity', value: [2, 3, 4]}]));
         cacheEvent(ev(1300, 20, 10, 15, value(3)));
-        if (tick % 2 === 0) cacheEvent(ev(1300, 21, 5, 15, value(300)));
+        if (tick % 2 === 0) cacheEvent(ev(1300, 21, e2eFeeds.rate21, 15, value(300)));
         if (tick++ % 10) return;
         for (const [nid, health] of [[10, 'NOMINAL'], [20, 'NOMINAL'], [21, 'WARNING'], [30, 'CAUTION']]) {
             cacheEvent({...ev(7509, nid, 1, 4, [{attribute: 'health', value: health}]), message_type: 'Heartbeat_1_0'});
@@ -792,6 +792,41 @@ async def _(page):
         assert (await page.evaluate(ids))[-1] == "uid:" + "aa" * 16, "Health descending: the ghost is not last"
     finally:
         await page.evaluate("nodesTabulator.setSort('_sortId', 'asc')")
+
+
+@test("Tables: a sorted table sorts again as values change, not under the pointer")
+async def _(page):
+    first = "nodesTabulator.getRows('active')[0].getData().id"
+    await page.mouse.move(5, 5)  # off the table
+    await page.evaluate("nodesTabulator.setSort('rate', 'desc')")
+    try:
+        assert await page.evaluate(first) == 20, "Node 20 sends the most"
+        await page.locator("#nodesTable .tabulator-row").first.hover()
+        await page.evaluate("e2eFeeds.rate21 = 50")
+        await page.wait_for_timeout(4500)
+        assert await page.evaluate(first) == 20, "Rows moved under the pointer"
+        await page.mouse.move(5, 5)
+        await page.wait_for_function(f"{first} === 21", timeout=5000)
+    finally:
+        await page.evaluate("e2eFeeds.rate21 = 5; nodesTabulator.setSort('_sortId', 'asc')")
+
+
+@test("Tables: ID filters match whole IDs; the selected row shows no grey through")
+async def _(page):
+    ids = "nodesTabulator.getRows('active').map(r => r.getData().id)"
+    try:
+        await page.evaluate("nodesTabulator.setHeaderFilterValue('_sortId', '2')")
+        assert await page.evaluate(ids) == [], "ID '2' matched nodes 20 and 21"
+        await page.evaluate("nodesTabulator.setHeaderFilterValue('_sortId', '10, 21')")
+        assert await page.evaluate(ids) == [10, 21], "ID '10, 21'"
+        await page.evaluate("nodesTabulator.setHeaderFilterValue('_sortId', ''); nodesTabulator.setHeaderFilterValue('publishers', '130')")
+        assert await page.evaluate(ids) == [], "Publishers '130' matched 1300"
+        await page.evaluate("nodesTabulator.setHeaderFilterValue('publishers', '1300')")
+        assert await page.evaluate(ids) == [20, 21], "Publishers '1300'"
+    finally:
+        await page.evaluate("nodesTabulator.setHeaderFilterValue('_sortId', ''); nodesTabulator.setHeaderFilterValue('publishers', '')")
+    grey = await page.evaluate("getComputedStyle(document.querySelector('#nodesTable .tabulator-table')).backgroundColor")
+    assert grey != "rgb(102, 102, 102)", "The table under the rows is the theme's grey"
 
 
 PLOT_PANELS = "[...document.querySelectorAll('.detail-plot-area .panel-label')].map(e => e.textContent)"

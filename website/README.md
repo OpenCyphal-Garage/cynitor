@@ -64,9 +64,9 @@ Open in browser:
   - Theme toggle (dark/light)
   - Collapsible (half-hidden toggle button)
 - Main area (nodes table):
-  - Sortable columns (ID, Name, State, Rate, Uptime); Health and State sort by severity, and offline nodes that lost their node-ID stay at the bottom in either direction
+  - Sortable columns (ID, Name, State, Rate, Uptime); Health and State sort by severity, and offline nodes that lost their node-ID stay at the bottom in either direction. When a sorted value changes, the table sorts again (every 3 s at most), but not while the pointer is over it
   - Rate: messages per second the node sends now. A subject counts while its messages flow, by the Graph's rule (three message periods, two seconds at least); one that stopped counts for nothing
-  - Inline filter fields per column
+  - Inline filter fields per column; ID and port filters take whole IDs, comma-separated (`10, 21`)
   - Resizable columns (drag to resize)
   - Port ID lists (Publishers, Subscribers, Servers, Clients)
   - Node state: active, idle, offline (with "last seen" for offline nodes)

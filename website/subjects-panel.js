@@ -298,7 +298,7 @@ const initSubjectsTable = () => {
     initialSort,
     columns: [
       { title: '', field: '_fav', formatter: subjectFavFormatter, width: 36, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-fav', cellClick: (_e, cell) => { toggleSubjectFavourite(cell.getRow().getData()); } },
-      col('ID', 'id', { sorter: 'number', minWidth: 50, widthGrow: 0.4, headerFilterPlaceholder: 'id' }),
+      col('ID', 'id', { sorter: 'number', minWidth: 50, widthGrow: 0.4, headerFilterPlaceholder: 'id', headerFilterFunc: idsHeaderFilter }),
       col('Kind', 'kind', { minWidth: 88, widthGrow: 0.3, headerFilterPlaceholder: 'kind', formatter: kindFormatter }),
       col('Message / Service Type', 'messageType', { minWidth: 160, widthGrow: 2.2, headerFilterPlaceholder: 'type', cssClass: 'cell-scroll', formatter: subjectTypeFormatter }),
       col('Publishers / Servers', 'publishers', { minWidth: 90, widthGrow: 1, headerFilterPlaceholder: 'pub/srv', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll', formatter: nodeIdsFormatter }),
@@ -376,7 +376,7 @@ const refreshSubjectsTable = () => {
     return;
   }
 
-  diffUpdateTable(subjectsTabulator, data, '_rowId');
+  resortChanged(subjectsTabulator, diffUpdateTable(subjectsTabulator, data, '_rowId'));
   _highlightSubjectRow();
 };
 
