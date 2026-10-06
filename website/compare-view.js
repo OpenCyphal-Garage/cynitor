@@ -399,54 +399,51 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   const seriesKeys = graph.series.map(compareSeriesKey);
   _processSmooth(graph, seriesKeys);
 
+  // Every series is in the legend: one with nothing to plot is muted there,
+  // so it can still be found and removed. A colour follows the series' place
+  // in the graph, not how many others have data.
   const compareSeries = [];
+  const legendSeries = [];
+  const addSeries = (entry, data) => {
+    const drawn = data?.length >= 2;
+    if (drawn) compareSeries.push({ ...entry, data });
+    legendSeries.push(drawn ? entry : { ...entry, _silent: true });
+  };
   for (let i = 0; i < graph.series.length; i++) {
     const cmp = graph.series[i];
-    const key = seriesKeys[i];
-    const buf = _graphPoints(graph, key);
-    if (buf && buf.length >= 2) {
-      _tagGaps(buf);
-      compareSeries.push({
-        name: compareSeriesName(cmp),
-        data: buf,
-        color: cmp.color || PLOT_COLORS[compareSeries.length % PLOT_COLORS.length],
-        _lineStyle: cmp.lineStyle || 'solid',
-      });
-    }
+    const buf = _graphPoints(graph, seriesKeys[i]);
+    if (buf) _tagGaps(buf);
+    addSeries({
+      name: compareSeriesName(cmp),
+      color: cmp.color || PLOT_COLORS[i % PLOT_COLORS.length],
+      _lineStyle: cmp.lineStyle || 'solid',
+    }, buf);
   }
 
-  if (graph.derivedSeries?.length) {
-    const _getRawData = (key) => (key ? _graphPoints(graph, key, true) : null);
-    for (let di = 0; di < graph.derivedSeries.length; di++) {
-      const d = graph.derivedSeries[di];
-      const dataA = _getRawData(d.sourceA);
-      const dataB = _getRawData(d.sourceB);
-      if (!dataA || dataA.length < 2) continue;
-      if (DERIVED_TYPES[d.type]?.sources === 2 && (!dataB || dataB.length < 2)) continue;
-      const win = d.type === 'min_max' ? (graph.timeWindow || 0) : d.window;
-      const outputs = _computeDerived(d.type, dataA, dataB, win);
-      const baseColor = d.color || PLOT_COLORS[(graph.series.length + di) % PLOT_COLORS.length];
-      const style = d.lineStyle || 'dashed';
-      if (d.type === 'min_max' && outputs.length === 2) {
-        const [minLabel, maxLabel] = _derivedMinMaxLabels(d);
-        if (outputs[0].length >= 2) {
-          compareSeries.push({ name: minLabel, data: outputs[0], color: baseColor, _derived: true, _derivedId: d.id, _lineStyle: style });
-        }
-        if (outputs[1].length >= 2) {
-          compareSeries.push({ name: maxLabel, data: outputs[1], color: baseColor, _derived: true, _derivedId: d.id, _lineStyle: style });
-        }
-      } else if (outputs[0]?.length >= 2) {
-        _tagGaps(outputs[0]);
-        compareSeries.push({ name: _derivedLabel(d), data: outputs[0], color: baseColor, _derived: true, _derivedId: d.id, _lineStyle: style });
-      }
+  const _getRawData = (key) => (key ? _graphPoints(graph, key, true) : null);
+  (graph.derivedSeries || []).forEach((d, di) => {
+    const dataA = _getRawData(d.sourceA);
+    const dataB = _getRawData(d.sourceB);
+    const ready = dataA?.length >= 2 && (DERIVED_TYPES[d.type]?.sources !== 2 || dataB?.length >= 2);
+    const win = d.type === 'min_max' ? (graph.timeWindow || 0) : d.window;
+    const outputs = ready ? _computeDerived(d.type, dataA, dataB, win) : [];
+    const entry = {
+      color: d.color || PLOT_COLORS[(graph.series.length + di) % PLOT_COLORS.length],
+      _derived: true, _derivedId: d.id, _lineStyle: d.lineStyle || 'dashed',
+    };
+    if (d.type === 'min_max') {
+      // Two flat lines across the window: no gaps to mark.
+      _derivedMinMaxLabels(d).forEach((name, i) => addSeries({ ...entry, name }, outputs[i]));
+    } else {
+      if (outputs[0]) _tagGaps(outputs[0]);
+      addSeries({ ...entry, name: _derivedLabel(d) }, outputs[0]);
     }
-  }
+  });
 
   const visibleSeries = compareSeries.filter(s => !graph._hidden.has(s.name));
 
-  if (!compareSeries.length) {
-    const msg = graph.series.length ? 'Waiting for data…' : 'Add subjects and attributes to compare';
-    plotArea.innerHTML = `<div class="plot-empty">${msg}</div>`;
+  if (!legendSeries.length) {
+    plotArea.innerHTML = '<div class="plot-empty">Add subjects and attributes to compare</div>';
     graph._fingerprint = '';
     return;
   }
@@ -502,7 +499,7 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   g.select('.plot-crosshair').attr('y1', 0).attr('y2', totalPanelsH);
 
   bindPlotTooltip(g, plotArea, visibleSeries, xScale, w, HEADER_H, rect, graph, () => _renderOneGraph(graph));
-  const legendSeries = [...compareSeries];
+  setPlotNote(plotArea, compareSeries.length ? '' : 'Waiting for data…');
   if (graph.thresholds?.length) {
     for (let i = 0; i < graph.thresholds.length; i++) {
       const th = graph.thresholds[i];

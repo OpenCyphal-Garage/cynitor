@@ -1105,9 +1105,10 @@ async def _(page):
 # ── Compare tab ──
 #
 # Fed as live data is (cacheEvent), by a timer in the page: node 10 publishes
-# 1100 (value 80 ± 5), 1700 (a current of about 1 mA) and 1400 (value 10) at
-# 10 Hz; node 20 joins it on 1400 (value 50) once e2eCompare.join1400 is set.
-# Each test starts the feed, and in its finally stops it and removes its graphs.
+# 1100 (value 80 ± 5), 1700 (a current of about 1 mA) and 1400 (value 10,
+# until e2eCompare.mute1400 is set) at 10 Hz; node 20 joins it on 1400 (value
+# 50) once e2eCompare.join1400 is set. Each test starts the feed, and in its
+# finally stops it and removes its graphs.
 
 COMPARE_START = """() => {
     state.dashboardConnected = true;
@@ -1115,12 +1116,12 @@ COMPARE_START = """() => {
     const ev = (subject_id, publisher_node_id, attribute, value) => ({subject_id, publisher_node_id,
         message_type: 'Real32_1_0', rate: 10, subject_rate: 10, payload_bytes: 4,
         attributes: [{attribute, value}], timestamp_unix: Date.now() / 1000});
-    window.e2eCompare = {join1400: false};
+    window.e2eCompare = {join1400: false, mute1400: false};
     window.e2eCompareFeed = setInterval(() => {
         const t = Date.now() / 1000;
         cacheEvent(ev(1100, 10, 'value', 80 + 5 * Math.sin(t)));
         cacheEvent(ev(1700, 10, 'current', 0.00095 + 0.0001 * Math.sin(t)));
-        cacheEvent(ev(1400, 10, 'value', 10));
+        if (!e2eCompare.mute1400) cacheEvent(ev(1400, 10, 'value', 10));
         if (e2eCompare.join1400) cacheEvent(ev(1400, 20, 'value', 50));
     }, 100);
     switchView('compare');
@@ -1273,6 +1274,36 @@ async def _(page):
         assert values == [10], f"The series of node 10's 1400 plots {values}"
         legend = await card.evaluate(COMPARE_LEGEND)
         assert legend == ["S1400 · value · n10"], f"The legend reads {legend}"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
+@test("Compare: a series with nothing to plot stays in the legend, and colours stay put")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    try:
+        await page.wait_for_timeout(300)
+        card = await compare_graph(page, (1400, "value"), (1100, "value"))
+        await page.wait_for_timeout(300)
+        stroke = """(c) => [...c.querySelectorAll('.compare-line')]
+            .find(l => l.__data__.name === 'S1100 · value · n10')?.getAttribute('stroke')"""
+        colour = await card.evaluate(stroke)
+        # 1400 goes quiet, and its history goes too, as after a reconnect.
+        await page.evaluate("e2eCompare.mute1400 = true; state.subjectHistory.delete('1400:value')")
+        await page.wait_for_timeout(300)
+        legend = await card.evaluate(COMPARE_LEGEND)
+        assert legend == ["S1400 · value · n10", "S1100 · value · n10"], f"The legend reads {legend}"
+        silent = card.locator('.plot-legend-item[data-series="S1400 · value · n10"]')
+        assert "plot-legend-silent" in await silent.get_attribute("class"), "The silent series is not marked"
+        assert await card.evaluate(stroke) == colour, "S1100 changed colour when S1400 went quiet"
+        # With only the silent series left, it is still there to remove.
+        await card.locator('.plot-legend-item[data-series="S1100 · value · n10"] .plot-legend-remove').click()
+        await page.wait_for_timeout(300)
+        assert await card.evaluate(COMPARE_LEGEND) == ["S1400 · value · n10"], "The silent series left the legend"
+        await silent.locator(".plot-legend-remove").click()
+        await page.wait_for_timeout(300)
+        series = await page.evaluate("state.compareGraphs[0].series.length")
+        assert series == 0, f"Removed from the legend, the graph still has {series} series"
     finally:
         await page.evaluate(COMPARE_STOP)
 

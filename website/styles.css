@@ -2219,6 +2219,12 @@ button:focus-visible,
   border-style: dashed;
 }
 
+/* A Compare series with nothing to plot: listed, so it can be removed. */
+.plot-legend-silent .plot-legend-label {
+  color: var(--muted);
+  font-style: italic;
+}
+
 /* ── Compare view ── */
 
 #compareContainer {

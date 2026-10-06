@@ -1891,7 +1891,7 @@ const updatePlotLegend = (plotArea, allSeries, hidden) => {
   const legend = plotArea.querySelector('.plot-legend');
   if (!legend) return;
   const isCompare = !!plotArea.closest('.compare-graph-card');
-  const seriesKey = allSeries.map((s) => `${s.name}:${s.color || ''}:${s._lineStyle || ''}:${s._derivedId || ''}:${s._thresholdIdx ?? ''}`).join('|');
+  const seriesKey = allSeries.map((s) => `${s.name}:${s.color || ''}:${s._lineStyle || ''}:${s._derivedId || ''}:${s._thresholdIdx ?? ''}:${s._silent ? 's' : ''}`).join('|');
   if (legend.dataset.seriesKey !== seriesKey) {
     legend.dataset.seriesKey = seriesKey;
     legend.innerHTML = allSeries.map((s, i) => {
@@ -1906,8 +1906,10 @@ const updatePlotLegend = (plotArea, allSeries, hidden) => {
         styleHtml = `<span class="plot-legend-style" data-style="${st}" title="Click to change line style"></span>`;
         removeHtml = `<span class="plot-legend-remove" aria-label="Remove series">×</span>`;
       }
-      const cls = s._derived ? ' plot-legend-derived' : s._threshold ? ' plot-legend-threshold' : '';
-      return `<div class="plot-legend-item${isActive ? ' active' : ''}${cls}" data-series="${escapeHtml(s.name)}"${derivedAttr}${threshAttr} aria-pressed="${isActive}"><span class="plot-legend-swatch" style="background:${_safeColor(color)}" data-hex="${escapeHtml(color)}"></span>${styleHtml}<span class="plot-legend-label">${escapeHtml(s.name)}</span>${removeHtml}</div>`;
+      const cls = (s._derived ? ' plot-legend-derived' : s._threshold ? ' plot-legend-threshold' : '')
+        + (s._silent ? ' plot-legend-silent' : '');
+      const silentAttr = s._silent ? ' title="Nothing to plot: no data from it yet, or none kept"' : '';
+      return `<div class="plot-legend-item${isActive ? ' active' : ''}${cls}" data-series="${escapeHtml(s.name)}"${derivedAttr}${threshAttr}${silentAttr} aria-pressed="${isActive}"><span class="plot-legend-swatch" style="background:${_safeColor(color)}" data-hex="${escapeHtml(color)}"></span>${styleHtml}<span class="plot-legend-label">${escapeHtml(s.name)}</span>${removeHtml}</div>`;
     }).join('');
   } else {
     for (const item of legend.querySelectorAll('.plot-legend-item[data-series]')) {
@@ -1916,6 +1918,21 @@ const updatePlotLegend = (plotArea, allSeries, hidden) => {
       item.setAttribute('aria-pressed', String(isActive));
     }
   }
+};
+
+// A note over a plot saying why it shows nothing; none when `text` is empty.
+const setPlotNote = (plotArea, text) => {
+  let note = plotArea.querySelector('.plot-empty-window');
+  if (!text) {
+    note?.remove();
+    return;
+  }
+  if (!note) {
+    note = document.createElement('div');
+    note.className = 'plot-empty-window';
+    plotArea.appendChild(note);
+  }
+  if (note.textContent !== text) note.textContent = text;
 };
 
 let _lastPlotFingerprint = '';
@@ -1992,18 +2009,8 @@ const renderPlot = (container) => {
     }
     if (inWindow) break;
   }
-  let emptyOverlay = plotArea.querySelector('.plot-empty-window');
-  if (!inWindow && visible.length) {
-    const windowSecs = Math.max(0, Math.round(tRight - tLeft));
-    if (!emptyOverlay) {
-      emptyOverlay = document.createElement('div');
-      emptyOverlay.className = 'plot-empty-window';
-      plotArea.appendChild(emptyOverlay);
-    }
-    emptyOverlay.textContent = `No data in last ${windowSecs}s`;
-  } else if (emptyOverlay) {
-    emptyOverlay.remove();
-  }
+  setPlotNote(plotArea, !inWindow && visible.length
+    ? `No data in last ${Math.max(0, Math.round(tRight - tLeft))}s` : '');
 
   let gNode = plotArea.querySelector('.plot-root');
   if (!gNode || !gNode.querySelector('.plot-panels') || !plotArea.querySelector('.plot-header') || plotArea.dataset.plotView !== state.activeView) {
