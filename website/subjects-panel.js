@@ -343,6 +343,13 @@ const toggleHiddenSubjectsPopover = () => {
 
 const subjectFavPinSorter = makeFavPinSorter();
 
+// Opens a row's plot, or its service's call card; closes it when open (a click, or Enter).
+const openSubjectRow = (row) => {
+  const data = row.getData();
+  if (data.kind === 'Service') openSubjectService(data);
+  else openSubjectPlot(data);
+};
+
 const initSubjectsTable = () => {
   if (subjectsTabulator) return;
 
@@ -362,6 +369,8 @@ const initSubjectsTable = () => {
     data: buildSubjectsRows(),
     index: '_rowId',
     layout: 'fitColumns',
+    rowFormatter: focusableRow,
+    keybindings: false,  // its Home/End move the focus off the rows; see bindRowKeys
     placeholder: subjectsPlaceholder(),
     initialSort,
     columns: [
@@ -380,13 +389,9 @@ const initSubjectsTable = () => {
 
   subjectsTabulator.on('rowClick', (_e, row) => {
     if (_e.target.closest('.fav-star') || _e.target.closest('.action-hide')) return;
-    const data = row.getData();
-    if (data.kind === 'Service') {
-      openSubjectService(data);
-      return;
-    }
-    openSubjectPlot(data);
+    openSubjectRow(row);
   });
+  bindRowKeys(subjectsTabulator, openSubjectRow);
 
   subjectsTabulator.on('dataSorted', (sorters) => {
     if (sorters.length > 0) {

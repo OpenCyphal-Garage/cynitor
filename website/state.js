@@ -351,7 +351,9 @@ const resortChanged = (tabulator, changed) => {
   _resorts.set(tabulator, resort);
   if (sorters.some((s) => changed.has(s.field))) resort.pending = true;
   const now = Date.now();
-  if (!resort.pending || now - resort.last < RESORT_MIN_MS || tabulator.element.matches(':hover')) return;
+  // Nor while a row has the keyboard: it would move away from under it.
+  const busy = tabulator.element.matches(':hover') || tabulator.element.querySelector('.tabulator-row:focus-visible');
+  if (!resort.pending || now - resort.last < RESORT_MIN_MS || busy) return;
   resort.last = now;
   resort.pending = false;
   tabulator.setSort(sorters.map((s) => ({ column: s.field, dir: s.dir })));
@@ -380,6 +382,42 @@ const patchChildren = (target, fresh) => {
     } else {
       old.replaceWith(kid);
     }
+  });
+};
+
+// Rows by keyboard. Tab stops at the table; ↓/↑ go from row to row (into
+// the rows: the selected one, else the first), Home/End to the ends, Enter
+// or Space acts as a click on the row, Escape leaves the rows. `keys` maps
+// more keys to actions on the focused row. Rows need tabindex -1 (see
+// focusableRow) to take the focus.
+const focusableRow = (row) => { row.getElement().tabIndex = -1; };
+
+const bindRowKeys = (tabulator, activate, keys = {}) => {
+  // At once when the row is drawn, so a held or quick key goes on from it.
+  const focusRow = (row) => {
+    if (!row) return;
+    if (row.getElement().isConnected) row.getElement().focus();
+    tabulator.scrollToRow(row, 'nearest', false).then(() => row.getElement().focus());
+  };
+  tabulator.element.addEventListener('keydown', (e) => {
+    const onRow = e.target.classList.contains('tabulator-row');
+    if (!onRow && !e.target.classList.contains('tabulator-tableholder')) return;  // a filter, an input
+    const rows = tabulator.getRows('active');
+    const selected = tabulator.element.querySelector('.tabulator-row.selected-row');
+    const row = onRow ? tabulator.getRow(e.target) : null;
+    const actions = {
+      ArrowDown: () => focusRow(row ? row.getNextRow() : (selected ? tabulator.getRow(selected) : rows[0])),
+      ArrowUp: () => focusRow(row ? row.getPrevRow() : (selected ? tabulator.getRow(selected) : rows[0])),
+      Home: () => focusRow(rows[0]),
+      End: () => focusRow(rows[rows.length - 1]),
+      Enter: () => row && activate(row),
+      ' ': () => row && activate(row),
+      Escape: () => row && e.target.closest('.tabulator-tableholder').focus(),
+      ...Object.fromEntries(Object.entries(keys).map(([key, act]) => [key, () => row && act(row)])),
+    };
+    if (!actions[e.key]) return;
+    e.preventDefault();
+    actions[e.key]();
   });
 };
 

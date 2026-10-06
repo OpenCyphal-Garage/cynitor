@@ -160,9 +160,10 @@ const startNameEdit = (cell) => {
     done = true;
     cellEl.innerHTML = nameFormatter(cell);
   };
+  const rowEl = cell.getRow().getElement();  // where the keyboard goes back to
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); save(); }
-    if (e.key === 'Escape') { e.preventDefault(); discard(); }
+    if (e.key === 'Enter') { e.preventDefault(); save(); rowEl.focus(); }
+    if (e.key === 'Escape') { e.preventDefault(); discard(); rowEl.focus(); }
   });
   input.addEventListener('blur', discard);
 };
@@ -395,6 +396,13 @@ const buildTableData = () => {
   return rows;
 };
 
+// Selects a row's node, or lets it go if it is the one selected: a click, or Enter.
+const toggleNodeRow = (row) => {
+  const id = row.getData().id;
+  if (id === state.selectedNodeId) clearSelectedNode();
+  else setSelectedNode(id);
+};
+
 const initNodesTable = () => {
   const sortKey = state.tableSort.key === 'id' ? '_sortId' : state.tableSort.key;
   const initialSort = sortKey
@@ -419,6 +427,8 @@ const initNodesTable = () => {
     responsiveLayout: 'hide',
     resizableColumns: true,
     selectable: 1,
+    rowFormatter: focusableRow,
+    keybindings: false,  // its Home/End move the focus off the rows; see bindRowKeys
     placeholder: tablePlaceholder(),
     initialSort,
     columns: [
@@ -456,13 +466,9 @@ const initNodesTable = () => {
 
   nodesTabulator.on('rowClick', (_e, row) => {
     if (_e.target.closest('.name-input') || _e.target.closest('.action-hide')) return;
-    const clickedId = row.getData().id;
-    if (clickedId === state.selectedNodeId) {
-      clearSelectedNode();
-    } else {
-      setSelectedNode(clickedId);
-    }
+    toggleNodeRow(row);
   });
+  bindRowKeys(nodesTabulator, toggleNodeRow, { F2: (row) => startNameEdit(row.getCell('name')) });
   nodesTabulator.on('dataSorted', (sorters) => {
     if (sorters.length > 0) {
       state.tableSort = { key: sorters[0].field, dir: sorters[0].dir };

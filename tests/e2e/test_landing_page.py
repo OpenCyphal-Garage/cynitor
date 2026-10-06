@@ -839,6 +839,23 @@ async def _(page):
     assert muted, "VSSC 0, the usual, is not muted"
 
 
+@test("Tables: rows are reached and selected by keyboard")
+async def _(page):
+    # ↓ goes into the rows at the selected one, else at the first: none selected here.
+    await page.evaluate("clearSelectedNode()")
+    await page.focus("#nodesTable .tabulator-tableholder")
+    try:
+        for key in ("ArrowDown", "ArrowDown", "Enter"):
+            await page.keyboard.press(key)
+            await page.wait_for_timeout(150)
+        assert await page.evaluate("state.selectedNodeId") == 20, "↓ ↓ Enter did not select node 20"
+        await page.keyboard.press("Escape")
+        on_holder = await page.evaluate("document.activeElement.classList.contains('tabulator-tableholder')")
+        assert on_holder, "Escape did not leave the rows"
+    finally:
+        await page.evaluate("clearSelectedNode()")
+
+
 @test("Tables: a port list shows its first IDs and how many more; the tooltip has it whole")
 async def _(page):
     cell = "nodesTabulator.getRow(20).getCell('publishers').getElement()"
