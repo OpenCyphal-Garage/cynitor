@@ -907,6 +907,25 @@ async def _(page):
     assert shown == "uavcan.node.Heartbeat.1.0", f"Heartbeat's type reads {shown!r}"
 
 
+@test("Plots: Fill Rate keeps up once a field's history is full")
+async def _(page):
+    key = "1200:velocity[0]"
+    # A full history, 3600 points: six minutes of a 10 Hz subject.
+    await page.evaluate(f"""(() => {{ const now = Date.now() / 1000;
+        state.subjectHistory.set('{key}', Array.from({{length: 3600}}, (_, i) => ({{t: now - 360 + i / 10, v: 2, n: 20}})));
+    }})()""")
+    await page.evaluate("openSubjectPlot(subjectsTabulator.getRow('sub:1200').getData())")
+    fill = page.locator('.plot-controls input[aria-label="Fill rate interpolation"]')
+    try:
+        await fill.check()
+        await page.wait_for_timeout(3000)
+        behind = await page.evaluate(f"Date.now() / 1000 - _subjectsPlotCfg._smoothBufs.get('{key}').at(-1).t")
+        assert behind < 1.5, f"With Fill Rate on, the plot is {behind:.1f} s behind"
+    finally:
+        await fill.uncheck()
+        await page.evaluate("closeSubjectPlot()")
+
+
 @test("Tables: Subjects says silent, and refreshes with nothing arriving")
 async def _(page):
     await page.locator("#viewTabSubjects").click()

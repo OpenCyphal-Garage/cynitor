@@ -111,9 +111,20 @@ const _processSmooth = (cfg, keys) => {
 
     if (!cfg._smoothBufs.has(key)) cfg._smoothBufs.set(key, []);
     const buf = cfg._smoothBufs.get(key);
-    const cursor = cfg._rawCursors.get(key) || 0;
+    // The cursor is the time of the last raw point taken, not its index: a
+    // full history drops a point at its front for each one it gains, so its
+    // length stops moving. Time going back (history cleared, a replay from
+    // its start) starts the field over.
+    let cursor = cfg._rawCursors.get(key) ?? -Infinity;
+    if (raw[raw.length - 1].t < cursor) {
+      buf.length = 0;
+      cfg._activeInterps.delete(key);
+      cursor = -Infinity;
+    }
+    let first = raw.length;
+    while (first > 0 && raw[first - 1].t > cursor) first--;
 
-    for (let i = cursor; i < raw.length; i++) {
+    for (let i = first; i < raw.length; i++) {
       const pt = raw[i];
       const ip = cfg._activeInterps.get(key);
       if (ip) {
@@ -138,7 +149,7 @@ const _processSmooth = (cfg, keys) => {
         buf.push(pt);
       }
     }
-    cfg._rawCursors.set(key, raw.length);
+    cfg._rawCursors.set(key, raw[raw.length - 1].t);
 
     const ip = cfg._activeInterps.get(key);
     if (ip) {
