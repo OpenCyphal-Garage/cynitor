@@ -2047,6 +2047,10 @@ button:focus-visible,
   margin-left: auto;
   flex: 0 1 auto;
   justify-content: flex-end;
+  /* A subject many nodes publish has a pill per field and node: a few rows
+     show, the rest scroll, and the plot keeps its room. */
+  max-height: 5.5rem;
+  overflow-y: auto;
 }
 
 .plot-legend-item {
