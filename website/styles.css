@@ -3090,6 +3090,11 @@ button:focus-visible,
   color: var(--muted);
 }
 
+/* "+3": how many more IDs a list has than it shows (see shortIdList). */
+.list-more {
+  color: var(--muted);
+}
+
 .mode-text {
   font-size: 0.75rem;
 }

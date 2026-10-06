@@ -829,6 +829,15 @@ async def _(page):
     assert grey != "rgb(102, 102, 102)", "The table under the rows is the theme's grey"
 
 
+@test("Tables: a port list shows its first IDs and how many more; the tooltip has it whole")
+async def _(page):
+    cell = "nodesTabulator.getRow(20).getCell('publishers').getElement()"
+    shown = await page.evaluate(f"{cell}.innerText.trim()")
+    assert shown == "1200, 1300 +1", f"Node 20's publishers read {shown!r}"
+    title = await page.evaluate(f"{cell}.querySelector('.port-ids').title")
+    assert title == "1200, 1300, 7509", f"Its tooltip: {title!r}"
+
+
 @test("Tables: the Nodes strip counts what needs a look, and a count picks those rows out")
 async def _(page):
     strip = page.locator("#nodesStatus")

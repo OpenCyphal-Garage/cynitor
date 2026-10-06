@@ -68,7 +68,7 @@ Open in browser:
   - Rate: messages per second the node sends now. A subject counts while its messages flow, by the Graph's rule (three message periods, two seconds at least); one that stopped counts for nothing
   - Inline filter fields per column; ID and port filters take whole IDs, comma-separated (`10, 21`)
   - Resizable columns (drag to resize)
-  - Port ID lists (Publishers, Subscribers, Servers, Clients)
+  - Port ID lists (Publishers, Subscribers, Servers, Clients): the node's own ports first, the standard ones muted after; a long list shows its first IDs and how many more (`1004, 1005 +4`), and its tooltip has it whole. The Subjects table's node lists read the same way
   - Node state: active, idle, offline (with "last seen" for offline nodes)
   - Health indicators: NOMINAL, ADVISORY, CAUTION, WARNING
   - Responsive — hides less-important columns on narrow screens

@@ -57,14 +57,13 @@ const healthFormatter = (cell) => {
 };
 
 // A node's own ports first, the standard ones (fixed port-IDs) muted after
-// them: those every node has say least about it.
+// them: those every node has say least about it. The first few, then how
+// many more; the tooltip lists them all.
 const portsFormatter = (kind) => (cell) => {
   const text = cell.getValue() || '-';
   if (text === '-') return '<span class="port-ids">-</span>';
-  const ids = text.split(', ').map(Number);
-  const html = ids.map((id) => (isFixedPortId(kind, id)
-    ? `<span class="port-std">${id}</span>` : String(id))).join(', ');
-  // Long lists scroll within the cell; the tooltip shows them whole.
+  const html = shortIdList(text.split(', ').map(Number),
+    (id) => (isFixedPortId(kind, id) ? `<span class="port-std">${id}</span>` : String(id)));
   return `<span class="port-ids has-ports" title="${escapeHtml(text)}">${html}</span>`;
 };
 

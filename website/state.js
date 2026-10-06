@@ -398,6 +398,20 @@ const renderStatusStrip = (strip, total, kinds, rows, focus, before = '') => {
   return counts;
 };
 
+// The first IDs of a list that fit in a few characters, then how many more:
+// a long list reads at a glance, and its tooltip has it whole.
+const LIST_SHOWN_CHARS = 14;
+const shortIdList = (ids, render = (id) => escapeHtml(String(id))) => {
+  let shown = 1;
+  let chars = String(ids[0]).length;
+  while (shown < ids.length && chars + 2 + String(ids[shown]).length <= LIST_SHOWN_CHARS) {
+    chars += 2 + String(ids[shown]).length;
+    shown += 1;
+  }
+  const more = ids.length - shown;
+  return ids.slice(0, shown).map(render).join(', ') + (more ? `<span class="list-more"> +${more}</span>` : '');
+};
+
 const positionPopover = (popover, anchorEl) => {
   const rect = anchorEl.getBoundingClientRect();
   popover.style.top = (rect.bottom + 4) + 'px';

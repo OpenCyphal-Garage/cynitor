@@ -86,7 +86,7 @@ const bytesRateFormatter = (cell) => {
 const nodeIdsFormatter = (cell) => {
   const text = cell.getValue() || '-';
   return text === '-' ? '<span class="text-muted">-</span>'
-    : `<span title="${escapeHtml(nodeIdsTitle(text))}">${escapeHtml(text)}</span>`;
+    : `<span title="${escapeHtml(nodeIdsTitle(text))}">${shortIdList(text.split(', '))}</span>`;
 };
 
 const buildSubjectsRows = () => {
