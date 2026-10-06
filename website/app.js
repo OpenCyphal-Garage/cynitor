@@ -180,6 +180,7 @@ const bind = () => {
       html.setAttribute('data-theme', 'dark');
     }
     el('themeToggle').setAttribute('aria-checked', String(!isDark));
+    redrawPlotsInTheme();
     saveSettings();
   });
   el('apiBase').addEventListener('change', saveSettings);

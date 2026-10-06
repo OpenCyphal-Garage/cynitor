@@ -146,14 +146,16 @@ let _detailRefreshPending = null;
 
 const metricMaxLen = new Map();
 
-// Read plot colors from CSS custom properties. Resolved once at script load.
-const PLOT_COLORS = (() => {
+// Plot colours: the --plot-N tokens of the theme in use, read again whenever
+// the theme is set (loadSettings, the theme toggle).
+const PLOT_COLORS = [];
+const refreshPlotColors = () => {
   const root = getComputedStyle(document.documentElement);
   const fallback = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#bc8cff', '#39d2c0'];
-  return [1, 2, 3, 4, 5, 6].map((i) => {
-    return root.getPropertyValue(`--plot-${i}`).trim() || fallback[i - 1];
-  });
-})();
+  PLOT_COLORS.splice(0, PLOT_COLORS.length,
+    ...fallback.map((color, i) => root.getPropertyValue(`--plot-${i + 1}`).trim() || color));
+};
+refreshPlotColors();
 const PLOT_TICK_MS = 100;
 
 // ── Utility helpers ──
@@ -853,6 +855,7 @@ const loadSettings = () => {
     document.documentElement.setAttribute('data-theme', 'dark');
     el('themeToggle').setAttribute('aria-checked', 'true');
   }
+  refreshPlotColors();
   if (typeof settings.canInterface === 'string') {
     state.preferredCanInterface = settings.canInterface;
   }

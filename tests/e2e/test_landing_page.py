@@ -1416,6 +1416,35 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: plots take the colours of the theme in use, loaded in it too")
+async def _(page):
+    theme = "document.documentElement.getAttribute('data-theme') || 'light'"
+    token = "getComputedStyle(document.documentElement).getPropertyValue('--plot-1').trim()"
+    stroke = "document.querySelector('.compare-graph-card .compare-line')?.getAttribute('stroke')"
+    started_in = await page.evaluate(theme)
+    await page.evaluate(COMPARE_START)
+    try:
+        await page.wait_for_timeout(300)
+        await compare_graph(page, (1100, "value"))
+        for _ in range(2):  # to the other theme, and back
+            await page.locator("#themeToggle").click()
+            await page.wait_for_timeout(400)
+            line, wanted = await page.evaluate(f"[{stroke}, {token}]")
+            assert line == wanted, f"In {await page.evaluate(theme)}, a line is {line}, not the theme's {wanted}"
+        # Dark when the page loads, as for someone who keeps it dark.
+        if await page.evaluate(theme) != "dark":
+            await page.locator("#themeToggle").click()
+        await page.evaluate("clearInterval(window.e2eCompareFeed); state.dashboardConnected = false;"
+                            " state.canConnected = false; _writeSettingsNow()")
+        await page.reload(wait_until="load")
+        first, wanted = await page.evaluate(f"[PLOT_COLORS[0], {token}]")
+        assert first == wanted, f"Loaded in dark, plots start with {first}, not the theme's {wanted}"
+    finally:
+        if await page.evaluate(theme) != started_in:
+            await page.locator("#themeToggle").click()
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

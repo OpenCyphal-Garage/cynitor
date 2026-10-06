@@ -1938,6 +1938,14 @@ const setPlotNote = (plotArea, text) => {
 let _lastPlotFingerprint = '';
 
 const _plotInvalidate = () => { _lastPlotFingerprint = ''; };
+
+// The theme changed: the plots on show draw again in its colours, paused ones too.
+const redrawPlotsInTheme = () => {
+  refreshPlotColors();
+  if (state.activeView === 'nodes' || state.activeView === 'subjects') startPlotAnim();
+  for (const graph of state.compareGraphs) graph._fingerprint = '';
+  if (state.activeView === 'compare') startCompareAnim();
+};
 const _plotRerender = () => { renderPlot(el('selectedNodeContent')); };
 const _plotRestart = () => { startPlotAnim(); };
 
