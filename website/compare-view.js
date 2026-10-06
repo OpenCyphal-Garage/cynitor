@@ -296,7 +296,8 @@ const _buildGraphCard = (graph) => {
     _renderCompareGraphNow(graph, plotArea);
   };
 
-  // Zone 1: Series panel + card actions (name, save, clone, delete)
+  // A card is its header (Edit, name, time window, actions), its editing rows
+  // (series, derived, thresholds, display), folded away under Edit, and its plot.
   const panel = buildComparePanel(graph, onUpdate);
 
   const cardActions = document.createElement('div');
@@ -312,7 +313,6 @@ const _buildGraphCard = (graph) => {
     graph.name = nameInput.value;
     saveSettings();
   });
-  cardActions.appendChild(nameInput);
 
   const saveBtn = document.createElement('button');
   saveBtn.className = 'compare-graph-save';
@@ -374,12 +374,9 @@ const _buildGraphCard = (graph) => {
   });
   cardActions.appendChild(deleteBtn);
 
-  panel.appendChild(cardActions);
-  card.appendChild(panel);
-
   _refreshCompareSubjects(panel);
 
-  // Zone 3 + 4: Time controls + visual tuning (split from buildPlotControls)
+  // The time controls go in the header, the display ones in the editing rows.
   const opts = {
     cfg: graph,
     invalidate: () => {
@@ -395,6 +392,10 @@ const _buildGraphCard = (graph) => {
   timeControls.className = 'compare-time-controls';
   const visualControls = document.createElement('div');
   visualControls.className = 'compare-visual-controls';
+  const displayHdr = document.createElement('span');
+  displayHdr.className = 'plot-threshold-hdr';
+  displayHdr.textContent = 'Display';
+  visualControls.appendChild(displayHdr);
   let pastFirstSep = false;
   while (allControls.firstChild) {
     const child = allControls.firstChild;
@@ -405,12 +406,29 @@ const _buildGraphCard = (graph) => {
     }
     (pastFirstSep ? visualControls : timeControls).appendChild(child);
   }
-  card.appendChild(timeControls);
-  card.appendChild(visualControls);
 
-  // Zone 5: Plot area
-  card.appendChild(plotArea);
+  const editor = document.createElement('div');
+  editor.className = 'compare-card-editor';
+  editor.append(panel, visualControls);
 
+  const editBtn = document.createElement('button');
+  editBtn.type = 'button';
+  editBtn.className = 'compare-edit-btn';
+  editBtn.textContent = 'Edit';
+  const showEditor = (open) => {
+    editor.classList.toggle('hidden', !open);
+    editBtn.classList.toggle('active', open);
+    editBtn.setAttribute('aria-expanded', String(open));
+  };
+  editBtn.addEventListener('click', () => showEditor(editor.classList.contains('hidden')));
+  // A new graph opens on its editing rows, to pick series; one that has them, on its plot.
+  showEditor(!graph.series.length);
+
+  const header = document.createElement('div');
+  header.className = 'compare-card-header';
+  header.append(editBtn, nameInput, timeControls, cardActions);
+
+  card.append(header, editor, plotArea);
   return card;
 };
 

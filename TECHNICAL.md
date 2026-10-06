@@ -203,7 +203,7 @@ The legend uses three-zone `<div>` pills: left swatch (click to pick color via n
 
 ### Compare view
 
-`compare-view.js` provides independent graphs for side-by-side multi-series comparison. Each graph has its own series list, derived series, thresholds, timeline markers, freehand drawings, time window, and animation loop. Graphs are stored in `state.compareGraphs` and persisted in localStorage.
+`compare-view.js` provides independent graphs for side-by-side multi-series comparison. Each graph has its own series list, derived series, thresholds, timeline markers, freehand drawings, time window, and animation loop. Graphs are stored in `state.compareGraphs` and persisted in localStorage. A graph's card is a header (Edit, name, time controls, Save/Clone/Remove), its editing rows (`.compare-card-editor`: the series, derived and threshold rows of `buildComparePanel`, and the display row), folded away under Edit, and its plot.
 
 **Derived series** are computed from raw series at render time via `_computeDerived()`: delta (A−B), ratio (A/B), moving average (windowed), min/max envelope (rolling), and rate of change (Δv/Δt). Each type declares its source count and optional window parameter.
 

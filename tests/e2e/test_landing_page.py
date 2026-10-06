@@ -1793,6 +1793,33 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: a graph's editing rows fold away under Edit, and a new graph starts on them")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    try:
+        await page.wait_for_timeout(300)
+        card = await compare_graph(page, (1100, "value"))
+        editor, edit = card.locator(".compare-card-editor"), card.locator(".compare-edit-btn")
+        assert await editor.is_visible(), "A new graph does not start on its editing rows"
+        await edit.click()
+        assert not await editor.is_visible(), "Edit does not fold the editing rows away"
+        assert await edit.get_attribute("aria-expanded") == "false", "Edit does not say it is folded"
+        header, plot, whole = await card.evaluate("""(c) => [c.querySelector('.compare-card-header'),
+            c.querySelector('.detail-plot-area'), c].map(e => e.getBoundingClientRect().height)""")
+        assert header < 50 and plot > 0.8 * whole, f"Folded: a {header:.0f} px header, a {plot:.0f} px plot in {whole:.0f} px"
+        assert await card.locator(".plot-window-btn").first.is_visible(), "Folded, the time window is out of reach"
+        # A graph that has its series, opened from Saved graphs, starts on its plot.
+        await card.locator(".compare-graph-save").click()
+        await page.locator(".compare-saved-btn").click()
+        await page.locator(".compare-saved-name").first.click()
+        opened = page.locator(".compare-graph-card").nth(1)
+        assert not await opened.locator(".compare-card-editor").is_visible(), "A saved graph opens on its editing rows"
+        await edit.click()
+        assert await editor.is_visible(), "Edit does not bring the editing rows back"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

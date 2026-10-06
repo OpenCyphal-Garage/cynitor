@@ -739,16 +739,19 @@ const _refreshCompareSubjects = (panel) => {
   if (prev && sel.querySelector(`option[value="${prev}"]`)) sel.value = prev;
 };
 
+// A graph's editing rows: its series, derived series and thresholds, a row each.
 const buildComparePanel = (graph, onUpdate) => {
   const panel = document.createElement('div');
   panel.className = 'plot-compare-panel';
 
+  const seriesSection = document.createElement('div');
+  seriesSection.className = 'plot-series-section';
   const hdr = document.createElement('div');
   hdr.className = 'plot-compare-hdr';
   const title = document.createElement('span');
   title.textContent = 'Series';
   hdr.appendChild(title);
-  panel.appendChild(hdr);
+  seriesSection.appendChild(hdr);
 
   const picker = document.createElement('div');
   picker.className = 'plot-compare-picker';
@@ -850,7 +853,8 @@ const buildComparePanel = (graph, onUpdate) => {
   picker.appendChild(attrSel);
   picker.appendChild(pubSel);
   picker.appendChild(addBtn);
-  panel.appendChild(picker);
+  seriesSection.appendChild(picker);
+  panel.appendChild(seriesSection);
 
   const derivedSection = document.createElement('div');
   derivedSection.className = 'plot-derived-section';
