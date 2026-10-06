@@ -1232,7 +1232,7 @@ async def _(page):
         await pill.click()
         await page.wait_for_timeout(300)
         still = await card.evaluate(COMPARE_POINTS_SHOWN)
-        assert still >= shown > 1000, f"Paused with {shown} points shown; redrawn, it shows {still}"
+        assert still >= shown > 100, f"Paused with {shown} points shown; redrawn, it shows {still}"
         await card.locator('[aria-label="Remove graph"]').click()
 
         # A replay of a recording made on 1 October: paused, the graph stays then.
@@ -1698,6 +1698,64 @@ async def _(page):
         assert after == before, f"Five graphs later, [page mousemove, crosshair-sync] listeners went {before} -> {after}"
     finally:
         await page.evaluate("window.e2eListenersOff?.()")
+        await page.evaluate(COMPARE_STOP)
+
+
+# A graph's first line: how many points it draws, the highest point (least y),
+# the plot's width and height.
+COMPARE_LINE = """(c) => { const d = c.querySelector('.compare-line')?.getAttribute('d') || '';
+    const ys = d.split(/[ML]/).filter(Boolean).map(s => Number(s.split(',')[1]));
+    const overlay = c.querySelector('.plot-overlay');
+    return {points: ys.length, top: Math.min(...ys), width: Number(overlay.getAttribute('width')),
+            height: Number(overlay.getAttribute('height'))}; }"""
+
+
+@test("Compare: a line draws what is in view, at most two points a pixel, and no spike is lost")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    try:
+        # Six minutes of 1500 at 10 Hz: 300 points of them in a 30 s window.
+        await page.evaluate("""() => { const now = Date.now() / 1000;
+            state.subjectHistory.set('1500:value', Array.from({length: 3600}, (_, i) => ({t: now - 360 + i / 10, v: Math.sin(i / 5), n: 10}))); }""")
+        card = await compare_graph(page, (1500, "value"))
+        await card.locator('.plot-window-btn[data-secs="30"]').click()
+        await page.wait_for_timeout(400)
+        line = await card.evaluate(COMPARE_LINE)
+        assert line["points"] < 400, f"A 30 s window shows 300 points; the line draws {line['points']}"
+        # 36 s of 1600 at 100 Hz, one spike in it, all in view: more points than pixels.
+        await page.evaluate("""() => { const now = Date.now() / 1000;
+            state.subjectHistory.set('1600:value', Array.from({length: 3600}, (_, i) => ({t: now - 36 + i / 100, v: i === 1800 ? 50 : Math.sin(i / 20), n: 10}))); }""")
+        card = await compare_graph(page, (1600, "value"))
+        await card.locator('.plot-window-btn[data-secs="0"]').click()
+        await page.wait_for_timeout(400)
+        line = await card.evaluate(COMPARE_LINE)
+        assert line["points"] <= 2 * line["width"] + 4, f"{line['width']:.0f} px wide, the line draws {line['points']} points"
+        assert line["top"] < 0.1 * line["height"], f"The spike is lost: the line's top is at y {line['top']:.0f}"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
+@test("Compare: a graph scrolled out of view is not drawn, and catches up in view")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    cards = page.locator(".compare-cards")
+    line = "(c) => c.querySelector('.compare-line')?.getAttribute('d')"
+    try:
+        await page.wait_for_timeout(300)
+        for _ in range(4):
+            await compare_graph(page, (1100, "value"))
+        await cards.evaluate("(c) => { c.scrollTop = 0; }")
+        await page.wait_for_timeout(500)
+        first, last = page.locator(".compare-graph-card").first, page.locator(".compare-graph-card").last
+        before = [await first.evaluate(line), await last.evaluate(line)]
+        await page.wait_for_timeout(1000)
+        after = [await first.evaluate(line), await last.evaluate(line)]
+        assert after[0] != before[0], "The graph in view is not drawn"
+        assert after[1] == before[1], "The graph out of view is drawn all the same"
+        await cards.evaluate("(c) => { c.scrollTop = c.scrollHeight; }")
+        await page.wait_for_timeout(500)
+        assert await last.evaluate(line) != after[1], "Scrolled into view, the graph does not catch up"
+    finally:
         await page.evaluate(COMPARE_STOP)
 
 

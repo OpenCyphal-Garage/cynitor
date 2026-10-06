@@ -1457,6 +1457,42 @@ const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPane
   g.select('.plot-crosshair').attr('y1', 0).attr('y2', totalPanelsH);
 };
 
+// The points of a line worth drawing: those in view and one beyond each edge,
+// so it runs to them; of a pixel column holding more, only its lowest and
+// highest, so no spike is lost. A point after a gap stays: the line breaks
+// there. A redraw then costs what the plot shows, not what the history holds.
+const _pointsToDraw = (data, xScale) => {
+  const [tLeft, tRight] = xScale.domain();
+  const bisect = d3.bisector((p) => p.t);
+  const from = Math.max(0, bisect.left(data, tLeft) - 1);
+  const to = Math.min(data.length, bisect.right(data, tRight) + 1);
+  if (to - from <= 2 * xScale.range()[1]) return data.slice(from, to);
+  const out = [];
+  let column = null;
+  let lo = null;
+  let hi = null;
+  const flush = () => {
+    if (lo) out.push(...(lo === hi ? [lo] : lo.t < hi.t ? [lo, hi] : [hi, lo]));
+    lo = hi = null;
+  };
+  for (let i = from; i < to; i++) {
+    const p = data[i];
+    const c = Math.floor(xScale(p.t));
+    if (p._gap || c !== column) {
+      flush();
+      column = c;
+      if (p._gap) {
+        out.push(p);
+        continue;
+      }
+    }
+    if (!lo || p.v < lo.v) lo = p;
+    if (!hi || p.v > hi.v) hi = p;
+  }
+  flush();
+  return out;
+};
+
 const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount, cfg = null) => {
   let overlay = g.select('.plot-compare-overlay');
 
@@ -1520,7 +1556,9 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
 
   const strokeW = cfg ? cfg.stroke : 1.5;
   const showDots = cfg ? cfg.disconnectPoints : false;
-  const lineGen = d3.line().defined((p) => !p._gap).x((p) => xScale(p.t)).y((p) => yScale(p.v)).curve(d3.curveLinear);
+  // A tenth of a pixel is fine enough, and shortens the path the browser parses.
+  const lineGen = d3.line().defined((p) => !p._gap).x((p) => xScale(p.t)).y((p) => yScale(p.v))
+    .curve(d3.curveLinear).digits(1);
   const showLine = !showDots;
 
   const lines = overlay.selectAll('.compare-line').data(compareSeries, (d) => d.name);
@@ -1536,7 +1574,7 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
       if (MARKER_SHAPES[st]) return null;
       return THRESHOLD_STYLES[st] || null;
     })
-    .attr('d', (d) => showLine && d.data.length >= 2 ? lineGen(d.data) : null)
+    .attr('d', (d) => showLine && d.data.length >= 2 ? lineGen(_pointsToDraw(d.data, xScale)) : null)
     .attr('opacity', (d) => showLine && d.data.length >= 2 ? 1 : 0);
   lines.exit().remove();
 

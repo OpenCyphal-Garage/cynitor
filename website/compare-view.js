@@ -206,6 +206,7 @@ const initCompareView = () => {
         for (const g of graphs) state.compareGraphs.push(newCompareGraph(g));
         if (saved) state.savedCompareConfigs = saved;
         saveSettings();
+        for (const card of cardsContainer.children) _cardWatcher.unobserve(card);
         cardsContainer.innerHTML = '';
         for (const graph of state.compareGraphs) cardsContainer.appendChild(_buildGraphCard(graph));
         startCompareAnim();
@@ -283,6 +284,7 @@ const _buildGraphCard = (graph) => {
   const card = document.createElement('div');
   card.className = 'compare-graph-card';
   card.dataset.graphId = graph.id;
+  _cardWatcher.observe(card);
 
   const plotArea = document.createElement('div');
   plotArea.className = 'detail-plot-area';
@@ -362,6 +364,7 @@ const _buildGraphCard = (graph) => {
     const idx = state.compareGraphs.indexOf(graph);
     if (idx !== -1) state.compareGraphs.splice(idx, 1);
     saveSettings();
+    _cardWatcher.unobserve(card);
     card.remove();
   });
   cardActions.appendChild(deleteBtn);
@@ -563,10 +566,20 @@ const _renderCompareGraphNow = (graph, plotArea) => {
 
 let _compareAnimTimer = null;
 
-const _renderOneGraph = (graph) => {
+// The cards in view: the timer draws only those, as drawing costs. A card
+// scrolled back into view catches up at the next tick.
+const _cardsInView = new WeakSet();
+const _cardWatcher = new IntersectionObserver((entries) => {
+  for (const entry of entries) {
+    if (entry.isIntersecting) _cardsInView.add(entry.target);
+    else _cardsInView.delete(entry.target);
+  }
+});
+
+const _renderOneGraph = (graph, inViewOnly = false) => {
   const container = el('compareContainer');
   const card = container?.querySelector(`[data-graph-id="${graph.id}"]`);
-  if (!card) return;
+  if (!card || (inViewOnly && !_cardsInView.has(card))) return;
   const plotArea = card.querySelector('.detail-plot-area');
   if (plotArea) _renderCompareGraphNow(graph, plotArea);
 };
@@ -586,7 +599,7 @@ const _syncPauseAll = () => {
 const _compareAnimTick = () => {
   if (state.activeView !== 'compare') { _compareAnimTimer = null; return; }
   for (const graph of state.compareGraphs) {
-    if (!graph.paused) _renderOneGraph(graph);
+    if (!graph.paused) _renderOneGraph(graph, true);
   }
   _syncPauseAll();
   _compareAnimTimer = window.setTimeout(_compareAnimTick, PLOT_TICK_MS);
