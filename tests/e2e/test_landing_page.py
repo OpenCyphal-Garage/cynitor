@@ -1588,6 +1588,78 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: series are picked, shown, removed and saved graphs opened by keyboard")
+async def _(page):
+    # The graph is made before anything is heard: its lists start empty.
+    await page.evaluate(COMPARE_START)
+    await page.evaluate("clearInterval(window.e2eCompareFeed); state.subjectHistory.clear()")
+    try:
+        card = await compare_graph(page)
+        await page.evaluate(COMPARE_START)
+        await page.wait_for_timeout(400)
+        subject = card.locator(".plot-compare-subject")
+        await subject.focus()
+        await page.keyboard.press("ArrowDown")
+        assert await subject.input_value() != "", "Data has come, yet the subject list is empty from the keyboard"
+        await subject.select_option("1100")
+        await card.locator(".plot-compare-attr").focus()
+        await page.keyboard.press("ArrowDown")
+        await card.locator(".plot-compare-picker .plot-compare-add").first.focus()
+        await page.keyboard.press("Enter")
+        await page.wait_for_timeout(300)
+        name = "S1100 · value · n10"
+        label = card.locator(f'.plot-legend-item[data-series="{name}"] .plot-legend-label')
+        await label.focus()
+        await page.keyboard.press("Enter")
+        await page.wait_for_timeout(200)
+        hidden = await page.evaluate(f"state.compareGraphs[0]._hidden.has({name!r})")
+        assert hidden and await label.get_attribute("aria-pressed") == "false", "Enter on a series' pill does not hide it"
+        await card.locator(f'.plot-legend-item[data-series="{name}"] .plot-legend-remove').focus()
+        await page.keyboard.press("Enter")
+        await page.wait_for_timeout(200)
+        assert await page.evaluate("state.compareGraphs[0].series.length") == 0, "Enter on × does not remove the series"
+        name_box = card.locator(".compare-graph-name")
+        assert await name_box.get_attribute("aria-label") == "Graph name", "The graph's name box has no label"
+        await name_box.fill("Keys")
+        await card.locator(".compare-graph-save").click()
+        await page.locator(".compare-saved-btn").focus()
+        await page.keyboard.press("Enter")
+        assert await page.locator(".compare-saved-btn").get_attribute("aria-expanded") == "true", "The menu does not say it is open"
+        await page.keyboard.press("Tab")
+        focused = await page.evaluate("document.activeElement.className + ' ' + document.activeElement.textContent")
+        assert focused == "compare-saved-name Keys", f"Tab from Saved graphs goes to {focused!r}"
+        await page.keyboard.press("Enter")
+        await page.wait_for_timeout(200)
+        graphs = await page.evaluate("[state.compareGraphs.length, state.savedCompareConfigs.length]")
+        assert graphs == [2, 1], f"Enter on a saved graph: [graphs, saved graphs] = {graphs}"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
+@test("Compare: the marker form saves on Enter and closes on Escape")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    try:
+        await page.wait_for_timeout(300)
+        card = await compare_graph(page, (1100, "value"))
+        box = await card.locator(".plot-overlay").bounding_box()
+        form = card.locator(".plot-marker-form")
+        for x, keys in ((0.6, ("t", "h", "r", "o", "t", "t", "l", "e", "Enter")), (0.3, ("Escape",))):
+            await page.keyboard.down("Shift")
+            await page.mouse.click(box["x"] + box["width"] * x, box["y"] + 40)
+            await page.keyboard.up("Shift")
+            await page.wait_for_timeout(200)
+            assert await form.count() == 1, "Shift+click opens no marker form"
+            for key in keys:
+                await page.keyboard.press(key)
+            await page.wait_for_timeout(200)
+            assert await form.count() == 0, f"{keys[-1]} leaves the marker form open"
+        markers = await page.evaluate("state.compareGraphs[0].markers.map(m => m.label)")
+        assert markers == ["throttle"], f"After Enter, then Escape, the markers are {markers}"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

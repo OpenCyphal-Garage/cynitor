@@ -2104,6 +2104,23 @@ button:focus-visible,
   opacity: 1;
 }
 
+/* A pill's parts are buttons, for the keyboard: bare here, drawn below. */
+.plot-legend-label,
+.plot-legend-style,
+.plot-legend-remove {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+}
+
+.plot-legend-item button:focus-visible {
+  outline: 0.125rem solid var(--accent);
+  outline-offset: -0.125rem;
+}
+
 .plot-legend-label {
   display: flex;
   align-items: center;
@@ -2331,6 +2348,13 @@ button:focus-visible,
 .compare-saved-name {
   flex: 1;
   min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

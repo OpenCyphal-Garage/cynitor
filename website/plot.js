@@ -790,51 +790,40 @@ const buildComparePanel = (graph, onUpdate) => {
   addBtn.disabled = true;
   addBtn.setAttribute('aria-label', 'Add comparison series');
 
-  subjectSel.addEventListener('mousedown', () => _refreshCompareSubjects(panel));
-
   // The subject picked, or null; 0 is a subject-ID like any other.
   const pickedSubject = () => (subjectSel.value === '' ? null : Number(subjectSel.value));
 
-  subjectSel.addEventListener('change', () => {
+  // The picked subject's fields as they are now, the one chosen kept; with no
+  // subject picked, none and the list off.
+  const fillFields = () => {
     const sid = pickedSubject();
-    attrSel.innerHTML = '';
-    const def = document.createElement('option');
-    def.value = '';
-    def.textContent = 'Attribute…';
-    attrSel.appendChild(def);
-    if (sid != null) {
-      const subjects = _getCompareSubjects();
-      for (const a of subjects.get(sid) || []) {
-        const opt = document.createElement('option');
-        opt.value = a;
-        opt.textContent = a;
-        attrSel.appendChild(opt);
-      }
-      attrSel.disabled = false;
-    } else {
-      attrSel.disabled = true;
-    }
-    fillPublishers(sid);
-    addBtn.disabled = true;
-  });
-
-  attrSel.addEventListener('mousedown', () => {
-    const sid = pickedSubject();
-    if (sid == null) return;
     const prev = attrSel.value;
     attrSel.innerHTML = '';
     const def = document.createElement('option');
     def.value = '';
     def.textContent = 'Attribute…';
     attrSel.appendChild(def);
-    const subjects = _getCompareSubjects();
-    for (const a of subjects.get(sid) || []) {
+    for (const a of sid != null ? _getCompareSubjects().get(sid) || [] : []) {
       const opt = document.createElement('option');
       opt.value = a;
       opt.textContent = a;
       attrSel.appendChild(opt);
     }
-    if (prev && attrSel.querySelector(`option[value="${prev}"]`)) attrSel.value = prev;
+    if ([...attrSel.options].some((o) => o.value === prev)) attrSel.value = prev;
+    attrSel.disabled = sid == null;
+  };
+
+  // The lists fill as they open, by mouse or keyboard: what is heard changes.
+  for (const type of ['mousedown', 'keydown']) {
+    subjectSel.addEventListener(type, () => _refreshCompareSubjects(panel));
+    attrSel.addEventListener(type, fillFields);
+  }
+
+  subjectSel.addEventListener('change', () => {
+    attrSel.value = '';
+    fillFields();
+    fillPublishers(pickedSubject());
+    addBtn.disabled = true;
   });
 
   attrSel.addEventListener('change', () => {
@@ -852,8 +841,7 @@ const buildComparePanel = (graph, onUpdate) => {
     onUpdate();
     _refreshCompareSubjects(panel);
     subjectSel.value = '';
-    attrSel.innerHTML = '<option value="">Attribute…</option>';
-    attrSel.disabled = true;
+    fillFields();
     fillPublishers(null);
     addBtn.disabled = true;
   });
@@ -1144,7 +1132,7 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
     else hiddenSet.add(name);
     const isActive = !hiddenSet.has(name);
     btn.classList.toggle('active', isActive);
-    btn.setAttribute('aria-pressed', String(isActive));
+    btn.querySelector('.plot-legend-label')?.setAttribute('aria-pressed', String(isActive));
     if (opts.restart) opts.restart();
     else _plotRestart();
   });
@@ -1297,6 +1285,13 @@ const _openMarkerForm = (plotArea, cfg, marker, isNew, onDone) => {
 
   const form = document.createElement('div');
   form.className = 'plot-marker-form';
+  const closeForm = () => {
+    form.remove();
+    document.removeEventListener('mousedown', closeIfOutside);
+  };
+  const closeIfOutside = (e) => {
+    if (!form.contains(e.target)) closeForm();
+  };
 
   const labelInput = document.createElement('input');
   labelInput.type = 'text';
@@ -1352,14 +1347,14 @@ const _openMarkerForm = (plotArea, cfg, marker, isNew, onDone) => {
       if (!cfg.markers) cfg.markers = [];
       cfg.markers.push(marker);
     }
-    form.remove();
+    closeForm();
     onDone();
   });
 
   const cancelBtn = document.createElement('button');
   cancelBtn.type = 'button';
   cancelBtn.textContent = 'Cancel';
-  cancelBtn.addEventListener('click', () => form.remove());
+  cancelBtn.addEventListener('click', () => closeForm());
 
   btnRow.appendChild(saveBtn);
   if (!isNew) {
@@ -1370,7 +1365,7 @@ const _openMarkerForm = (plotArea, cfg, marker, isNew, onDone) => {
     delBtn.addEventListener('click', () => {
       const idx = cfg.markers.indexOf(marker);
       if (idx >= 0) cfg.markers.splice(idx, 1);
-      form.remove();
+      closeForm();
       onDone();
     });
     btnRow.appendChild(delBtn);
@@ -1389,13 +1384,18 @@ const _openMarkerForm = (plotArea, cfg, marker, isNew, onDone) => {
   plotArea.appendChild(form);
   labelInput.focus();
 
-  const close = (e) => {
-    if (!form.contains(e.target) && form.parentNode) {
-      form.remove();
-      document.removeEventListener('mousedown', close);
+  // Enter in a text box saves, Escape cancels, as does a click outside.
+  form.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.type === 'text') {
+      e.preventDefault();
+      saveBtn.click();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeForm();
     }
-  };
-  setTimeout(() => document.addEventListener('mousedown', close), 0);
+  });
+  setTimeout(() => document.addEventListener('mousedown', closeIfOutside), 0);
 };
 
 const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPanelsH) => {
@@ -1942,21 +1942,23 @@ const updatePlotLegend = (plotArea, allSeries, hidden) => {
       const threshAttr = s._threshold ? ` data-threshold-idx="${s._thresholdIdx}"` : '';
       let styleHtml = '';
       let removeHtml = '';
+      // Buttons, so the keyboard reaches them: show or hide, line style, remove.
+      const name = escapeHtml(s.name);
       if (s._derived || s._threshold || isCompare) {
         const st = s._lineStyle || 'solid';
-        styleHtml = `<span class="plot-legend-style" data-style="${st}" title="Click to change line style"></span>`;
-        removeHtml = `<span class="plot-legend-remove" aria-label="Remove series">×</span>`;
+        styleHtml = `<button type="button" class="plot-legend-style" data-style="${st}" title="Click to change line style" aria-label="Line style of ${name}"></button>`;
+        removeHtml = `<button type="button" class="plot-legend-remove" aria-label="Remove ${name}">×</button>`;
       }
       const cls = (s._derived ? ' plot-legend-derived' : s._threshold ? ' plot-legend-threshold' : '')
         + (s._silent ? ' plot-legend-silent' : '');
       const silentAttr = s._silent ? ' title="Nothing to plot: no data from it yet, or none kept"' : '';
-      return `<div class="plot-legend-item${isActive ? ' active' : ''}${cls}" data-series="${escapeHtml(s.name)}"${derivedAttr}${threshAttr}${silentAttr} aria-pressed="${isActive}"><span class="plot-legend-swatch" style="background:${_safeColor(color)}" data-hex="${escapeHtml(color)}"></span>${styleHtml}<span class="plot-legend-label">${escapeHtml(s.name)}</span>${removeHtml}</div>`;
+      return `<div class="plot-legend-item${isActive ? ' active' : ''}${cls}" data-series="${name}"${derivedAttr}${threshAttr}${silentAttr}><span class="plot-legend-swatch" style="background:${_safeColor(color)}" data-hex="${escapeHtml(color)}"></span>${styleHtml}<button type="button" class="plot-legend-label" aria-pressed="${isActive}">${name}</button>${removeHtml}</div>`;
     }).join('');
   } else {
     for (const item of legend.querySelectorAll('.plot-legend-item[data-series]')) {
       const isActive = !hidden.has(item.dataset.series);
       item.classList.toggle('active', isActive);
-      item.setAttribute('aria-pressed', String(isActive));
+      item.querySelector('.plot-legend-label')?.setAttribute('aria-pressed', String(isActive));
     }
   }
 };

@@ -131,16 +131,22 @@ const initCompareView = () => {
   savedBtn.className = 'compare-saved-btn';
   savedBtn.type = 'button';
   savedBtn.textContent = 'Saved graphs ▾';
+  savedBtn.setAttribute('aria-haspopup', 'true');
+  savedBtn.setAttribute('aria-expanded', 'false');
   savedBtn.addEventListener('click', (e) => {
     e.stopPropagation();
     _refreshSavedMenu(savedMenu, cardsContainer);
-    savedMenu.classList.toggle('hidden');
+    showSavedMenu(savedMenu.classList.contains('hidden'));
   });
   savedWrap.appendChild(savedBtn);
   const savedMenu = document.createElement('div');
   savedMenu.className = 'compare-saved-menu hidden';
   savedWrap.appendChild(savedMenu);
   toolbar.appendChild(savedWrap);
+  const showSavedMenu = (open) => {
+    savedMenu.classList.toggle('hidden', !open);
+    savedBtn.setAttribute('aria-expanded', String(open));
+  };
 
   const sep = document.createElement('div');
   sep.className = 'compare-toolbar-sep';
@@ -211,9 +217,9 @@ const initCompareView = () => {
   });
   toolbar.appendChild(importBtn);
 
-  document.addEventListener('click', () => savedMenu.classList.add('hidden'));
+  document.addEventListener('click', () => showSavedMenu(false));
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') savedMenu.classList.add('hidden');
+    if (e.key === 'Escape') showSavedMenu(false);
   });
 
   container.appendChild(toolbar);
@@ -243,10 +249,11 @@ const _refreshSavedMenu = (menu, cardsContainer) => {
     const config = state.savedCompareConfigs[ci];
     const item = document.createElement('div');
     item.className = 'compare-saved-item';
-    const nameSpan = document.createElement('span');
-    nameSpan.className = 'compare-saved-name';
-    nameSpan.textContent = config.name || 'Untitled';
-    nameSpan.addEventListener('click', () => {
+    const nameBtn = document.createElement('button');  // a button: the keyboard opens it too
+    nameBtn.type = 'button';
+    nameBtn.className = 'compare-saved-name';
+    nameBtn.textContent = config.name || 'Untitled';
+    nameBtn.addEventListener('click', () => {
       menu.classList.add('hidden');
       const graph = newCompareGraph(config);
       state.compareGraphs.push(graph);
@@ -255,8 +262,9 @@ const _refreshSavedMenu = (menu, cardsContainer) => {
       cardsContainer.appendChild(card);
       _renderOneGraph(graph);
     });
-    item.appendChild(nameSpan);
+    item.appendChild(nameBtn);
     const delBtn = document.createElement('button');
+    delBtn.type = 'button';
     delBtn.className = 'compare-saved-delete';
     delBtn.textContent = '×';
     delBtn.setAttribute('aria-label', `Delete ${config.name}`);
@@ -296,6 +304,7 @@ const _buildGraphCard = (graph) => {
   nameInput.type = 'text';
   nameInput.className = 'compare-graph-name';
   nameInput.placeholder = 'Untitled';
+  nameInput.setAttribute('aria-label', 'Graph name');
   nameInput.value = graph.name;
   nameInput.addEventListener('input', () => {
     graph.name = nameInput.value;
