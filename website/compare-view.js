@@ -541,7 +541,7 @@ const _renderCompareGraphNow = (graph, plotArea) => {
     for (let i = 0; i < graph.thresholds.length; i++) {
       const th = graph.thresholds[i];
       legendSeries.push({
-        name: `${th.label || th.value}`,
+        name: thresholdName(th),
         color: th.color || '#ef4444',
         _threshold: true,
         _thresholdIdx: i,

@@ -1545,6 +1545,31 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: a threshold's pill hides its line, and its style stays a line")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    try:
+        await page.wait_for_timeout(300)
+        card = await compare_graph(page, (1100, "value"))
+        await card.locator('[aria-label="Threshold value"]').fill("82")
+        await card.locator('[aria-label="Threshold label"]').fill("limit")
+        await card.locator(".plot-threshold-picker .plot-compare-add").click()
+        await page.wait_for_timeout(300)
+        pill = card.locator('.plot-legend-item[data-series="limit"]')
+        await pill.locator(".plot-legend-label").click()
+        await page.wait_for_timeout(300)
+        assert await card.locator(".plot-threshold").count() == 0, "Hidden from the legend, the threshold is still drawn"
+        await pill.locator(".plot-legend-label").click()
+        await page.wait_for_timeout(300)
+        assert await card.locator(".plot-threshold").count() == 1, "Shown again, the threshold is not drawn"
+        for _ in range(4):
+            await pill.locator(".plot-legend-style").click()
+        style = await page.evaluate("state.compareGraphs[0].thresholds[0].style")
+        assert style == "solid", f"Four clicks on its style from dashed made it {style!r}"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

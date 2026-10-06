@@ -1104,7 +1104,8 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
       const styles = LINE_STYLES;
       const th = _legendGetThreshold(sbtn);
       if (th) {
-        th.style = styles[(styles.indexOf(th.style || 'dashed') + 1) % styles.length];
+        const lineStyles = Object.keys(THRESHOLD_STYLES);  // a threshold is a line: no marker shapes
+        th.style = lineStyles[(lineStyles.indexOf(th.style || 'dashed') + 1) % lineStyles.length];
         _legendCommit();
         return;
       }
@@ -1183,6 +1184,8 @@ const _renderGrid = (container, xScale, yScale, w, h) => {
 };
 
 const THRESHOLD_STYLES = { solid: 'none', dashed: '6 3', dotted: '2 3', dashdot: '6 3 2 3', longdash: '12 4' };
+// A threshold's name in the legend: its label, else its value.
+const thresholdName = (th) => `${th.label || th.value}`;
 const MARKER_SHAPES = {
   circle: (x, y, r) => `M${x - r},${y}a${r},${r} 0 1,0 ${r * 2},0a${r},${r} 0 1,0 -${r * 2},0`,
   square: (x, y, r) => `M${x - r},${y - r}h${r * 2}v${r * 2}h-${r * 2}Z`,
@@ -1480,7 +1483,9 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
   };
   let [vMin, vMax] = valueRange(true);
   if (!isFinite(vMin)) [vMin, vMax] = valueRange(false);
-  for (const th of cfg?.thresholds || []) {
+  // A threshold hidden from the legend is neither drawn nor kept on the axis.
+  const thresholds = (cfg?.thresholds || []).filter((th) => !cfg._hidden?.has(thresholdName(th)));
+  for (const th of thresholds) {
     vMin = Math.min(vMin, th.value);
     vMax = Math.max(vMax, th.value);
   }
@@ -1503,7 +1508,7 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
   if (showGrid) _renderGrid(overlay, xScale, yScale, w, panelH);
   else overlay.select('.plot-grid').remove();
 
-  _renderThresholds(overlay, cfg?.thresholds, yScale, w);
+  _renderThresholds(overlay, thresholds, yScale, w);
   _renderMarkers(overlay, cfg?.markers, xScale, panelH);
   _renderDrawings(overlay, cfg?.drawings, xScale, panelH);
 
