@@ -5355,6 +5355,18 @@ details.svc-history-entry[open] > summary::before {
   margin-right: 0.25rem;
 }
 
+/* Compact, at the strip's end (see applyRowDensity) */
+.table-density-btn {
+  margin-left: auto;
+}
+
+/* The IDs outrank every cell rule, the fav and action cells' padding included. */
+#nodesTable.table-compact .tabulator-row .tabulator-cell,
+#subjectsTable.table-compact .tabulator-row .tabulator-cell {
+  padding-top: 0.1875rem;
+  padding-bottom: 0.1875rem;
+}
+
 /* A node reached by keyboard */
 .graph-node:focus { outline: none; }
 .graph-node:focus-visible .graph-device-circle,

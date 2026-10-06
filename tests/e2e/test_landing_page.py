@@ -870,7 +870,7 @@ async def _(page):
     strip = page.locator("#nodesStatus")
     await page.wait_for_function("document.getElementById('nodesStatus').innerText.includes('unusual health')", timeout=3000)
     text = " ".join((await strip.inner_text()).split())
-    assert text == "6 nodes 1 offline 1 displaced 2 unusual health", f"Strip: {text!r}"
+    assert text == "6 nodes 1 offline 1 displaced 2 unusual health Compact", f"Strip: {text!r}"
     ids = "nodesTabulator.getRows('active').map(r => r.getData().id)"
     await strip.locator('[data-focus="health"]').click()
     try:
@@ -878,6 +878,21 @@ async def _(page):
     finally:
         await strip.locator('[data-focus="health"]').click()
     assert len(await page.evaluate(ids)) == 6, "Clicked again, the count lets the rows go"
+
+
+@test("Tables: Compact makes the rows of both tables shorter, and is remembered")
+async def _(page):
+    height = "Math.round(document.querySelector('#nodesTable .tabulator-row').getBoundingClientRect().height)"
+    normal = await page.evaluate(height)
+    await page.locator("#nodesStatus [data-density]").click()
+    try:
+        await page.wait_for_function(f"{height} < {normal}", timeout=3000)
+        # Settings are written a moment after a change.
+        await page.wait_for_function(
+            "JSON.parse(localStorage.getItem('cynitor.dashboard.settings.v1')).compactRows === true", timeout=2000)
+    finally:
+        await page.locator("#nodesStatus [data-density]").click()
+    await page.wait_for_function(f"{height} === {normal}", timeout=3000)
 
 
 @test("Tables: a node that lost its node-ID keeps its alias, and is forgotten only when confirmed")

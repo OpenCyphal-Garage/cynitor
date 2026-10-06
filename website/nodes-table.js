@@ -331,6 +331,22 @@ const NODE_FOCUS_KINDS = [
   { key: 'noinfo', label: 'not answering', level: 'warn', test: (r) => !r._offline && r._noInfo },
 ];
 
+// Compact rows, for a long table: both tables, toggled in either's strip. A
+// hidden table measures its rows again when shown; redrawing it while hidden
+// is what left tables blank.
+const applyRowDensity = () => {
+  for (const [id, tabulator] of [['nodesTable', nodesTabulator], ['subjectsTable', subjectsTabulator]]) {
+    el(id).classList.toggle('table-compact', state.compactRows);
+    if (tabulator && !el(id).classList.contains('hidden')) tabulator.redraw(true);
+  }
+};
+
+const toggleRowDensity = () => {
+  state.compactRows = !state.compactRows;
+  saveSettings();
+  applyRowDensity();
+};
+
 const setNodesFocus = (key) => {
   state.nodesFocus = key;
   const kind = NODE_FOCUS_KINDS.find((k) => k.key === key);
@@ -412,6 +428,7 @@ const initNodesTable = () => {
   const settings = readSettings();
 
   const favPinSorter = makeFavPinSorter({ ghostField: '_ghost' });
+  el('nodesTable').classList.toggle('table-compact', state.compactRows);  // measured so from the start
 
   const colDef = (title, field, opts = {}) => {
     const def = { title, field, headerFilter: 'input', ...opts };
@@ -481,8 +498,9 @@ const initNodesTable = () => {
 
   el('nodesStatus').addEventListener('click', (e) => {
     const key = e.target.closest('[data-focus]')?.dataset.focus;
-    if (!key) return;
-    setNodesFocus(state.nodesFocus === key ? null : key);
+    if (e.target.closest('[data-density]')) toggleRowDensity();
+    else if (key) setNodesFocus(state.nodesFocus === key ? null : key);
+    else return;
     renderNodesTable();
   });
 

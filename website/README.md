@@ -73,6 +73,7 @@ Open in browser:
   - Health indicators: NOMINAL, ADVISORY, CAUTION, WARNING
   - VSSC: the heartbeat's vendor-specific status code (0, the usual, muted; hex in its tooltip)
   - Responsive — hides less-important columns on narrow screens
+  - Compact (at the end of either table's strip): both tables' rows at about 70% height, remembered
   - Keyboard: Tab stops at the table; ↓/↑ go from row to row (into the rows at the selected one, else the first), Home/End to the ends, Enter or Space acts as a click (selects a node; in Subjects, opens a plot or call card), F2 renames a node, Escape leaves the rows. Same in the Subjects table, F2 aside
 - View tabs (bottom of sidebar):
   - **Nodes** — node-centric table with per-node detail panel; ghost rows for displaced identities pinned to bottom. A strip over the table counts what needs a look, as the Graph's does (offline, displaced, unusual health or mode, and nodes that answer no request); clicking a count lists only those rows, clicking it again lists all. A ghost row keeps the alias given to its device, and its ✕ forgets the device only after asking. Types are named one way throughout (`uavcan.node.Heartbeat.1.0`), whether the backend gives a type's name or its Python class's

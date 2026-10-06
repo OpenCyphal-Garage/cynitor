@@ -209,7 +209,9 @@ const renderSubjectsStatus = (rows) => {
 const _onSubjectsStatusClick = (e) => {
   const kind = e.target.closest('[data-kind]')?.dataset.kind;
   const focus = e.target.closest('[data-focus]')?.dataset.focus;
-  if (kind) {
+  if (e.target.closest('[data-density]')) {
+    toggleRowDensity();
+  } else if (kind) {
     state.subjectsKind = kind;
     saveSettings();
   } else if (focus) {
@@ -364,6 +366,7 @@ const initSubjectsTable = () => {
     def.sorter = subjectFavPinSorter(opts.sorter || 'string');
     return def;
   };
+  el('subjectsTable').classList.toggle('table-compact', state.compactRows);  // measured so from the start
 
   subjectsTabulator = new Tabulator('#subjectsTable', {
     data: buildSubjectsRows(),
