@@ -156,7 +156,7 @@ The compare view provides independent graphs for multi-series comparison.
 
 ### Features
 
-- **Multi-series overlay** — add any subject + attribute from the network to a graph; for a subject several nodes publish, also pick the publisher (`S1300 · value · n21`), so their values plot apart. Series saved before keep plotting what any publisher sends
+- **Multi-series overlay** — add any subject + attribute from the network to a graph. A series keeps to the node it was added from (`S1300 · value · n21`), so a node that starts publishing the subject later does not mix in; for a subject several nodes publish, pick which. Series saved before publishers were told apart keep plotting what any publisher sends
 - **Derived series** — computed from raw series: delta, ratio, moving average, min/max envelope, rate of change
 - **Thresholds** — horizontal reference lines with labels
 - **Interactive legend** — three-zone pills: click swatch to change color, click style indicator to cycle line style (solid/dashed/dotted/dashdot/longdash + circle/square/triangle/diamond markers), click label to toggle visibility, click × to remove

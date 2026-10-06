@@ -1257,6 +1257,26 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+COMPARE_LEGEND = "(c) => [...c.querySelectorAll('.plot-legend-item')].map(e => e.dataset.series)"
+
+
+@test("Compare: a series keeps to the node it was added from")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    try:
+        await page.wait_for_timeout(300)
+        card = await compare_graph(page, (1400, "value"))  # node 10 alone publishes 1400
+        await page.evaluate("e2eCompare.join1400 = true")  # then node 20 does too
+        await page.wait_for_timeout(600)
+        values = await page.evaluate(
+            "[...new Set(plotData(compareSeriesKey(state.compareGraphs[0].series[0])).map(p => p.v))]")
+        assert values == [10], f"The series of node 10's 1400 plots {values}"
+        legend = await card.evaluate(COMPARE_LEGEND)
+        assert legend == ["S1400 · value · n10"], f"The legend reads {legend}"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

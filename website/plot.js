@@ -764,7 +764,9 @@ const buildComparePanel = (graph, onUpdate) => {
   defAttr.textContent = 'Attribute…';
   attrSel.appendChild(defAttr);
 
-  // Which publisher, for a subject several nodes publish: their values plot apart.
+  // Which publisher: a series keeps to one node, so their values plot apart,
+  // and a node that starts publishing the subject later does not mix in. The
+  // list shows when there is a choice.
   const pubSel = document.createElement('select');
   pubSel.className = 'plot-compare-publisher hidden';
   pubSel.setAttribute('aria-label', 'Publisher to compare');
@@ -835,7 +837,7 @@ const buildComparePanel = (graph, onUpdate) => {
     const attr = attrSel.value;
     if (!sid || !attr) return;
     const series = { subjectId: sid, attribute: attr };
-    if (!pubSel.classList.contains('hidden')) series.nodeId = Number(pubSel.value);
+    if (pubSel.value !== '') series.nodeId = Number(pubSel.value);
     if (graph.series.some((c) => compareSeriesKey(c) === compareSeriesKey(series))) return;
     graph.series.push(series);
     onUpdate();
