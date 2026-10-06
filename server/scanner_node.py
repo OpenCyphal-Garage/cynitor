@@ -53,6 +53,11 @@ class ScannerNode:
     REGISTER_TIMEOUT = 2.0
     SERVICE_CALL_TIMEOUT = 5.0
     MESSAGE_RATE_WINDOW_SECONDS = 10
+    # A publisher counts in its subject's total rate while it still sends: its
+    # last message within three of its periods, two seconds at least. The
+    # dashboard calls one quiet for longer silent by the same rule.
+    PUBLISHING_PERIODS = 3
+    PUBLISHING_MIN_SECONDS = 2.0
     MAX_SUBJECT_ID = 8191
     MAX_SERVICE_ID = 511
     MAX_REGISTERS = 256
@@ -1143,20 +1148,30 @@ class ScannerNode:
             return 0.0
         return (len(times) - 1) / (times[-1] - times[0])
 
+    def _still_publishing(self, times: collections.deque, rate: float, now: float) -> bool:
+        """Whether a publisher whose messages came at ``times`` still sends at ``now``."""
+        period = 1.0 / rate if rate > 0 else 0.0
+        return bool(times) and now - times[-1] <= max(self.PUBLISHING_MIN_SECONDS, self.PUBLISHING_PERIODS * period)
+
     def _track_rate(self, subject_id: int, node_id: int, timestamp: float) -> tuple[float, float]:
         """Record one message and return (this publisher's rate, the whole subject's rate).
 
         Rates are kept per publisher: several nodes publish the same subject
         (every node publishes Heartbeat), and a per-subject rate would credit
-        each of them with all the others' traffic.
+        each of them with all the others' traffic. The subject's rate counts
+        only the publishers still sending: one that stopped would otherwise
+        keep its full rate in it until its messages left the window.
         """
         times = self._rate_timestamps.setdefault((subject_id, node_id), collections.deque())
         times.append(timestamp)
         publisher_rate = self._windowed_rate(times, timestamp)
-        subject_rate = sum(
-            self._windowed_rate(other, timestamp)
-            for (sid, _nid), other in self._rate_timestamps.items() if sid == subject_id
-        )
+        subject_rate = 0.0
+        for (sid, _nid), other in self._rate_timestamps.items():
+            if sid != subject_id:
+                continue
+            other_rate = self._windowed_rate(other, timestamp)
+            if self._still_publishing(other, other_rate, timestamp):
+                subject_rate += other_rate
         return round(publisher_rate, 1), round(subject_rate, 1)
 
     @staticmethod

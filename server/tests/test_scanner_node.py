@@ -240,6 +240,24 @@ class TestRate:
         _, subject_rate = node._track_rate(1, 6, 100.0)
         assert subject_rate == 0.0
 
+    def test_publisher_that_stops_leaves_subject_rate_within_three_periods(self):
+        """Not 10 s later, when its messages leave the window: the dashboard calls it silent by then."""
+        node = make_rate_node()
+        for tick in range(50):  # both publishers at 10 Hz for 5 s
+            node._track_rate(1, 5, tick / 10)
+            node._track_rate(1, 6, tick / 10 + 0.05)
+        for tick in range(50, 80):  # 5 stops; 6 goes on for 3 s
+            _, subject_rate = node._track_rate(1, 6, tick / 10 + 0.05)
+        assert subject_rate == 10.0
+
+    def test_slow_publisher_still_counts_between_its_messages(self):
+        node = make_rate_node()
+        for t in (0.0, 5.0):  # 0.2 Hz: three periods are 15 s
+            node._track_rate(1, 5, t)
+        node._track_rate(1, 6, 8.0)
+        _, subject_rate = node._track_rate(1, 6, 9.0)
+        assert subject_rate == 1.2  # 0.2 Hz from 5, 1 Hz from 6
+
 
 class TestTransferTimes:
     def test_uses_driver_timestamp(self):
