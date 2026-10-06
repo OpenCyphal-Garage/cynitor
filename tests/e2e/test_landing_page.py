@@ -1308,6 +1308,41 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+COMPARE_NOTE = "() => document.querySelector('.compare-graph-card .plot-empty-window')?.textContent || ''"
+
+
+async def compare_note_is(page, expected):
+    try:
+        await page.wait_for_function(f"({COMPARE_NOTE})() === {expected!r}", timeout=2500)
+    except Exception:
+        shown = await page.evaluate(COMPARE_NOTE)
+        raise AssertionError(f"The plot says {shown!r}, not {expected!r}") from None
+
+
+@test("Compare: a graph says why it shows nothing")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    try:
+        await page.wait_for_timeout(300)
+        await compare_graph(page, (1100, "value"))
+        await compare_note_is(page, "")
+        await page.evaluate("state.canConnected = false")
+        await compare_note_is(page, "CAN bus not connected")
+        await page.evaluate("state.dashboardConnected = false")
+        await compare_note_is(page, "Not connected to backend")
+        await page.evaluate("state.dashboardConnected = true; state.canConnected = true")
+        await compare_note_is(page, "")
+        # The bus goes quiet: after a while nothing is left in a 30 s window.
+        await page.locator('.compare-graph-card .plot-window-btn[data-secs="30"]').click()
+        await page.evaluate("""() => { clearInterval(window.e2eCompareFeed);
+            for (const points of state.subjectHistory.values()) for (const p of points) p.t -= 100; }""")
+        await compare_note_is(page, "No data in view")
+        await page.evaluate("state.subjectHistory.clear()")
+        await compare_note_is(page, "Waiting for data…")
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

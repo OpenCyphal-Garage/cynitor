@@ -283,23 +283,30 @@ const HEALTH_CSS_COLOR = { ok: 'var(--ok)', warn: 'var(--warn)', err: 'var(--err
 const getHealthCssClass = (health) => HEALTH_CSS_CLASS[classifyHealth(health)] || '';
 const getHealthColor = (health) => HEALTH_CSS_COLOR[classifyHealth(health)] || 'var(--muted)';
 
-const connectionPlaceholder = (context) => {
+// Why nothing can arrive from the bus, as svcStateMsg's parts; null when it can.
+const connectionProblem = (context) => {
+  const spinner = '<span class="svc-spinner"></span>';
   if (!state.dashboardConnected) {
     if (state.dashboardConnecting) {
-      return svcStateMsg('<span class="svc-spinner"></span>', 'Connecting to backend…', 'Reaching the backend server.');
+      return { icon: spinner, message: 'Connecting to backend…', helper: 'Reaching the backend server.' };
     }
     if (state.pendingReconnect) {
-      return svcStateMsg('<span class="svc-spinner"></span>', 'Reconnecting to backend…', 'Restoring previous session.');
+      return { icon: spinner, message: 'Reconnecting to backend…', helper: 'Restoring previous session.' };
     }
-    return svcStateMsg('⏻', 'Not connected to backend', `Connect to the backend server to ${context}.`);
+    return { icon: '⏻', message: 'Not connected to backend', helper: `Connect to the backend server to ${context}.` };
   }
   if (state.canState === CONN.CONNECTING) {
-    return svcStateMsg('<span class="svc-spinner"></span>', 'Connecting to CAN interface…', 'Establishing CAN bus connection.');
+    return { icon: spinner, message: 'Connecting to CAN interface…', helper: 'Establishing CAN bus connection.' };
   }
   if (state.canState !== CONN.CONNECTED) {
-    return svcStateMsg('⛓', 'CAN bus not connected', `Connect a CAN interface to ${context}.`);
+    return { icon: '⛓', message: 'CAN bus not connected', helper: `Connect a CAN interface to ${context}.` };
   }
   return null;
+};
+
+const connectionPlaceholder = (context) => {
+  const problem = connectionProblem(context);
+  return problem ? svcStateMsg(problem.icon, problem.message, problem.helper) : null;
 };
 
 // Same as connectionPlaceholder but treats an active replay session as a

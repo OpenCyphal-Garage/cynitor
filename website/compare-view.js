@@ -391,6 +391,21 @@ const _graphPoints = (graph, key, raw = false) => {
   return graph._frozen.get(id);
 };
 
+// Said over a graph that shows nothing, or why it stopped: nothing can
+// arrive (a replay aside), nothing came yet, or none of it is in view.
+const _compareNote = (problem, compareSeries, xScale) => {
+  if (problem) return problem.message;
+  if (!compareSeries.length) return 'Waiting for data…';
+  const [tLeft, tRight] = xScale.domain();
+  const inView = (data) => {
+    for (let i = data.length - 1; i >= 0 && data[i].t >= tLeft; i--) {
+      if (data[i].t <= tRight) return true;
+    }
+    return false;
+  };
+  return compareSeries.some((s) => inView(s.data)) ? '' : 'No data in view';
+};
+
 const _renderCompareGraphNow = (graph, plotArea) => {
   if (!plotArea) return;
   graph._updateFillRate?.();
@@ -448,13 +463,17 @@ const _renderCompareGraphNow = (graph, plotArea) => {
     return;
   }
 
+  // A live graph draws at least once a second, data or not: its time axis
+  // goes on, and its note follows the bus.
+  const problem = state.replayActive ? null : connectionProblem('plot');
+  const liveKey = graph.paused ? '' : `${Math.floor(Date.now() / 1000)}:${problem?.message || ''}`;
   const lastPts = compareSeries.map(s => s.data.length ? s.data[s.data.length - 1].t : 0);
   const hiddenKey = [...graph._hidden].sort().join(',');
   const thKey = (graph.thresholds || []).map(t => `${t.value}:${t.label || ''}:${t.color || ''}:${t.style || ''}`).join(';');
   const mkKey = (graph.markers || []).map(m => `${m.t}:${m.label}:${m.color || ''}:${m.lineStyle || ''}`).join(';');
   const dwKey = (graph.drawings || []).length;
   const styleKey = compareSeries.map(s => s._lineStyle || '').join(',');
-  const fp = `cg:${graph.id}:${compareSeries.length}:${lastPts.join(',')}:w${graph.timeWindow}:p${graph.paused ? graph.pausedAt : 0}:s${graph.smooth}:d${graph.disconnectPoints}:k${graph.stroke}:g${graph.grid}:t${thKey}:m${mkKey}:dw${dwKey}:h${hiddenKey}:ls${styleKey}:z${graph._zoom || 1}:pan${graph._panOffset || 0}`;
+  const fp = `cg:${graph.id}:${compareSeries.length}:${lastPts.join(',')}:w${graph.timeWindow}:p${graph.paused ? graph.pausedAt : 0}:s${graph.smooth}:d${graph.disconnectPoints}:k${graph.stroke}:g${graph.grid}:t${thKey}:m${mkKey}:dw${dwKey}:h${hiddenKey}:ls${styleKey}:z${graph._zoom || 1}:pan${graph._panOffset || 0}:l${liveKey}`;
   const rect = plotArea.getBoundingClientRect();
   const sizeKey = `${Math.round(rect.width)}x${Math.round(rect.height)}`;
   const fullFp = `${fp}:${sizeKey}`;
@@ -499,7 +518,7 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   g.select('.plot-crosshair').attr('y1', 0).attr('y2', totalPanelsH);
 
   bindPlotTooltip(g, plotArea, visibleSeries, xScale, w, HEADER_H, rect, graph, () => _renderOneGraph(graph));
-  setPlotNote(plotArea, compareSeries.length ? '' : 'Waiting for data…');
+  setPlotNote(plotArea, _compareNote(problem, compareSeries, xScale));
   if (graph.thresholds?.length) {
     for (let i = 0; i < graph.thresholds.length; i++) {
       const th = graph.thresholds[i];

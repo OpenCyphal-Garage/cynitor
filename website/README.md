@@ -167,6 +167,7 @@ The compare view provides independent graphs for multi-series comparison.
 - **Presets** — save/load named graph configurations
 - **Export/Import** — full workspace export/import as JSON files
 - **Per-graph controls** — time window, fill rate interpolation, stroke size, disconnected points, grid
+- **Says why a plot is empty** — not connected to the backend, CAN bus not connected, waiting for data, or no data in view; a live graph's time axis goes on when data stops
 
 ## Troubleshooting
 
