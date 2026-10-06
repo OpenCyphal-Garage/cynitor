@@ -205,6 +205,8 @@ const bind = () => {
   const selectSubjectCard = (card) => {
     const sid = Number(card.dataset.subject);
     state.selectedPlotSubject = sid;
+    state.plotPaused = false;  // a subject just picked plots live, as in Subjects
+    state.plotPausedAt = null;
     el('selectedNodeContent').querySelectorAll('.subject-card').forEach((c) => {
       c.classList.toggle('selected', Number(c.dataset.subject) === sid);
     });

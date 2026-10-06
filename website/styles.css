@@ -1664,6 +1664,7 @@ button:focus-visible,
 
 .plot-controls {
   display: flex;
+  flex-wrap: wrap;  /* beside the Nodes tab's cards, the plot is narrow */
   gap: 0.25rem;
   align-items: center;
   margin-left: 1rem;

@@ -944,6 +944,18 @@ async def _(page):
         await page.evaluate("clearSelectedNode()")
 
 
+@test("Plots: the Nodes tab's plot has the Subjects tab's controls, shared")
+async def _(page):
+    await page.evaluate("setSelectedNode(20)")
+    await page.locator('#selectedNodeContent .subject-card[data-subject="1300"]').click()
+    try:
+        await page.locator('.detail-plot-area .plot-window-btn[data-secs="300"]').click(timeout=3000)
+        assert await page.evaluate("state.plotTimeWindow") == 300, "5m did not set the plot window"
+        assert await page.locator(".detail-plot-area .plot-pause-btn").count() == 1, "No pause button"
+    finally:
+        await page.evaluate("state.plotTimeWindow = 60; saveSettings(); clearSelectedNode()")
+
+
 @test("Plots: Subjects plots each publisher of a subject apart")
 async def _(page):
     await page.locator("#viewTabSubjects").click()
@@ -972,7 +984,7 @@ async def _(page):
     try:
         await fill.check()
         await page.wait_for_timeout(3000)
-        behind = await page.evaluate(f"Date.now() / 1000 - _subjectsPlotCfg._smoothBufs.get('{key}').at(-1).t")
+        behind = await page.evaluate(f"Date.now() / 1000 - _detailPlotCfg._smoothBufs.get('{key}').at(-1).t")
         assert behind < 1.5, f"With Fill Rate on, the plot is {behind:.1f} s behind"
     finally:
         await fill.uncheck()

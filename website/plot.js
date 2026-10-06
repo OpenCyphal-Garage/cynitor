@@ -23,7 +23,9 @@ const DERIVED_TYPES = {
   ratio:       { label: 'Ratio (A/B)',        sources: 2, hasWindow: false },
 };
 
-const _subjectsPlotCfg = {
+// The detail panel's plot, in the Nodes and Subjects tabs alike: its controls
+// (pause, window, Fill Rate, line, points, grid) are the persisted plot* settings.
+const _detailPlotCfg = {
   get paused() { return state.plotPaused; },
   set paused(v) { state.plotPaused = v; },
   get pausedAt() { return state.plotPausedAt; },
@@ -364,7 +366,7 @@ const computePlotScales = (visible, w, totalPanelsH, compareSeries = [], cfg = n
     } else {
       anchor = replayAnchor ?? now;
     }
-  } else if (state.activeView === 'subjects') {
+  } else {
     windowSecs = state.plotTimeWindow;
     if (state.plotPaused && state.plotPausedAt) {
       anchor = state.plotPausedAt;
@@ -374,9 +376,6 @@ const computePlotScales = (visible, w, totalPanelsH, compareSeries = [], cfg = n
     } else {
       anchor = replayAnchor ?? now;
     }
-  } else {
-    windowSecs = 60;
-    anchor = replayAnchor ?? now;
   }
 
   let domainLeft, domainRight;
@@ -449,7 +448,7 @@ const buildPlotControls = (opts = {}) => {
   const wrap = document.createElement('div');
   wrap.className = 'plot-controls';
 
-  const cfg = opts.cfg || (state.activeView === 'subjects' ? _subjectsPlotCfg : null);
+  const cfg = opts.cfg || _detailPlotCfg;
   if (!cfg) return wrap;
 
   const invalidate = opts.invalidate || _plotInvalidate;
@@ -1351,8 +1350,6 @@ const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPane
   panelsEnter.append('text').attr('class', 'panel-label').attr('x', 4).attr('y', 11);
   panels.exit().remove();
 
-  const isSubjects = state.activeView === 'subjects';
-
   panelsG.selectAll('.plot-panel').each(function (d, i) {
     const yScale = yScales[i];
     const color = d.color || PLOT_COLORS[i % PLOT_COLORS.length];
@@ -1363,18 +1360,18 @@ const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPane
     if (state.plotGrid) _renderGrid(panel, xScale, yScale, w, panelH);
     else panel.select('.plot-grid').remove();
     const lineGen = d3.line().defined((p) => !p._gap).x((p) => xScale(p.t)).y((p) => yScale(p.v)).curve(d3.curveLinear);
-    const showLine = isSubjects ? !state.plotDisconnectPoints : true;
+    const showLine = !state.plotDisconnectPoints;
     panel.select('.panel-line')
       .attr('clip-path', `url(#panel-clip-${sid}-${_safeId(d.name)})`)
       .select('path')
       .attr('stroke', color)
-      .attr('stroke-width', isSubjects ? state.plotStroke : 1.5)
+      .attr('stroke-width', state.plotStroke)
       .attr('d', showLine && d.data.length >= 2 ? lineGen(d.data) : null)
       .attr('opacity', showLine && d.data.length >= 2 ? 1 : 0);
 
     const dotsG = panel.select('.panel-dots')
       .attr('clip-path', `url(#panel-clip-${sid}-${_safeId(d.name)})`);
-    if (isSubjects && state.plotDisconnectPoints) {
+    if (state.plotDisconnectPoints) {
       const visibleData = d.data.filter((p) => xScale(p.t) >= 0 && xScale(p.t) <= w);
       const maxDots = 600;
       const step = visibleData.length > maxDots ? Math.ceil(visibleData.length / maxDots) : 1;
@@ -1887,7 +1884,7 @@ const _plotRestart = () => { startPlotAnim(); };
 const renderPlot = (container) => {
   const plotArea = container.querySelector('.detail-plot-area');
   if (!plotArea) return;
-  _subjectsPlotCfg._updateFillRate?.();
+  _detailPlotCfg._updateFillRate?.();
 
   const sid = state.selectedPlotSubject;
   if (sid == null) {
@@ -1900,7 +1897,7 @@ const renderPlot = (container) => {
   // A node's own card plots that node's messages, not the subject's other publishers'.
   const publisher = !isSubjects && state.selectedDetailTab === 'publishers'
     && Number.isInteger(state.selectedNodeId) ? state.selectedNodeId : null;
-  const allSeries = collectPlotSeries(sid, isSubjects ? _subjectsPlotCfg : null, publisher);
+  const allSeries = collectPlotSeries(sid, _detailPlotCfg, publisher);
   allSeries.forEach((s, i) => {
     s.color = state.plotColorOverrides[`${sid}:${s.name}`] || PLOT_COLORS[i % PLOT_COLORS.length];
   });
@@ -1911,9 +1908,9 @@ const renderPlot = (container) => {
   }
 
   const lastPts = allSeries.map((s) => s.data.length ? s.data[s.data.length - 1].t : 0);
-  const fp = isSubjects
-    ? `${sid}:${allSeries.length}:${lastPts.join(',')}:v:s:w${state.plotTimeWindow}:p${state.plotPaused ? state.plotPausedAt : 0}:s${state.plotSmooth}:d${state.plotDisconnectPoints}:k${state.plotStroke}:g${state.plotGrid}`
-    : `${sid}:${allSeries.length}:${lastPts.join(',')}:v:n`;
+  const fp = `${sid}:${state.activeView}:${publisher ?? '-'}:${allSeries.length}:${lastPts.join(',')}`
+    + `:w${state.plotTimeWindow}:p${state.plotPaused ? state.plotPausedAt : 0}:s${state.plotSmooth}`
+    + `:d${state.plotDisconnectPoints}:k${state.plotStroke}:g${state.plotGrid}`;
   const rect = plotArea.getBoundingClientRect();
   const sizeKey = `${Math.round(rect.width)}x${Math.round(rect.height)}`;
   const fullFp = `${fp}:${sizeKey}`;
@@ -2001,13 +1998,13 @@ const startPlotAnim = () => {
   stopPlotAnim();
   if (state.detailPanelCollapsed || state.selectedPlotSubject == null) return;
   const container = el('selectedNodeContent');
-  if (state.activeView === 'subjects' && state.plotPaused) {
+  if (state.plotPaused) {
     renderPlot(container);
     return;
   }
   const tick = () => {
     if (state.detailPanelCollapsed) { state.plotTimer = null; return; }
-    if (state.activeView === 'subjects' && state.plotPaused) { state.plotTimer = null; return; }
+    if (state.plotPaused) { state.plotTimer = null; return; }
     if (state.activeView !== 'subjects') {
       const node = getSelectedNode();
       if (node?.has_disappeared) { state.plotTimer = null; return; }

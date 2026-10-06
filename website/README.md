@@ -86,7 +86,7 @@ Open in browser:
   - Subject cards: each subject displayed as an individual card with subject ID, message type, rate, live dot indicator, and key-value metrics. A publisher's card shows its own rate, a subscriber's the subject's over all publishers; once messages stop, the card says `silent` and keeps the last values
   - Servers tab: expandable service cards with request forms, response display, and persistent call history fetched from backend
   - History tab: node lifecycle events (health/mode changes, service calls) with time-range filtering
-  - Real-time D3 line plot: click a subject card to plot its numeric attributes over time (60-second scrolling window). A publisher's card plots that node's own messages; elsewhere (Subscribers tab, Subjects view) a subject several nodes publish plots one series per publisher (`value · n20`). A numeric array plots one series per element (`velocity[0]`, …, up to 16). At most 8 series show at first; the legend shows the others
+  - Real-time D3 line plot: click a subject card to plot its numeric attributes over time. Its controls (pause, time window, Fill Rate, line width, points, grid) are the Subjects tab's plot's, and the two share their settings. A publisher's card plots that node's own messages; elsewhere (Subscribers tab, Subjects view) a subject several nodes publish plots one series per publisher (`value · n20`). A numeric array plots one series per element (`velocity[0]`, …, up to 16). At most 8 series show at first; the legend shows the others
   - Plot legend: three-zone pills with color picker, line style cycling, visibility toggle, and remove
   - Resizable split between card list and plot area (drag handle)
   - Vertical resize handle between nodes table and detail panel
