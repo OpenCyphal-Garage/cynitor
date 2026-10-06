@@ -50,8 +50,9 @@ const subjectTypeFormatter = (cell) => {
   return `${escapeHtml(cell.getValue())}${setByUser}`;
 };
 
+// Services are marked, the fewer kind; the strip's toggle lists either kind alone.
 const kindFormatter = (cell) =>
-  `<span class="kind-badge kind-${cell.getValue() === 'Service' ? 'service' : 'subject'}">${escapeHtml(cell.getValue())}</span>`;
+  (cell.getValue() === 'Service' ? '<span class="kind-badge kind-service">Service</span>' : '');
 
 const subjectRateFormatter = (cell) => {
   if (cell.getRow().getData()._silent) return '<span class="status-warn">silent</span>';
@@ -151,6 +152,58 @@ const buildSubjectsRows = () => {
   }
 
   return rows;
+};
+
+// ── Status strip: what to list, and what needs a look (see renderStatusStrip) ──
+
+const SUBJECT_FOCUS_KINDS = [
+  { key: 'silent', label: 'silent', level: 'warn', test: (r) => r._silent },
+  { key: 'orphan', label: 'no publisher', level: 'warn', test: (r) => r.kind === 'Subject' && r.publishers === '-' },
+  { key: 'untyped', label: 'type unknown', level: 'warn', test: (r) => r._untyped },
+];
+const SUBJECT_KINDS = [['all', 'All'], ['Subject', 'Subjects'], ['Service', 'Services']];
+
+const _ofListedKind = (row) => state.subjectsKind === 'all' || row.kind === state.subjectsKind;
+
+const applySubjectsFilter = () => {
+  const focus = SUBJECT_FOCUS_KINDS.find((k) => k.key === state.subjectsFocus);
+  if (state.subjectsKind === 'all' && !focus) subjectsTabulator.clearFilter();
+  else subjectsTabulator.setFilter((row) => _ofListedKind(row) && (!focus || focus.test(row)));
+};
+
+const renderSubjectsStatus = (rows) => {
+  const strip = el('subjectsStatus');
+  if (!rows.length) {
+    strip.replaceChildren();
+    return;
+  }
+  const kinds = SUBJECT_KINDS.map(([key, label]) => `<button type="button" data-kind="${key}"`
+    + ` class="table-kind-btn${state.subjectsKind === key ? ' active' : ''}"`
+    + ` aria-pressed="${state.subjectsKind === key}">${label}</button>`).join('');
+  const subjects = rows.filter((r) => r.kind === 'Subject').length;
+  const services = rows.length - subjects;
+  const total = `${subjects} subject${subjects === 1 ? '' : 's'} · ${services} service${services === 1 ? '' : 's'}`;
+  const counts = renderStatusStrip(strip, total, SUBJECT_FOCUS_KINDS, rows.filter(_ofListedKind), state.subjectsFocus,
+    `<span class="table-status-kinds" role="group" aria-label="List">${kinds}</span>`);
+  if (state.subjectsFocus && !counts.some((k) => k.key === state.subjectsFocus)) {
+    state.subjectsFocus = null;
+    applySubjectsFilter();
+  }
+};
+
+const _onSubjectsStatusClick = (e) => {
+  const kind = e.target.closest('[data-kind]')?.dataset.kind;
+  const focus = e.target.closest('[data-focus]')?.dataset.focus;
+  if (kind) {
+    state.subjectsKind = kind;
+    saveSettings();
+  } else if (focus) {
+    state.subjectsFocus = state.subjectsFocus === focus ? null : focus;
+  } else {
+    return;
+  }
+  applySubjectsFilter();
+  refreshSubjectsTable();
 };
 
 const _subjectKey = (row) => row.kind === 'Service' ? `svc:${row.id}` : row.id;
@@ -326,8 +379,11 @@ const initSubjectsTable = () => {
     }
   });
 
+  el('subjectsStatus').addEventListener('click', _onSubjectsStatusClick);
+
   subjectsTabulator.on('tableBuilt', () => {
     _subjectsTableReady = true;
+    applySubjectsFilter();  // the kind listed last time
     const savedFilters = settings.subjectsHeaderFilters || {};
     const fields = new Set(subjectsTabulator.getColumns().map((c) => c.getField()));
     for (const [field, value] of Object.entries(savedFilters)) {
@@ -368,6 +424,7 @@ const refreshSubjectsTable = () => {
   if (!subjectsTabulator || !_subjectsTableReady || state.activeView !== 'subjects') return;
   _fetchMissingServiceSchemas();
   const data = buildSubjectsRows();
+  renderSubjectsStatus(data);
   if (!data.length) {
     closeSubjectsDetail();
     subjectsTabulator.clearData();
@@ -831,6 +888,8 @@ const switchView = (view) => {
   // Hide all content panes
   nodesEl.classList.add('hidden');
   subjectsEl.classList.add('hidden');
+  el('nodesStatus').classList.add('hidden');
+  el('subjectsStatus').classList.add('hidden');
   graphEl.classList.add('hidden');
   compareEl.classList.add('hidden');
   dsdlEl.classList.add('hidden');
@@ -841,6 +900,7 @@ const switchView = (view) => {
   if (view === 'subjects') {
     state.selectedPlotSubject = state._subjectsPlotSubject ?? null;
     subjectsEl.classList.remove('hidden');
+    el('subjectsStatus').classList.remove('hidden');
     stopPlotAnim();
     const card = state._stashedServiceCard;
     const hasPlot = state.selectedPlotSubject != null;
@@ -894,6 +954,7 @@ const switchView = (view) => {
     state.selectedPlotSubject = state._nodesPlotSubject ?? null;
     stopPlotAnim();
     nodesEl.classList.remove('hidden');
+    el('nodesStatus').classList.remove('hidden');
     _unparkTable(nodesTabulator, 'nodesTable');
     detailHandle.classList.remove('hidden');
     detailPanel.classList.remove('hidden');

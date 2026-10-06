@@ -829,6 +829,21 @@ async def _(page):
     assert grey != "rgb(102, 102, 102)", "The table under the rows is the theme's grey"
 
 
+@test("Tables: the Nodes strip counts what needs a look, and a count picks those rows out")
+async def _(page):
+    strip = page.locator("#nodesStatus")
+    await page.wait_for_function("document.getElementById('nodesStatus').innerText.includes('unusual health')", timeout=3000)
+    text = " ".join((await strip.inner_text()).split())
+    assert text == "6 nodes 1 offline 1 displaced 2 unusual health", f"Strip: {text!r}"
+    ids = "nodesTabulator.getRows('active').map(r => r.getData().id)"
+    await strip.locator('[data-focus="health"]').click()
+    try:
+        assert await page.evaluate(ids) == [21, 30], "'unusual health' picks out nodes 21 and 30"
+    finally:
+        await strip.locator('[data-focus="health"]').click()
+    assert len(await page.evaluate(ids)) == 6, "Clicked again, the count lets the rows go"
+
+
 @test("Tables: a node that lost its node-ID keeps its alias, and is forgotten only when confirmed")
 async def _(page):
     ghost = "uid:" + "aa" * 16
@@ -924,6 +939,22 @@ async def _(page):
     finally:
         await fill.uncheck()
         await page.evaluate("closeSubjectPlot()")
+
+
+@test("Tables: the Subjects strip lists one kind, and picks out the silent")
+async def _(page):
+    strip = page.locator("#subjectsStatus")
+    rows = "subjectsTabulator.getRows('active').map(r => r.getData()._rowId)"
+    await page.wait_for_function("document.getElementById('subjectsStatus').innerText.includes('1 silent')", timeout=3000)
+    try:
+        await strip.locator('[data-focus="silent"]').click()
+        assert await page.evaluate(rows) == ["sub:1100"], "'silent' picks out subject 1100"
+        await strip.locator('[data-focus="silent"]').click()
+        await strip.locator('[data-kind="Service"]').click()
+        assert await page.evaluate(rows) == [], "No node here serves anything"
+    finally:
+        await strip.locator('[data-kind="all"]').click()
+    assert len(await page.evaluate(rows)) == 4, "All lists every subject again"
 
 
 @test("Tables: Subjects says silent, and refreshes with nothing arriving")

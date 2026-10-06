@@ -313,6 +313,35 @@ const toggleHiddenPopover = () => {
   }
 };
 
+// What needs a look in the Nodes table, as the Graph's strip counts it, and
+// nodes that send heartbeats but answer no request (GetInfo).
+const NODE_FOCUS_KINDS = [
+  { key: 'offline', label: 'offline', level: 'err', test: (r) => r._offline && !r._ghost },
+  { key: 'displaced', label: 'displaced', level: 'err', test: (r) => r._ghost },
+  { key: 'health', label: 'unusual health', level: 'warn', test: (r) => !r._offline && !!getStatusClass('health', r.health) },
+  { key: 'mode', label: 'unusual mode', level: 'warn',
+    test: (r) => !r._offline && r.mode !== '-' && !!getStatusClass('mode', r.mode) },
+  { key: 'noinfo', label: 'not answering', level: 'warn', test: (r) => !r._offline && r._noInfo },
+];
+
+const setNodesFocus = (key) => {
+  state.nodesFocus = key;
+  const kind = NODE_FOCUS_KINDS.find((k) => k.key === key);
+  if (kind) nodesTabulator.setFilter(kind.test);
+  else nodesTabulator.clearFilter();
+};
+
+const renderNodesStatus = (rows) => {
+  const strip = el('nodesStatus');
+  if (!rows.length) {
+    strip.replaceChildren();
+    return;
+  }
+  const counts = renderStatusStrip(strip, `${rows.length} node${rows.length === 1 ? '' : 's'}`,
+    NODE_FOCUS_KINDS, rows, state.nodesFocus);
+  if (state.nodesFocus && !counts.some((k) => k.key === state.nodesFocus)) setNodesFocus(null);
+};
+
 const tablePlaceholder = () => {
   return eventSourcePlaceholder('discover CAN nodes')
     || svcStateMsg('<span class="svc-spinner"></span>', 'Waiting for nodes…', 'Listening on the CAN bus. Nodes will appear as they send heartbeats.');
@@ -435,6 +464,13 @@ const initNodesTable = () => {
     saveSettings();
   });
 
+  el('nodesStatus').addEventListener('click', (e) => {
+    const key = e.target.closest('[data-focus]')?.dataset.focus;
+    if (!key) return;
+    setNodesFocus(state.nodesFocus === key ? null : key);
+    renderNodesTable();
+  });
+
   nodesTabulator.on('tableBuilt', () => {
     _nodesTableReady = true;
     const savedFilters = settings.headerFilters || {};
@@ -456,6 +492,7 @@ const renderNodesTable = () => {
   if (!nodesTabulator || !_nodesTableReady) return;
 
   const data = buildTableData();
+  renderNodesStatus(data);
 
   if (!data.length) {
     nodesTabulator.clearData();

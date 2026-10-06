@@ -92,6 +92,9 @@ const state = {
   favouriteSubjectIds: new Set(),
   hiddenSubjectIds: new Set(),
   subjectsTableSort: { key: 'id', dir: 'asc' },
+  subjectsKind: 'all',   // what the Subjects table lists: 'all', 'Subject' or 'Service'
+  nodesFocus: null,      // the kind picked out in a table's status strip, or null
+  subjectsFocus: null,
   recordings: [],
   activeRecordingId: null,
   recordBuffer: null,
@@ -373,6 +376,21 @@ const patchChildren = (target, fresh) => {
       old.replaceWith(kid);
     }
   });
+};
+
+// A strip over a table saying what needs a look: the total, then a count of
+// each kind of row that does, which, clicked, picks those rows out (see the
+// Graph's strip). `before` is markup to put first. Returns the kinds counted.
+const renderStatusStrip = (strip, total, kinds, rows, focus, before = '') => {
+  const counts = kinds.map((k) => ({ ...k, count: rows.filter(k.test).length })).filter((k) => k.count);
+  const fresh = document.createElement('div');
+  fresh.innerHTML = `${before}<span class="table-status-total">${escapeHtml(total)}</span>`
+    + (counts.length
+      ? counts.map((k) => `<button type="button" class="table-chip table-chip--${k.level}" data-focus="${k.key}"`
+        + ` aria-pressed="${focus === k.key}">${k.count} ${escapeHtml(k.label)}</button>`).join('')
+      : '<span class="table-status-usual">nothing unusual</span>');
+  patchChildren(strip, fresh);
+  return counts;
 };
 
 const positionPopover = (popover, anchorEl) => {
@@ -682,6 +700,7 @@ const _writeSettingsNow = () => {
     favouriteSubjectIds: [...state.favouriteSubjectIds],
     hiddenSubjectIds: [...state.hiddenSubjectIds],
     subjectsTableSort: state.subjectsTableSort,
+    subjectsKind: state.subjectsKind,
     subjectsHeaderFilters: typeof getSubjectsHeaderFilters === 'function' ? getSubjectsHeaderFilters() : null,
     recordFilterDraft: state.recordFilterDraft,
   };
@@ -832,6 +851,9 @@ const loadSettings = () => {
   }
   if (settings.subjectsTableSort?.key) {
     state.subjectsTableSort = settings.subjectsTableSort;
+  }
+  if (['all', 'Subject', 'Service'].includes(settings.subjectsKind)) {
+    state.subjectsKind = settings.subjectsKind;
   }
   if (typeof settings.plotTimeWindow === 'number' && settings.plotTimeWindow >= 0) {
     state.plotTimeWindow = settings.plotTimeWindow;

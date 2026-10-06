@@ -4456,7 +4456,8 @@ details.svc-history-entry[open] > summary::before {
   gap: 0.25rem;
 }
 
-.hist-range-btn {
+.hist-range-btn,
+.table-kind-btn {
   font-family: var(--mono);
   font-size: 0.6875rem;
   font-weight: 500;
@@ -4469,12 +4470,14 @@ details.svc-history-entry[open] > summary::before {
   transition: all 0.12s;
 }
 
-.hist-range-btn:hover {
+.hist-range-btn:hover,
+.table-kind-btn:hover {
   background: var(--surface-2);
   color: var(--text);
 }
 
-.hist-range-btn.active {
+.hist-range-btn.active,
+.table-kind-btn.active {
   background: var(--accent-muted);
   border-color: var(--accent);
   color: var(--accent);
@@ -5294,8 +5297,10 @@ details.svc-history-entry[open] > summary::before {
   border-top: 0.125rem dashed var(--warn);
 }
 
-/* Status strip: what needs a look; a count picks those nodes out */
-.graph-status-bar {
+/* Status strip, over the graph and the tables: what needs a look; a count
+   picks those nodes (rows) out */
+.graph-status-bar,
+.table-status-bar {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -5308,10 +5313,14 @@ details.svc-history-entry[open] > summary::before {
   flex-shrink: 0;
 }
 
-.graph-status-total { color: var(--text); }
-.graph-status-usual { color: var(--muted); }
+/* A table with no rows says why itself. */
+.table-status-bar:empty { display: none; }
 
-.graph-chip {
+.graph-status-total, .table-status-total { color: var(--text); }
+.graph-status-usual, .table-status-usual { color: var(--muted); }
+
+.graph-chip,
+.table-chip {
   font-family: var(--mono);
   font-size: 0.6875rem;
   padding: 0.0625rem 0.5rem;
@@ -5321,10 +5330,17 @@ details.svc-history-entry[open] > summary::before {
   cursor: pointer;
 }
 
-.graph-chip--warn { color: var(--warn); }
-.graph-chip--err { color: var(--error); }
-.graph-chip--warn[aria-pressed="true"] { background: var(--warn-muted); }
-.graph-chip--err[aria-pressed="true"] { background: var(--error-muted); }
+.graph-chip--warn, .table-chip--warn { color: var(--warn); }
+.graph-chip--err, .table-chip--err { color: var(--error); }
+.graph-chip--warn[aria-pressed="true"], .table-chip--warn[aria-pressed="true"] { background: var(--warn-muted); }
+.graph-chip--err[aria-pressed="true"], .table-chip--err[aria-pressed="true"] { background: var(--error-muted); }
+
+/* All · Subjects · Services, in the Subjects table's strip */
+.table-status-kinds {
+  display: inline-flex;
+  gap: 0.25rem;
+  margin-right: 0.25rem;
+}
 
 /* A node reached by keyboard */
 .graph-node:focus { outline: none; }
