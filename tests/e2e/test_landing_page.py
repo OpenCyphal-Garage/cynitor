@@ -1102,6 +1102,78 @@ async def _(page):
         await page.unroute("**/api/nodes", _answer_nodes)
 
 
+# ── Compare tab ──
+#
+# Fed as live data is (cacheEvent), by a timer in the page: node 10 publishes
+# 1100 (value 80 ± 5), 1700 (a current of about 1 mA) and 1400 (value 10) at
+# 10 Hz; node 20 joins it on 1400 (value 50) once e2eCompare.join1400 is set.
+# Each test starts the feed, and in its finally stops it and removes its graphs.
+
+COMPARE_START = """() => {
+    state.dashboardConnected = true;
+    state.canConnected = true;
+    const ev = (subject_id, publisher_node_id, attribute, value) => ({subject_id, publisher_node_id,
+        message_type: 'Real32_1_0', rate: 10, subject_rate: 10, payload_bytes: 4,
+        attributes: [{attribute, value}], timestamp_unix: Date.now() / 1000});
+    window.e2eCompare = {join1400: false};
+    window.e2eCompareFeed = setInterval(() => {
+        const t = Date.now() / 1000;
+        cacheEvent(ev(1100, 10, 'value', 80 + 5 * Math.sin(t)));
+        cacheEvent(ev(1700, 10, 'current', 0.00095 + 0.0001 * Math.sin(t)));
+        cacheEvent(ev(1400, 10, 'value', 10));
+        if (e2eCompare.join1400) cacheEvent(ev(1400, 20, 'value', 50));
+    }, 100);
+    switchView('compare');
+}"""
+
+COMPARE_STOP = """() => {
+    clearInterval(window.e2eCompareFeed);
+    for (const button of [...document.querySelectorAll('.compare-graph-delete')]) button.click();
+    state.savedCompareConfigs = [];
+    state.subjectHistory.clear();
+    state.latestBySubject.clear();
+    state.latestByNode.clear();
+    state.dashboardConnected = false;
+    state.canConnected = false;
+    switchView('nodes');
+    saveSettings();
+}"""
+
+# Each graph's card: how far its content runs past it, and the plot's height to draw in.
+COMPARE_CARDS = """() => [...document.querySelectorAll('.compare-graph-card')].map(c => ({
+    overflow: c.scrollHeight - c.clientHeight,
+    drawHeight: Number(c.querySelector('.plot-overlay')?.getAttribute('height') || 0)}))"""
+
+
+async def compare_graph(page, *series):
+    """A new graph with these (subject-ID, field) series, added with its picker; its card."""
+    n = await page.locator(".compare-graph-card").count()
+    await page.locator(".compare-add-btn", has_text="+ Add Graph").click()
+    card = page.locator(".compare-graph-card").nth(n)
+    for sid, field in series:
+        subject = card.locator(".plot-compare-subject")
+        await subject.dispatch_event("mousedown")  # fills the list
+        await subject.select_option(str(sid))
+        await card.locator(".plot-compare-attr").select_option(field)
+        await card.locator(".plot-compare-picker .plot-compare-add").first.click()
+    return card
+
+
+@test("Compare: graphs that do not fit keep their height, and the list scrolls")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    try:
+        await page.wait_for_timeout(300)
+        for _ in range(4):
+            await compare_graph(page, (1100, "value"))
+        await page.wait_for_timeout(500)
+        for i, card in enumerate(await page.evaluate(COMPARE_CARDS)):
+            assert card["overflow"] <= 1, f"Graph {i + 1}'s content runs {card['overflow']} px past its card"
+            assert card["drawHeight"] >= 40, f"Graph {i + 1} has {card['drawHeight']} px to draw in"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

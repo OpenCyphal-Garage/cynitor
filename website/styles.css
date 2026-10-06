@@ -2356,13 +2356,14 @@ button:focus-visible,
   min-height: 0;
 }
 
+/* Graphs share the view and never get shorter than their content: with more
+   than fit, the list scrolls. */
 .compare-graph-card {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
   display: flex;
   flex-direction: column;
-  min-height: 16rem;
   flex: 1;
 }
 
@@ -2455,9 +2456,12 @@ button:focus-visible,
   gap: 0.375rem;
 }
 
+/* Room to draw under a full legend (5.5rem); sized by the card alone, so a
+   drawing never holds the card at an old size. */
 .compare-graph-card > .detail-plot-area {
   flex: 1;
-  min-height: 8rem;
+  min-height: 11rem;
+  contain: size;
 }
 
 .compare-graph-card > .plot-compare-panel {
