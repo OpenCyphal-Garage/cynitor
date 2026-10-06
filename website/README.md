@@ -71,6 +71,7 @@ Open in browser:
   - Port ID lists (Publishers, Subscribers, Servers, Clients): the node's own ports first, the standard ones muted after; a long list shows its first IDs and how many more (`1004, 1005 +4`), and its tooltip has it whole. The Subjects table's node lists read the same way
   - Node state: active, idle, offline (with "last seen" for offline nodes)
   - Health indicators: NOMINAL, ADVISORY, CAUTION, WARNING
+  - VSSC: the heartbeat's vendor-specific status code (0, the usual, muted; hex in its tooltip)
   - Responsive — hides less-important columns on narrow screens
 - View tabs (bottom of sidebar):
   - **Nodes** — node-centric table with per-node detail panel; ghost rows for displaced identities pinned to bottom. A strip over the table counts what needs a look, as the Graph's does (offline, displaced, unusual health or mode, and nodes that answer no request); clicking a count lists only those rows, clicking it again lists all. A ghost row keeps the alias given to its device, and its ✕ forgets the device only after asking. Types are named one way throughout (`uavcan.node.Heartbeat.1.0`), whether the backend gives a type's name or its Python class's

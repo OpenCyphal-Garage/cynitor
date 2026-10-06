@@ -119,7 +119,7 @@ async def _(page):
     await page.wait_for_selector(".tabulator-col-title", timeout=5000)
     raw_headers = await page.locator(".tabulator-col-title").all_text_contents()
     headers = [h.strip() for h in raw_headers if h.strip()]
-    expected = ["ID", "Name", "State", "Health", "Mode", "SW", "Rate", "Uptime",
+    expected = ["ID", "Name", "State", "Health", "Mode", "VSSC", "SW", "Rate", "Uptime",
                 "Publishers", "Subscribers", "Servers", "Clients"]
     assert headers == expected, f"Expected headers {expected}, got {headers}"
 
@@ -130,10 +130,10 @@ async def _(page):
     assert "not connected" in text.lower(), f"Expected 'Not connected', got '{text}'"
 
 
-@test("Filter row has 12 inputs")
+@test("Filter row has 13 inputs")
 async def _(page):
     count = await page.locator(".tabulator-header-filter input").count()
-    assert count == 12, f"Expected 12 filter inputs, got {count}"
+    assert count == 13, f"Expected 13 filter inputs, got {count}"
 
 
 @test("Uptime reads at a glance; narrow tables drop the least telling columns")
@@ -706,8 +706,9 @@ TABLES_START = """() => {
         cacheEvent(ev(1300, 20, 10, 15, value(3)));
         if (tick % 2 === 0) cacheEvent(ev(1300, 21, e2eFeeds.rate21, 15, value(300)));
         if (tick++ % 10) return;
-        for (const [nid, health] of [[10, 'NOMINAL'], [20, 'NOMINAL'], [21, 'WARNING'], [30, 'CAUTION']]) {
-            cacheEvent({...ev(7509, nid, 1, 4, [{attribute: 'health', value: health}]), message_type: 'Heartbeat_1_0'});
+        for (const [nid, health, vssc] of [[10, 'NOMINAL', 0], [20, 'NOMINAL', 0], [21, 'WARNING', 0], [30, 'CAUTION', 42]]) {
+            cacheEvent({...ev(7509, nid, 1, 4, [{attribute: 'health', value: health}, {attribute: 'vssc', value: vssc}]),
+                        message_type: 'Heartbeat_1_0'});
         }
     }, 100);
     getAllNodes();
@@ -827,6 +828,15 @@ async def _(page):
         await page.evaluate("nodesTabulator.setHeaderFilterValue('_sortId', ''); nodesTabulator.setHeaderFilterValue('publishers', '')")
     grey = await page.evaluate("getComputedStyle(document.querySelector('#nodesTable .tabulator-table')).backgroundColor")
     assert grey != "rgb(102, 102, 102)", "The table under the rows is the theme's grey"
+
+
+@test("Tables: VSSC shows each heartbeat's vendor status code, 0 muted")
+async def _(page):
+    vssc = lambda nid: _cell('nodesTabulator', nid, 'vssc')  # noqa: E731
+    assert await page.evaluate(vssc(30)) == "42", "Node 30 sends VSSC 42"
+    assert await page.evaluate(vssc(40)) == "-", "An offline node has none"
+    muted = await page.evaluate("nodesTabulator.getRow(10).getCell('vssc').getElement().querySelector('.text-muted') !== null")
+    assert muted, "VSSC 0, the usual, is not muted"
 
 
 @test("Tables: a port list shows its first IDs and how many more; the tooltip has it whole")

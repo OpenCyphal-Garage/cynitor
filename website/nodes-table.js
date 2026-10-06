@@ -95,6 +95,13 @@ const modeFormatter = (cell) => {
   return `<span class="mode-text ${cls}">${escapeHtml(v)}</span>`;
 };
 
+// The heartbeat's vendor-specific status code; 0, the usual, is muted.
+const vsscFormatter = (cell) => {
+  const v = cell.getValue();
+  if (v == null) return '<span class="text-muted">-</span>';
+  return `<span class="${v === 0 ? 'text-muted' : ''}" title="0x${v.toString(16).toUpperCase()}">${v}</span>`;
+};
+
 const favFormatter = (cell) => {
   const isFav = cell.getValue();
   return `<button type="button" class="fav-star ${isFav ? 'active' : ''}" aria-label="Toggle favourite">${isFav ? '★' : '☆'}</button>`;
@@ -358,6 +365,7 @@ const buildTableData = () => {
     const alias = getNodeAlias(isGhost ? node.unique_id_hex : node.unique_id);
     const offline = isGhost || node.has_disappeared;
     const lastSeen = offline ? formatLastSeen(node.last_seen) : '-';
+    const vssc = Number.parseInt(getNodeHeartbeatValue(node.node_id, 'vssc'), 10);
     rows.push({
       id: isGhost ? key : node.node_id,
       _sortId: isGhost ? (node.last_node_id ?? Infinity) : node.node_id,
@@ -371,6 +379,7 @@ const buildTableData = () => {
       state: nodeState,
       health: offline ? '-' : (getNodeHealthValue(node.node_id) || '-'),
       mode: offline ? '-' : (getNodeModeValue(node.node_id) || '-'),
+      vssc: offline || Number.isNaN(vssc) ? null : vssc,
       sw: node.software_version ? `${node.software_version.major}.${node.software_version.minor}` : '-',
       rate: offline ? 0 : getNodeRate(node.node_id),
       uptime: offline ? (lastSeen !== '-' ? `last seen ${lastSeen}` : '-') : formatUptime(node.uptime),
@@ -425,6 +434,7 @@ const initNodesTable = () => {
       colDef('State', 'state', { responsive: 0, sorter: severitySorter(STATE_ORDER), minWidth: 90, widthGrow: 0.7, formatter: stateFormatter, headerFilterPlaceholder: 'state', cssClass: 'td-state' }),
       colDef('Health', 'health', { responsive: 1, sorter: severitySorter(HEALTH_ORDER), minWidth: 100, widthGrow: 0.8, formatter: healthFormatter, headerFilterPlaceholder: 'health', cssClass: 'cell-scroll' }),
       colDef('Mode', 'mode', { responsive: 5, sorter: 'string', minWidth: 110, widthGrow: 0.8, formatter: modeFormatter, headerFilterPlaceholder: 'mode', cssClass: 'cell-scroll' }),
+      colDef('VSSC', 'vssc', { responsive: 6, sorter: 'number', minWidth: 64, widthGrow: 0.4, formatter: vsscFormatter, headerFilterPlaceholder: 'vssc', headerTooltip: 'Vendor-specific status code, from the heartbeat' }),
       colDef('SW', 'sw', { responsive: 6, sorter: 'string', minWidth: 56, widthGrow: 0.4, headerFilterPlaceholder: 'sw', cssClass: 'cell-scroll', headerTooltip: 'Software version' }),
       colDef('Rate', 'rate', { responsive: 2, sorter: 'number', minWidth: 70, widthGrow: 0.7, formatter: rateFormatter, headerFilterPlaceholder: 'rate', cssClass: 'cell-scroll', headerFilterFunc: (headerValue, rowValue) => { if (!headerValue) return true; return Number(rowValue).toFixed(1).includes(headerValue); } }),
       colDef('Uptime', 'uptime', { responsive: 3, sorter: (_a, _b, aRow, bRow) => { const a = aRow.getData()._uptimeS, b = bRow.getData()._uptimeS; return a === b ? 0 : a - b; }, minWidth: 110, widthGrow: 1, formatter: uptimeFormatter, headerFilterPlaceholder: 'uptime', cssClass: 'cell-scroll' }),
