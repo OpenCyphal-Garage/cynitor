@@ -360,6 +360,11 @@ const _buildGraphCard = (graph) => {
   deleteBtn.textContent = '×';
   deleteBtn.setAttribute('aria-label', 'Remove graph');
   deleteBtn.addEventListener('click', () => {
+    // Markers and drawings cannot be made again from the data: asked first.
+    const notes = [[graph.markers.length, 'marker'], [graph.drawings.length, 'drawing']]
+      .filter(([n]) => n).map(([n, what]) => `${n} ${what}${n === 1 ? '' : 's'}`);
+    const which = graph.name.trim() ? `"${graph.name.trim()}"` : 'this graph';
+    if (notes.length && !window.confirm(`Remove ${which}? Its ${notes.join(' and ')} go with it.`)) return;
     graph._fingerprint = '';
     const idx = state.compareGraphs.indexOf(graph);
     if (idx !== -1) state.compareGraphs.splice(idx, 1);

@@ -1129,7 +1129,10 @@ COMPARE_START = """() => {
 
 COMPARE_STOP = """() => {
     clearInterval(window.e2eCompareFeed);
+    const ask = window.confirm;
+    window.confirm = () => true;  // a graph with markers asks before it goes
     for (const button of [...document.querySelectorAll('.compare-graph-delete')]) button.click();
+    window.confirm = ask;
     state.savedCompareConfigs = [];
     state.subjectHistory.clear();
     state.latestBySubject.clear();
@@ -1756,6 +1759,37 @@ async def _(page):
         await page.wait_for_timeout(500)
         assert await last.evaluate(line) != after[1], "Scrolled into view, the graph does not catch up"
     finally:
+        await page.evaluate(COMPARE_STOP)
+
+
+@test("Compare: removing a graph with markers or drawings asks first")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    asked = []
+    answer = {"yes": False}
+
+    async def on_dialog(dialog):
+        asked.append(dialog.message)
+        await (dialog.accept() if answer["yes"] else dialog.dismiss())
+
+    page.on("dialog", on_dialog)
+    graphs = "state.compareGraphs.length"
+    try:
+        await page.wait_for_timeout(300)
+        plain = await compare_graph(page, (1100, "value"))
+        await plain.locator('[aria-label="Remove graph"]').click()
+        assert not asked and await page.evaluate(graphs) == 0, "A graph with no markers is not removed at once"
+        card = await compare_graph(page, (1100, "value"))
+        await page.evaluate("""() => state.compareGraphs[0].markers.push(
+            {t: Date.now() / 1000 - 5, label: 'motor on', note: '', color: '#0969da', lineStyle: 'dashed'})""")
+        await card.locator('[aria-label="Remove graph"]').click()
+        assert asked and "1 marker" in asked[-1], f"Removing a graph with a marker asks {asked}"
+        assert await page.evaluate(graphs) == 1, "Answered no, the graph is removed all the same"
+        answer["yes"] = True
+        await card.locator('[aria-label="Remove graph"]').click()
+        assert await page.evaluate(graphs) == 0, "Answered yes, the graph stays"
+    finally:
+        page.remove_listener("dialog", on_dialog)
         await page.evaluate(COMPARE_STOP)
 
 
