@@ -649,7 +649,7 @@ const buildPlotControls = (opts = {}) => {
     const drawInfo = document.createElement('span');
     drawInfo.className = 'plot-info-icon';
     drawInfo.textContent = '?';
-    const drawTip = 'Shift+click: add/edit marker · Click on marker: edit · Alt+drag: freehand draw · Alt+dblclick: clear drawings · Click: pause/resume · Dblclick: reset zoom';
+    const drawTip = 'Shift+click: add/edit marker · Click on marker: edit · Alt+drag: freehand draw · Alt+dblclick: clear drawings · Click: pause/resume · Ctrl+wheel: zoom · Drag: pan · Dblclick: reset zoom';
     drawInfo.title = drawTip;
     drawInfo.setAttribute('aria-label', drawTip);
     drawGroup.appendChild(drawInfo);
@@ -1692,7 +1692,10 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
 
   if (cfg && svgEl && !svgEl._zoomBound) {
     svgEl._zoomBound = true;
+    // Ctrl+wheel zooms (a trackpad pinch sends it too); the wheel alone
+    // scrolls the page on, past graphs that fill it.
     svgEl.addEventListener('wheel', (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
       const [mx] = d3.pointer(e, overlay.node());
       const ctx = plotArea._plotCtx || {};

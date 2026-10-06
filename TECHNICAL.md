@@ -207,7 +207,7 @@ The legend uses three-zone `<div>` pills: left swatch (click to pick color via n
 
 **Derived series** are computed from raw series at render time via `_computeDerived()`: delta (A−B), ratio (A/B), moving average (windowed), min/max envelope (rolling), and rate of change (Δv/Δt). Each type declares its source count and optional window parameter.
 
-**Zoom/pan** is implemented in `bindPlotTooltip`: wheel zoom scales `cfg._zoom` centered on cursor, drag translates `cfg._panOffset`. `computePlotScales` applies zoom and pan to the base X domain. Click toggles pause (with 250ms delay to distinguish from double-click); double-click resets zoom and pan.
+**Zoom/pan** is implemented in `bindPlotTooltip`: Ctrl+wheel zoom scales `cfg._zoom` centered on cursor (the wheel alone scrolls the page), drag translates `cfg._panOffset`. `computePlotScales` applies zoom and pan to the base X domain. Click toggles pause (with 250ms delay to distinguish from double-click); double-click resets zoom and pan.
 
 **Timeline markers** (`cfg.markers[]`) are placed with Shift+click and rendered as vertical dashed lines with labels by `_renderMarkers`. Each marker has a timestamp, label, optional note, color, and line style. Clicking near an existing marker opens an inline edit form (`_openMarkerForm`) with save/delete.
 

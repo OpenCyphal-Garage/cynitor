@@ -1445,6 +1445,36 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: the wheel scrolls past the graphs, Ctrl+wheel zooms one")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    cards = page.locator(".compare-cards")
+
+    async def over_first_plot():
+        await cards.evaluate("(c) => { c.scrollTop = 0; }")
+        await page.wait_for_timeout(200)
+        box = await page.locator(".compare-graph-card").first.locator(".plot-overlay").bounding_box()
+        await page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+
+    try:
+        await page.wait_for_timeout(300)
+        for _ in range(4):
+            await compare_graph(page, (1100, "value"))
+        await over_first_plot()
+        await page.mouse.wheel(0, 300)
+        await page.wait_for_timeout(300)
+        scrolled, zoom = await cards.evaluate("(c) => [c.scrollTop, state.compareGraphs[0]._zoom]")
+        assert scrolled > 0 and zoom == 1, f"The wheel over a plot scrolled {scrolled} px and zoomed it to {zoom}"
+        await over_first_plot()
+        await page.keyboard.down("Control")
+        await page.mouse.wheel(0, -300)
+        await page.keyboard.up("Control")
+        zoom = await page.evaluate("state.compareGraphs[0]._zoom")
+        assert zoom > 1, f"Ctrl+wheel up left the plot at zoom {zoom}"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
