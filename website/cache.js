@@ -8,6 +8,23 @@ const isNodeDisappeared = (nodeId) => {
   return node?.has_disappeared === true;
 };
 
+// Numbers to plot from a message's attributes, as [field, value] pairs: a
+// numeric array gives one per element (`velocity[0]`, ...), up to a few.
+const PLOT_ARRAY_MAX = 16;
+
+const plottableValues = (attributes) => {
+  const values = [];
+  for (const a of attributes || []) {
+    if (typeof a.value === 'number') {
+      values.push([a.attribute, a.value]);
+    } else if (Array.isArray(a.value) && a.value.length <= PLOT_ARRAY_MAX
+        && a.value.every((v) => typeof v === 'number')) {
+      a.value.forEach((v, i) => values.push([`${a.attribute}[${i}]`, v]));
+    }
+  }
+  return values;
+};
+
 const cacheEvent = (event) => {
   if (!event || !Number.isInteger(event.subject_id)) {
     return;
@@ -36,13 +53,14 @@ const cacheEvent = (event) => {
     state.latestByNode.get(event.publisher_node_id).set(event.subject_id, event);
   }
 
+  // A point keeps its publisher (`n`): a subject several nodes publish plots
+  // per node, not as one line jumping between them.
   const now = event.timestamp_unix || (Date.now() / 1000);
-  for (const a of event.attributes || []) {
-    if (typeof a.value !== 'number') continue;
-    const key = `${event.subject_id}:${a.attribute}`;
+  for (const [field, value] of plottableValues(event.attributes)) {
+    const key = `${event.subject_id}:${field}`;
     if (!state.subjectHistory.has(key)) state.subjectHistory.set(key, []);
     const buf = state.subjectHistory.get(key);
-    buf.push({ t: now, v: a.value });
+    buf.push({ t: now, v: value, n: event.publisher_node_id });
     if (buf.length > 3600) buf.shift();
   }
 };

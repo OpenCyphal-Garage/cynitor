@@ -40,6 +40,7 @@ const state = {
   _nodesPlotSubject: null,
   subjectHistory: new Map(),
   hiddenPlotSeries: new Map(),
+  plotSeriesSeen: new Map(),  // subject-ID -> names of its series plotted so far (see renderPlot)
   plotTimer: null,
   plotPaused: false,
   plotPausedAt: null,

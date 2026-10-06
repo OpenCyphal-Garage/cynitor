@@ -2,11 +2,16 @@
 // tabs), client cards, and the per-row selection helpers used by nodes-table.js.
 // Plot code lives in plot.js.
 
+// A value as a card shows it, to two decimals, an array's elements alike; and
+// in full, for its tooltip.
+const _metricNumber = (v) => (typeof v === 'number' && !Number.isInteger(v) ? v.toFixed(2) : String(v ?? '-'));
+const metricText = (value) => (Array.isArray(value) ? `[${value.map(_metricNumber).join(', ')}]` : _metricNumber(value));
+const metricTitle = (value) => (Array.isArray(value) ? `[${value.join(', ')}]` : String(value ?? '-'));
+
 const renderMetric = (a, subjectId) => {
   const statusCls = getStatusClass(a.attribute, a.value);
-  const rawStr = String(a.value ?? '-');
-  const displayStr = typeof a.value === 'number' && !Number.isInteger(a.value)
-    ? a.value.toFixed(2) : rawStr;
+  const rawStr = metricTitle(a.value);
+  const displayStr = metricText(a.value);
   const minW = getMetricMinWidth(subjectId, a.attribute, displayStr);
   const unitStr = a.unit ? `<span class="metric-unit">${escapeHtml(a.unit)}</span>` : '';
   const valCls = `metric-val${statusCls ? ' ' + statusCls : ''}`;
@@ -70,9 +75,8 @@ const updateSubjectTableInPlace = (container, subjects) => {
       const valText = valEl?.querySelector('.metric-val-text');
       if (!valText) return false;
 
-      const rawStr = String(a.value ?? '-');
-      const displayStr = typeof a.value === 'number' && !Number.isInteger(a.value)
-        ? a.value.toFixed(2) : rawStr;
+      const rawStr = metricTitle(a.value);
+      const displayStr = metricText(a.value);
 
       if (valText.textContent !== displayStr) {
         const minW = getMetricMinWidth(s.subjectId, a.attribute, displayStr);

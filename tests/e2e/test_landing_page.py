@@ -687,9 +687,10 @@ TABLES_NODES = {"node_count": 6, "nodes": {
     "uid:" + "aa" * 16: _graph_ghost(37, "org.example.old_sensor", [1500], 0xAA),
 }}
 
-# 10 publishes 1100 until e2eFeeds[1100] is cleared; 20 publishes 1200 at the
-# rate in e2eFeeds.rate1200; 1300 has two publishers, 20 at 10 Hz and 21 at
-# 5 Hz; 10, 20, 21 and 30 send Heartbeat at 1 Hz.
+# 10 publishes 1100 until e2eFeeds[1100] is cleared; 20 publishes 1200, a
+# vector, at the rate in e2eFeeds.rate1200; 1300 has two publishers, 20 at
+# 10 Hz (value 3) and 21 at 5 Hz (value 300); 10, 20, 21 and 30 send
+# Heartbeat at 1 Hz.
 TABLES_START = """() => {
     state.dashboardConnected = true;
     state.canConnected = true;
@@ -701,7 +702,7 @@ TABLES_START = """() => {
     window.e2eFeeds = {1100: true, rate1200: 10};
     window.e2eTablesFeed = setInterval(() => {
         if (e2eFeeds[1100]) cacheEvent(ev(1100, 10, 10, 10, value(1)));
-        cacheEvent(ev(1200, 20, e2eFeeds.rate1200, e2eFeeds.rate1200, value(2)));
+        cacheEvent(ev(1200, 20, e2eFeeds.rate1200, e2eFeeds.rate1200, [{attribute: 'velocity', value: [2, 3, 4]}]));
         cacheEvent(ev(1300, 20, 10, 15, value(3)));
         if (tick % 2 === 0) cacheEvent(ev(1300, 21, 5, 15, value(300)));
         if (tick++ % 10) return;
@@ -791,6 +792,37 @@ async def _(page):
         assert (await page.evaluate(ids))[-1] == "uid:" + "aa" * 16, "Health descending: the ghost is not last"
     finally:
         await page.evaluate("nodesTabulator.setSort('_sortId', 'asc')")
+
+
+PLOT_PANELS = "[...document.querySelectorAll('.detail-plot-area .panel-label')].map(e => e.textContent)"
+
+
+@test("Plots: a node's card plots its own messages, a vector one line per element")
+async def _(page):
+    await page.evaluate("setSelectedNode(20)")
+    await page.locator('#selectedNodeContent .subject-card[data-subject="1300"]').click()
+    try:
+        await page.wait_for_function(f"{PLOT_PANELS}.join() === 'value'", timeout=3000)
+        top = await page.evaluate("""Math.max(...[...document.querySelectorAll('.detail-plot-area .panel-y-axis .tick text')]
+            .map(t => Number(t.textContent)))""")
+        assert top < 10, f"Node 20's plot of 1300 reaches {top}: node 21's values (300) are in it"
+        await page.locator('#selectedNodeContent .subject-card[data-subject="1200"]').click()
+        await page.wait_for_function(f"{PLOT_PANELS}.join() === 'velocity[0],velocity[1],velocity[2]'", timeout=3000)
+        card = await page.evaluate("document.querySelector('.subject-card[data-subject=\"1200\"] .metric-val-text').textContent")
+        assert card == "[2, 3, 4]", f"The vector's card reads {card!r}"
+    finally:
+        await page.evaluate("clearSelectedNode()")
+
+
+@test("Plots: Subjects plots each publisher of a subject apart")
+async def _(page):
+    await page.locator("#viewTabSubjects").click()
+    row = page.locator("#subjectsTable .tabulator-row", has_text="1300").first
+    await row.click()
+    try:
+        await page.wait_for_function(f"{PLOT_PANELS}.join() === 'value · n20,value · n21'", timeout=3000)
+    finally:
+        await row.click()  # closes the plot
 
 
 @test("Tables: Subjects says silent, and refreshes with nothing arriving")

@@ -4,6 +4,7 @@
 const PLOT_MARGIN = { top: 8, right: 12, bottom: 24, left: 48 };
 const PLOT_PANEL_GAP = 8;
 const PLOT_GAP_THRESHOLD = 3;
+const PLOT_SHOWN_MAX = 8;  // series a subject's plot shows at first, at most
 const _safeId = (s) => s.replace(/[^a-zA-Z0-9_-]/g, '_');
 const _safeColor = (c) => /^#[0-9a-fA-F]{3,8}$/.test(c) ? c : '#888';
 const PLOT_TIME_WINDOWS = [
@@ -271,18 +272,44 @@ const _nextDerivedId = (graph) => {
   return `ds_${max + 1}`;
 };
 
-const collectPlotSeries = (sid, cfg = null) => {
+// A field's points by the node that published them (`n`, see cacheEvent).
+const _byPublisher = (points) => {
+  const groups = new Map();
+  for (const p of points) {
+    if (!groups.has(p.n)) groups.set(p.n, []);
+    groups.get(p.n).push(p);
+  }
+  return groups;
+};
+
+const _publisherLabel = (nid) => (nid == null ? 'anonymous' : `n${nid}`);
+
+// A subject's series: one per field, or per field and publisher when several
+// nodes publish it; only `publisher`'s own points when one is given. Fill Rate
+// interpolates a field's series only where a single publisher makes it.
+const collectPlotSeries = (sid, cfg = null, publisher = null) => {
   const keys = [];
   for (const key of state.subjectHistory.keys()) {
     if (key.startsWith(sid + ':')) keys.push(key);
   }
   if (cfg) _processSmooth(cfg, keys);
   const allSeries = [];
-  for (const key of keys) {
-    const buf = cfg ? _getSmoothBuf(cfg, key) : state.subjectHistory.get(key);
-    if (!buf || buf.length < 2) continue;
+  const add = (name, field, buf) => {
+    if (!buf || buf.length < 2) return;
     _tagGaps(buf);
-    allSeries.push({ name: key.split(':')[1], data: buf });
+    allSeries.push({ name, field, data: buf });
+  };
+  for (const key of keys) {
+    const field = key.slice(key.indexOf(':') + 1);
+    const groups = _byPublisher(state.subjectHistory.get(key));
+    if (publisher != null) {
+      add(field, field, groups.get(publisher));
+    } else if (groups.size <= 1) {
+      add(field, field, cfg ? _getSmoothBuf(cfg, key) : state.subjectHistory.get(key));
+    } else {
+      const nids = [...groups.keys()].sort((a, b) => (a ?? Infinity) - (b ?? Infinity));
+      for (const nid of nids) add(`${field} · ${_publisherLabel(nid)}`, field, groups.get(nid));
+    }
   }
   return allSeries;
 };
@@ -1859,7 +1886,10 @@ const renderPlot = (container) => {
   }
 
   const isSubjects = state.activeView === 'subjects';
-  const allSeries = collectPlotSeries(sid, isSubjects ? _subjectsPlotCfg : null);
+  // A node's own card plots that node's messages, not the subject's other publishers'.
+  const publisher = !isSubjects && state.selectedDetailTab === 'publishers'
+    && Number.isInteger(state.selectedNodeId) ? state.selectedNodeId : null;
+  const allSeries = collectPlotSeries(sid, isSubjects ? _subjectsPlotCfg : null, publisher);
   allSeries.forEach((s, i) => {
     s.color = state.plotColorOverrides[`${sid}:${s.name}`] || PLOT_COLORS[i % PLOT_COLORS.length];
   });
@@ -1879,12 +1909,20 @@ const renderPlot = (container) => {
   if (fullFp === _lastPlotFingerprint) return;
   _lastPlotFingerprint = fullFp;
 
-  if (!state.hiddenPlotSeries.has(sid)) {
-    // A timestamp is metadata, not a signal (in uavcan.si types usually 0):
-    // start it hidden; its legend pill shows it on demand.
-    state.hiddenPlotSeries.set(sid, new Set(allSeries.filter((s) => s.name === 'timestamp').map((s) => s.name)));
-  }
+  // A series starts hidden, its legend pill showing it on demand, when it is a
+  // timestamp (metadata, in uavcan.si types usually 0) or more than fit: a
+  // field per publisher makes dozens on Heartbeat, which every node sends.
+  if (!state.hiddenPlotSeries.has(sid)) state.hiddenPlotSeries.set(sid, new Set());
+  if (!state.plotSeriesSeen.has(sid)) state.plotSeriesSeen.set(sid, new Set());
   const hidden = state.hiddenPlotSeries.get(sid);
+  const seen = state.plotSeriesSeen.get(sid);
+  let shown = allSeries.filter((s) => seen.has(s.name) && !hidden.has(s.name)).length;
+  for (const s of allSeries) {
+    if (seen.has(s.name)) continue;
+    seen.add(s.name);
+    if (s.field === 'timestamp' || shown >= PLOT_SHOWN_MAX) hidden.add(s.name);
+    else shown++;
+  }
   const visible = allSeries.filter((s) => !hidden.has(s.name));
 
   const w = rect.width - PLOT_MARGIN.left - PLOT_MARGIN.right;
