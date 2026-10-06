@@ -108,7 +108,7 @@ const _processSmooth = (cfg, keys) => {
 
   const now = Date.now();
   for (const key of keys) {
-    const raw = state.subjectHistory.get(key);
+    const raw = plotData(key);
     if (!raw || raw.length < 1) continue;
 
     if (!cfg._smoothBufs.has(key)) cfg._smoothBufs.set(key, []);
@@ -175,7 +175,7 @@ const _getSmoothBuf = (cfg, key) => {
     const buf = cfg._smoothBufs.get(key);
     if (buf && buf.length >= 2) return buf;
   }
-  return state.subjectHistory.get(key);
+  return plotData(key);
 };
 
 const _tagGaps = (data) => {
@@ -259,9 +259,42 @@ const _computeDerived = (type, dataA, dataB, windowSize) => {
   }
 };
 
+// ── Compare series ──
+//
+// A compare series is a subject's field: from one publisher (`nodeId`) when
+// the subject has several, else from whichever sends it, as are all series
+// saved before publishers were told apart. Its key names its data.
+const compareSeriesKey = (s) => `${s.subjectId}:${s.attribute}${s.nodeId != null ? `@${s.nodeId}` : ''}`;
+
+// "1300:value@20" -> "S1300 · value · n20": a key as the legend names it.
+const _keyLabel = (key) => {
+  const [base, nid] = String(key).split('@');
+  const at = base.indexOf(':');
+  return `S${base.slice(0, at)} · ${base.slice(at + 1)}${nid != null ? ` · n${nid}` : ''}`;
+};
+
+const compareSeriesName = (s) => _keyLabel(compareSeriesKey(s));
+
+// The points a key names: a field's history, or its one publisher's part of it.
+const plotData = (key) => {
+  const [base, nid] = key.split('@');
+  const points = state.subjectHistory.get(base);
+  return nid == null || !points ? points : points.filter((p) => p.n === Number(nid));
+};
+
+// The nodes that published a subject, as its history has them.
+const _subjectPublishers = (sid) => {
+  const nids = new Set();
+  for (const [key, points] of state.subjectHistory) {
+    if (!key.startsWith(`${sid}:`)) continue;
+    for (const p of points) if (p.n != null) nids.add(p.n);
+  }
+  return [...nids].sort((a, b) => a - b);
+};
+
 const _derivedLabel = (d) => {
-  const nameA = d.sourceA ? `S${d.sourceA.split(':')[0]} · ${d.sourceA.split(':')[1]}` : '?';
-  const nameB = d.sourceB ? `S${d.sourceB.split(':')[0]} · ${d.sourceB.split(':')[1]}` : '';
+  const nameA = d.sourceA ? _keyLabel(d.sourceA) : '?';
+  const nameB = d.sourceB ? _keyLabel(d.sourceB) : '';
   switch (d.type) {
     case 'delta': return `Δ(${nameA} − ${nameB})`;
     case 'ratio': return `${nameA} / ${nameB}`;
@@ -272,7 +305,7 @@ const _derivedLabel = (d) => {
 };
 
 const _derivedMinMaxLabels = (d) => {
-  const nameA = d.sourceA ? `S${d.sourceA.split(':')[0]} · ${d.sourceA.split(':')[1]}` : '?';
+  const nameA = d.sourceA ? _keyLabel(d.sourceA) : '?';
   return [`Min(${nameA})`, `Max(${nameA})`];
 };
 
@@ -423,7 +456,7 @@ const computePlotScales = (visible, w, totalPanelsH, compareSeries = [], cfg = n
 const _estimateMaxHz = (cfg) => {
   let keys;
   if (cfg.series) {
-    keys = cfg.series.map(s => `${s.subjectId}:${s.attribute}`);
+    keys = cfg.series.map(compareSeriesKey);
   } else {
     const sid = state.selectedPlotSubject;
     if (sid == null) return 0;
@@ -434,7 +467,7 @@ const _estimateMaxHz = (cfg) => {
   }
   let maxHz = 0;
   for (const key of keys) {
-    const buf = state.subjectHistory.get(key);
+    const buf = plotData(key);
     if (!buf || buf.length < 3) continue;
     const n = Math.min(20, buf.length);
     const start = buf.length - n;
@@ -692,7 +725,7 @@ const _refreshCompareSubjects = (panel) => {
   sel.appendChild(def);
   for (const [sid] of subjects) {
     const event = state.latestBySubject.get(sid);
-    const label = event?.message_type ? `S${sid} · ${event.message_type}` : `Subject ${sid}`;
+    const label = event?.message_type ? `S${sid} · ${dsdlTypeName(event.message_type)}` : `Subject ${sid}`;
     const opt = document.createElement('option');
     opt.value = sid;
     opt.textContent = label;
@@ -732,6 +765,17 @@ const buildComparePanel = (graph, onUpdate) => {
   defAttr.textContent = 'Attribute…';
   attrSel.appendChild(defAttr);
 
+  // Which publisher, for a subject several nodes publish: their values plot apart.
+  const pubSel = document.createElement('select');
+  pubSel.className = 'plot-compare-publisher hidden';
+  pubSel.setAttribute('aria-label', 'Publisher to compare');
+  const fillPublishers = (sid) => {
+    const nids = sid ? _subjectPublishers(sid) : [];
+    pubSel.innerHTML = nids.map((nid) =>
+      `<option value="${nid}">${escapeHtml(`n${nid} ${nodeDisplayName(nid)}`.trim())}</option>`).join('');
+    pubSel.classList.toggle('hidden', nids.length < 2);
+  };
+
   const addBtn = document.createElement('button');
   addBtn.className = 'plot-compare-add';
   addBtn.type = 'button';
@@ -760,6 +804,7 @@ const buildComparePanel = (graph, onUpdate) => {
     } else {
       attrSel.disabled = true;
     }
+    fillPublishers(sid);
     addBtn.disabled = true;
   });
 
@@ -790,18 +835,22 @@ const buildComparePanel = (graph, onUpdate) => {
     const sid = Number(subjectSel.value);
     const attr = attrSel.value;
     if (!sid || !attr) return;
-    if (graph.series.some((c) => c.subjectId === sid && c.attribute === attr)) return;
-    graph.series.push({ subjectId: sid, attribute: attr });
+    const series = { subjectId: sid, attribute: attr };
+    if (!pubSel.classList.contains('hidden')) series.nodeId = Number(pubSel.value);
+    if (graph.series.some((c) => compareSeriesKey(c) === compareSeriesKey(series))) return;
+    graph.series.push(series);
     onUpdate();
     _refreshCompareSubjects(panel);
     subjectSel.value = '';
     attrSel.innerHTML = '<option value="">Attribute…</option>';
     attrSel.disabled = true;
+    fillPublishers(null);
     addBtn.disabled = true;
   });
 
   picker.appendChild(subjectSel);
   picker.appendChild(attrSel);
+  picker.appendChild(pubSel);
   picker.appendChild(addBtn);
   panel.appendChild(picker);
 
@@ -851,10 +900,9 @@ const buildComparePanel = (graph, onUpdate) => {
       def.textContent = label;
       sel.appendChild(def);
       for (const s of graph.series) {
-        const key = `${s.subjectId}:${s.attribute}`;
         const opt = document.createElement('option');
-        opt.value = key;
-        opt.textContent = `S${s.subjectId} · ${s.attribute}`;
+        opt.value = compareSeriesKey(s);
+        opt.textContent = compareSeriesName(s);
         sel.appendChild(opt);
       }
       if (prev && sel.querySelector(`option[value="${prev}"]`)) sel.value = prev;
@@ -995,7 +1043,7 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
           th.color = newColor;
         } else if (opts.cfg && opts.cfg.series) {
           const idx = opts.cfg.series.findIndex(s =>
-            `S${s.subjectId} · ${s.attribute}` === seriesName
+            compareSeriesName(s) === seriesName
           );
           if (idx >= 0) {
             opts.cfg.series[idx].color = newColor;
@@ -1035,7 +1083,7 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
         const idx = opts.cfg.derivedSeries.findIndex(d => d.id === did);
         if (idx >= 0) { opts.cfg.derivedSeries.splice(idx, 1); removed = true; }
       } else if (seriesName && opts.cfg?.series) {
-        const idx = opts.cfg.series.findIndex(s => `S${s.subjectId} · ${s.attribute}` === seriesName);
+        const idx = opts.cfg.series.findIndex(s => compareSeriesName(s) === seriesName);
         if (idx >= 0) { opts.cfg.series.splice(idx, 1); removed = true; }
         const card = plotArea.closest('.compare-graph-card');
         const panel = card?.querySelector('.plot-compare-panel');
@@ -1063,7 +1111,7 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
         const d = opts.cfg.derivedSeries.find(d => d.id === did);
         if (d) { d.lineStyle = styles[(styles.indexOf(d.lineStyle || 'solid') + 1) % styles.length]; changed = true; }
       } else if (seriesName && opts.cfg?.series) {
-        const s = opts.cfg.series.find(s => `S${s.subjectId} · ${s.attribute}` === seriesName);
+        const s = opts.cfg.series.find(s => compareSeriesName(s) === seriesName);
         if (s) { s.lineStyle = styles[(styles.indexOf(s.lineStyle || 'solid') + 1) % styles.length]; changed = true; }
       }
       if (changed) _legendCommit();

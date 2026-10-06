@@ -1006,6 +1006,29 @@ async def _(page):
         await page.evaluate("closeSubjectPlot()")
 
 
+@test("Compare: a subject several nodes publish is compared one publisher at a time")
+async def _(page):
+    await page.locator("#viewTabCompare").click()
+    await page.locator(".compare-add-btn", has_text="+ Add Graph").click()
+    card = page.locator(".compare-graph-card").last
+    try:
+        subject = card.locator(".plot-compare-subject")
+        await subject.dispatch_event("mousedown")  # fills the list
+        await subject.select_option("1300")
+        publisher = card.locator(".plot-compare-publisher")
+        assert await publisher.is_visible(), "No publisher choice for a subject two nodes publish"
+        await card.locator(".plot-compare-attr").select_option("value")
+        await publisher.select_option("21")
+        await card.locator(".plot-compare-picker .plot-compare-add").first.click()
+        await page.wait_for_function(
+            "[...document.querySelectorAll('.compare-graph-card .plot-legend-item')].some(e => e.dataset.series === 'S1300 · value · n21')",
+            timeout=3000)
+        values = await page.evaluate("[...new Set(plotData('1300:value@21').map(p => p.v))]")
+        assert values == [300], f"Node 21's series holds {values}"
+    finally:
+        await card.locator('[aria-label="Remove graph"]').click()
+
+
 @test("Tables: Subjects say how long ago they were heard, and how many bytes a second")
 async def _(page):
     await page.locator("#viewTabSubjects").click()

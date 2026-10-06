@@ -395,7 +395,7 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   if (!plotArea) return;
   graph._updateFillRate?.();
 
-  const seriesKeys = graph.series.map(cmp => `${cmp.subjectId}:${cmp.attribute}`);
+  const seriesKeys = graph.series.map(compareSeriesKey);
   _processSmooth(graph, seriesKeys);
 
   const compareSeries = [];
@@ -406,7 +406,7 @@ const _renderCompareGraphNow = (graph, plotArea) => {
     if (buf && buf.length >= 2) {
       _tagGaps(buf);
       compareSeries.push({
-        name: `S${cmp.subjectId} · ${cmp.attribute}`,
+        name: compareSeriesName(cmp),
         data: buf,
         color: cmp.color || PLOT_COLORS[compareSeries.length % PLOT_COLORS.length],
         _lineStyle: cmp.lineStyle || 'solid',
@@ -415,7 +415,7 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   }
 
   if (graph.derivedSeries?.length) {
-    const _getRawData = (key) => key ? state.subjectHistory.get(key) : null;
+    const _getRawData = (key) => (key ? plotData(key) : null);
     for (let di = 0; di < graph.derivedSeries.length; di++) {
       const d = graph.derivedSeries[di];
       const dataA = _getRawData(d.sourceA);
