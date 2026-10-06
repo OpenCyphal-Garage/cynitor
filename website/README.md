@@ -162,7 +162,7 @@ The compare view provides independent graphs for multi-series comparison.
 - **Interactive legend** — three-zone pills: click swatch to change color, click style indicator to cycle line style (solid/dashed/dotted/dashdot/longdash + circle/square/triangle/diamond markers), click label to toggle visibility, click × to remove
 - **Timeline markers** — Shift+click to place a named marker with optional note, color, and line style. Click on an existing marker to edit. Markers persist and export with the graph config.
 - **Freehand drawing** — Alt+drag to draw annotations directly on the plot. Controls for color, line style, and size are in the toolbar. Alt+double-click to clear all drawings.
-- **Zoom and pan** — mouse wheel to zoom, drag to pan the X axis. Click to pause/resume, double-click to reset zoom.
+- **Zoom and pan** — mouse wheel to zoom, drag to pan the X axis. Click to pause/resume, double-click to reset zoom. A paused graph keeps the points it showed, in a replay too.
 - **Crosshair sync** — hovering over one graph shows synchronized crosshairs with live value readouts on all graphs
 - **Presets** — save/load named graph configurations
 - **Export/Import** — full workspace export/import as JSON files

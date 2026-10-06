@@ -70,15 +70,10 @@ const initCompareView = () => {
   pauseAllBtn.type = 'button';
   pauseAllBtn.setAttribute('aria-label', 'Pause/resume all graphs');
   pauseAllBtn.addEventListener('click', () => {
+    // Each graph not already where it takes them: a paused one stays as it was.
     const allPaused = _allComparePaused();
-    const now = Date.now() / 1000;
     for (const graph of state.compareGraphs) {
-      graph.paused = !allPaused;
-      graph.pausedAt = graph.paused ? now : null;
-      if (!graph.paused) {
-        graph._resumeFrom = now;
-        _resetSmoothCaches(graph);
-      }
+      if (graph.paused === allPaused) togglePlotPause(graph);
     }
     saveSettings();
     _syncPauseAll();
@@ -90,7 +85,7 @@ const initCompareView = () => {
         btn.textContent = graph.paused ? '▶' : '⏸';
         btn.classList.toggle('active', graph.paused);
       }
-      if (!graph.paused) _renderOneGraph(graph);
+      _renderOneGraph(graph);  // a graph just paused keeps what it shows now
     }
   });
   toolbar.appendChild(pauseAllBtn);
@@ -352,7 +347,10 @@ const _buildGraphCard = (graph) => {
   // Zone 3 + 4: Time controls + visual tuning (split from buildPlotControls)
   const opts = {
     cfg: graph,
-    invalidate: () => { graph._fingerprint = ''; },
+    invalidate: () => {
+      graph._fingerprint = '';
+      if (graph.paused && !graph._frozen) _renderOneGraph(graph);  // just paused: keeps what it shows
+    },
     rerender: () => _renderCompareGraphNow(graph, plotArea),
     restart: () => _renderOneGraph(graph),
     includeDraw: true,
@@ -381,9 +379,22 @@ const _buildGraphCard = (graph) => {
   return card;
 };
 
+// The points a graph plots for a key, as Fill Rate has them (`raw` for a
+// derived series' source). A paused graph plots those it had when paused:
+// the history goes on (3600 points a field), and anything that redraws it (a
+// legend click, a tab switch) would otherwise show another picture.
+const _graphPoints = (graph, key, raw = false) => {
+  const points = () => (raw ? plotData(key) : _getSmoothBuf(graph, key));
+  if (!graph._frozen) return points();
+  const id = raw ? `raw ${key}` : key;
+  if (!graph._frozen.has(id)) graph._frozen.set(id, points()?.slice());
+  return graph._frozen.get(id);
+};
+
 const _renderCompareGraphNow = (graph, plotArea) => {
   if (!plotArea) return;
   graph._updateFillRate?.();
+  graph._frozen = graph.paused ? (graph._frozen || new Map()) : null;
 
   const seriesKeys = graph.series.map(compareSeriesKey);
   _processSmooth(graph, seriesKeys);
@@ -392,7 +403,7 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   for (let i = 0; i < graph.series.length; i++) {
     const cmp = graph.series[i];
     const key = seriesKeys[i];
-    const buf = _getSmoothBuf(graph, key);
+    const buf = _graphPoints(graph, key);
     if (buf && buf.length >= 2) {
       _tagGaps(buf);
       compareSeries.push({
@@ -405,7 +416,7 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   }
 
   if (graph.derivedSeries?.length) {
-    const _getRawData = (key) => (key ? plotData(key) : null);
+    const _getRawData = (key) => (key ? _graphPoints(graph, key, true) : null);
     for (let di = 0; di < graph.derivedSeries.length; di++) {
       const d = graph.derivedSeries[di];
       const dataA = _getRawData(d.sourceA);

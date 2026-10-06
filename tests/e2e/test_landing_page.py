@@ -1206,6 +1206,57 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+# Points of a graph's first line that fall inside its plot.
+COMPARE_POINTS_SHOWN = """(c) => { const d = c.querySelector('.compare-line')?.getAttribute('d') || '';
+    const w = Number(c.querySelector('.plot-overlay').getAttribute('width'));
+    return d.split(/[ML]/).filter(Boolean).map(s => Number(s.split(',')[0])).filter(x => x >= 0 && x <= w).length; }"""
+
+
+@test("Compare: a paused graph keeps what it showed, in a replay too")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    try:
+        # 1500 at 100 Hz: its history (3600 points a field) holds 36 s.
+        await page.evaluate("""() => { const now = Date.now() / 1000;
+            state.subjectHistory.set('1500:value', Array.from({length: 3600}, (_, i) => ({t: now - 36 + i / 100, v: 1, n: 10}))); }""")
+        card = await compare_graph(page, (1500, "value"))
+        await card.locator('.plot-window-btn[data-secs="30"]').click()
+        await card.locator(".plot-pause-btn").click()
+        shown = await card.evaluate(COMPARE_POINTS_SHOWN)
+        # 36 s later the history holds none of those points; a click on the legend redraws.
+        await page.evaluate("""() => { const buf = state.subjectHistory.get('1500:value'); const last = buf.at(-1).t;
+            for (let i = 1; i <= 3600; i++) { buf.push({t: last + 36 + i / 100, v: 5, n: 10}); buf.shift(); } }""")
+        pill = card.locator(".plot-legend-item .plot-legend-label").first
+        await pill.click()
+        await pill.click()
+        await page.wait_for_timeout(300)
+        still = await card.evaluate(COMPARE_POINTS_SHOWN)
+        assert still >= shown > 1000, f"Paused with {shown} points shown; redrawn, it shows {still}"
+        await card.locator('[aria-label="Remove graph"]').click()
+
+        # A replay of a recording made on 1 October: paused, the graph stays then.
+        await page.evaluate("""() => { state.replayActive = true; window.e2eReplayClock = Date.UTC(2026, 9, 1, 9) / 1000;
+            window.e2eReplayFeed = setInterval(() => { e2eReplayClock += 0.1;
+                cacheEvent({subject_id: 1600, publisher_node_id: 10, message_type: 'Real32_1_0', rate: 10, subject_rate: 10,
+                            payload_bytes: 4, attributes: [{attribute: 'value', value: 1}], timestamp_unix: e2eReplayClock}); }, 100); }""")
+        await page.wait_for_timeout(500)
+        card = await compare_graph(page, (1600, "value"))
+        await page.wait_for_timeout(500)
+        await card.locator(".plot-pause-btn").click()
+        await page.locator("#viewTabNodes").click()
+        await page.locator("#viewTabCompare").click()  # draws paused graphs again
+        await page.wait_for_timeout(300)
+        right_edge = "(c) => c.querySelector('.detail-plot-area')._plotCtx.xScale.domain()[1]"
+        recorded = "Date.UTC(2026, 9, 2) / 1000"  # before then
+        assert await card.evaluate(f"(c) => ({right_edge})(c) < {recorded}"), "Paused in a replay, the graph moved to today"
+        await card.locator(".plot-pause-btn").click()
+        await page.wait_for_timeout(500)
+        assert await card.evaluate(f"(c) => ({right_edge})(c) < {recorded}"), "Resumed in a replay, the graph went to today"
+    finally:
+        await page.evaluate("clearInterval(window.e2eReplayFeed); state.replayActive = false;")
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

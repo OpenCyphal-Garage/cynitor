@@ -100,6 +100,19 @@ const _resetSmoothCaches = (cfg) => {
   cfg._activeInterps = null;
 };
 
+// Pause a plot where it is (its right edge: now, or a replay's head; see
+// computePlotScales), or resume it, gliding back to live.
+const togglePlotPause = (cfg) => {
+  const now = Date.now() / 1000;
+  if (cfg.paused) {
+    cfg._resumeFrom = cfg.pausedAt;
+    cfg._resumeStart = now;
+    _resetSmoothCaches(cfg);
+  }
+  cfg.paused = !cfg.paused;
+  cfg.pausedAt = cfg.paused ? (cfg._anchor ?? now) : null;
+};
+
 const _processSmooth = (cfg, keys) => {
   if (!cfg.smooth || cfg.smooth <= 0) return;
   if (!cfg._smoothBufs) cfg._smoothBufs = new Map();
@@ -372,44 +385,36 @@ const computePlotScales = (visible, w, totalPanelsH, compareSeries = [], cfg = n
   if (!isFinite(tDataMax)) tDataMax = now;
   if (!isFinite(tDataMin)) tDataMin = now - 60;
 
-  const RESUME_DURATION = 2;
-  const _resumeAnchor = (resumeFrom, resumeStart) => {
-    if (!resumeFrom || !resumeStart) return now;
-    const elapsed = now - resumeStart;
-    if (elapsed >= RESUME_DURATION) return now;
-    const t = elapsed / RESUME_DURATION;
-    return resumeFrom + (now - resumeFrom) * t * t;
-  };
-
   // During replay, the events carry their original (recorded) timestamps —
   // potentially hours, days, or years before "now". Anchoring the plot's
   // right edge to wall-clock time would push every replay point off the
   // left edge of the visible window. Use the latest event timestamp seen
   // so far instead, so the plot tracks the replay head as events arrive.
-  const replayAnchor = state.replayActive ? tDataMax : null;
+  const live = state.replayActive ? tDataMax : now;
 
-  let windowSecs, anchor;
-  if (cfg) {
-    windowSecs = cfg.timeWindow;
-    if (cfg.paused && cfg.pausedAt) {
-      anchor = cfg.pausedAt;
-    } else if (cfg._resumeFrom) {
-      anchor = _resumeAnchor(cfg._resumeFrom, cfg._resumeStart);
-      if (now - cfg._resumeStart >= RESUME_DURATION) { cfg._resumeFrom = null; cfg._resumeStart = null; }
-    } else {
-      anchor = replayAnchor ?? now;
-    }
+  // Resumed, a plot glides from where it was paused back to live.
+  const RESUME_DURATION = 2;
+  const _resumeAnchor = (resumeFrom, resumeStart) => {
+    if (!resumeFrom || !resumeStart) return live;
+    const elapsed = now - resumeStart;
+    if (elapsed >= RESUME_DURATION) return live;
+    const t = elapsed / RESUME_DURATION;
+    return resumeFrom + (live - resumeFrom) * t * t;
+  };
+
+  // The detail panel's plot keeps its settings in state (see _detailPlotCfg).
+  const c = cfg || _detailPlotCfg;
+  const windowSecs = c.timeWindow;
+  let anchor;
+  if (c.paused && c.pausedAt) {
+    anchor = c.pausedAt;
+  } else if (c._resumeFrom) {
+    anchor = _resumeAnchor(c._resumeFrom, c._resumeStart);
+    if (now - c._resumeStart >= RESUME_DURATION) { c._resumeFrom = null; c._resumeStart = null; }
   } else {
-    windowSecs = state.plotTimeWindow;
-    if (state.plotPaused && state.plotPausedAt) {
-      anchor = state.plotPausedAt;
-    } else if (state._plotResumeFrom) {
-      anchor = _resumeAnchor(state._plotResumeFrom, state._plotResumeStart);
-      if (now - state._plotResumeStart >= RESUME_DURATION) { state._plotResumeFrom = null; state._plotResumeStart = null; }
-    } else {
-      anchor = replayAnchor ?? now;
-    }
+    anchor = live;
   }
+  c._anchor = anchor;  // where a pause now holds the plot (togglePlotPause)
 
   let domainLeft, domainRight;
   if (windowSecs === 0) {
@@ -494,13 +499,7 @@ const buildPlotControls = (opts = {}) => {
   pauseBtn.setAttribute('aria-label', 'Pause plot');
   pauseBtn.textContent = cfg.paused ? '▶' : '⏸';
   pauseBtn.addEventListener('click', () => {
-    if (cfg.paused) {
-      cfg._resumeFrom = cfg.pausedAt;
-      cfg._resumeStart = Date.now() / 1000;
-      _resetSmoothCaches(cfg);
-    }
-    cfg.paused = !cfg.paused;
-    cfg.pausedAt = cfg.paused ? Date.now() / 1000 : null;
+    togglePlotPause(cfg);
     pauseBtn.textContent = cfg.paused ? '▶' : '⏸';
     pauseBtn.classList.toggle('active', cfg.paused);
     invalidate();
@@ -1860,13 +1859,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
         if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; return; }
         clickTimer = setTimeout(() => {
           clickTimer = null;
-          if (cfg.paused) {
-            cfg._resumeFrom = cfg.pausedAt;
-            cfg._resumeStart = Date.now() / 1000;
-            _resetSmoothCaches(cfg);
-          }
-          cfg.paused = !cfg.paused;
-          cfg.pausedAt = cfg.paused ? Date.now() / 1000 : null;
+          togglePlotPause(cfg);
           _syncPauseBtn();
           cfg._fingerprint = '';
           if (plotArea._zoomRestart) plotArea._zoomRestart();
