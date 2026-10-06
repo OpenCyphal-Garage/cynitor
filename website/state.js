@@ -753,13 +753,7 @@ const _writeSettingsNow = () => {
     plotStroke: state.plotStroke,
     plotGrid: state.plotGrid,
     plotColorOverrides: state.plotColorOverrides,
-    compareGraphs: state.compareGraphs.map(g => ({
-      id: g.id, name: g.name, series: g.series, thresholds: g.thresholds || [],
-      derivedSeries: g.derivedSeries || [],
-      markers: g.markers || [],
-      drawings: g.drawings || [],
-      timeWindow: g.timeWindow, smooth: g.smooth, stroke: g.stroke, disconnectPoints: g.disconnectPoints, grid: g.grid,
-    })),
+    compareGraphs: state.compareGraphs.map((g) => ({ id: g.id, ...compareGraphConfig(g) })),
     savedCompareConfigs: state.savedCompareConfigs,
     favouriteNodeIds: [...state.favouriteNodeIds],
     hiddenNodeIds: [...state.hiddenNodeIds],
@@ -943,47 +937,19 @@ const loadSettings = () => {
   if (settings.plotColorOverrides && typeof settings.plotColorOverrides === 'object') {
     state.plotColorOverrides = settings.plotColorOverrides;
   }
+  // Graphs and saved graphs come back whole, what is valid of them (compare-view.js).
   if (Array.isArray(settings.compareGraphs)) {
     state.compareGraphs = settings.compareGraphs
-      .filter(g => g && typeof g.id === 'string' && Array.isArray(g.series))
-      .map(g => ({
-        id: g.id, name: g.name || '',
-        series: g.series.filter(s => Number.isInteger(s?.subjectId) && typeof s?.attribute === 'string'),
-        paused: false, pausedAt: null,
-        timeWindow: typeof g.timeWindow === 'number' ? g.timeWindow : 60,
-        smooth: typeof g.smooth === 'number' ? g.smooth : 0,
-        stroke: typeof g.stroke === 'number' ? g.stroke : 1.5,
-        disconnectPoints: g.disconnectPoints === true,
-        grid: g.grid === true,
-        thresholds: Array.isArray(g.thresholds) ? g.thresholds.filter(t => typeof t.value === 'number') : [],
-        derivedSeries: Array.isArray(g.derivedSeries) ? g.derivedSeries.filter(d => d?.id && d?.type && d?.sourceA) : [],
-        markers: Array.isArray(g.markers) ? g.markers.filter(m => typeof m.t === 'number') : [],
-        drawings: Array.isArray(g.drawings) ? g.drawings.filter(d => Array.isArray(d?.points) && d.points.length >= 2) : [],
-        _timer: null, _fingerprint: '', _hidden: new Set(),
-      }));
+      .filter((g) => typeof g?.id === 'string' && sanitizeCompareGraph(g))
+      .map((g) => newCompareGraph(g, g.id));
   }
   if (Array.isArray(settings.savedCompareConfigs)) {
-    state.savedCompareConfigs = settings.savedCompareConfigs
-      .filter(c => c && typeof c.name === 'string' && Array.isArray(c.series))
-      .map(c => ({
-        name: c.name,
-        series: c.series.filter(s => Number.isInteger(s?.subjectId) && typeof s?.attribute === 'string'),
-        derivedSeries: Array.isArray(c.derivedSeries) ? c.derivedSeries.filter(d => d?.id && d?.type && d?.sourceA) : [],
-        markers: Array.isArray(c.markers) ? c.markers.filter(m => typeof m.t === 'number') : [],
-        drawings: Array.isArray(c.drawings) ? c.drawings.filter(d => Array.isArray(d?.points) && d.points.length >= 2) : [],
-      }));
+    state.savedCompareConfigs = settings.savedCompareConfigs.map(sanitizeCompareGraph).filter(Boolean);
   }
   if (!state.compareGraphs.length && Array.isArray(settings.plotCompareList)) {
     const migrated = settings.plotCompareList.filter(
       item => Number.isInteger(item?.subjectId) && typeof item?.attribute === 'string'
     );
-    if (migrated.length) {
-      state.compareGraphs.push({
-        id: 'cg_migrated', name: '', series: migrated,
-        paused: false, pausedAt: null,
-        timeWindow: 60, smooth: 0, stroke: 1.5, disconnectPoints: false,
-        _timer: null, _fingerprint: '', _hidden: new Set(),
-      });
-    }
+    if (migrated.length) state.compareGraphs.push(newCompareGraph({ series: migrated }, 'cg_migrated'));
   }
 };

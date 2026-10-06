@@ -10,27 +10,62 @@ const _seedGraphIdCounter = () => {
 };
 const _nextGraphId = () => `cg_${++_compareGraphIdCounter}`;
 
-const _newGraph = (preset = null) => ({
-  id: _nextGraphId(),
-  name: preset?.name || '',
-  series: preset?.series ? preset.series.map(s => ({ ...s })) : [],
-  thresholds: preset?.thresholds ? preset.thresholds.map(t => ({ ...t })) : [],
-  derivedSeries: preset?.derivedSeries ? preset.derivedSeries.map(d => ({ ...d })) : [],
-  markers: preset?.markers ? preset.markers.map(m => ({ ...m })) : [],
-  drawings: preset?.drawings ? preset.drawings.map(d => ({ ...d, points: d.points.map(p => ({ ...p })) })) : [],
+// A graph's settings, whole and copied: what a saved graph, the workspace
+// file, the dashboard's settings and a clone keep of it. Not its live state
+// (pause, zoom, hidden series).
+const compareGraphConfig = (g) => ({
+  name: g.name,
+  series: g.series.map((s) => ({ ...s })),
+  thresholds: g.thresholds.map((t) => ({ ...t })),
+  derivedSeries: g.derivedSeries.map((d) => ({ ...d })),
+  markers: g.markers.map((m) => ({ ...m })),
+  drawings: g.drawings.map((d) => ({ ...d, points: d.points.map((p) => ({ ...p })) })),
+  timeWindow: g.timeWindow,
+  smooth: g.smooth,
+  stroke: g.stroke,
+  disconnectPoints: g.disconnectPoints,
+  grid: g.grid,
+});
+
+// A graph's settings as read from storage or a file: what is valid of them,
+// defaults for the rest; null when it is no graph at all.
+const sanitizeCompareGraph = (g) => {
+  if (!g || typeof g !== 'object' || !Array.isArray(g.series)) return null;
+  const list = (items, valid) => (Array.isArray(items) ? items.filter(valid) : []);
+  return {
+    name: typeof g.name === 'string' ? g.name : '',
+    series: g.series.filter((s) => Number.isInteger(s?.subjectId) && typeof s?.attribute === 'string'),
+    thresholds: list(g.thresholds, (t) => typeof t?.value === 'number'),
+    derivedSeries: list(g.derivedSeries, (d) => d?.id && d?.type && d?.sourceA),
+    markers: list(g.markers, (m) => typeof m?.t === 'number'),
+    drawings: list(g.drawings, (d) => Array.isArray(d?.points) && d.points.length >= 2),
+    timeWindow: typeof g.timeWindow === 'number' && g.timeWindow >= 0 ? g.timeWindow : 60,
+    smooth: typeof g.smooth === 'number' && g.smooth >= 0 ? g.smooth : 0,
+    stroke: typeof g.stroke === 'number' && g.stroke > 0 ? g.stroke : 1.5,
+    disconnectPoints: g.disconnectPoints === true,
+    grid: g.grid === true,
+  };
+};
+
+// A graph from settings (an empty one by default), live and not paused.
+const newCompareGraph = (config = { series: [] }, id = _nextGraphId()) => ({
+  ...compareGraphConfig(sanitizeCompareGraph(config) || sanitizeCompareGraph({ series: [] })),
+  id,
   paused: false,
   pausedAt: null,
-  timeWindow: 60,
-  smooth: 0,
-  stroke: 1.5,
-  disconnectPoints: false,
-  grid: false,
-  _timer: null,
   _fingerprint: '',
   _hidden: new Set(),
   _zoom: 1,
   _panOffset: 0,
 });
+
+// A name no saved graph has yet: "Untitled", then "Untitled 2", ...
+const _freeSavedName = (base) => {
+  const taken = new Set(state.savedCompareConfigs.map((c) => c.name));
+  let name = base;
+  for (let n = 2; taken.has(name); n++) name = `${base} ${n}`;
+  return name;
+};
 
 const initCompareView = () => {
   _seedGraphIdCounter();
@@ -56,7 +91,7 @@ const initCompareView = () => {
   addBtn.type = 'button';
   addBtn.textContent = '+ Add Graph';
   addBtn.addEventListener('click', () => {
-    const graph = _newGraph();
+    const graph = newCompareGraph();
     state.compareGraphs.push(graph);
     saveSettings();
     const card = _buildGraphCard(graph);
@@ -118,14 +153,7 @@ const initCompareView = () => {
   exportBtn.setAttribute('aria-label', 'Export all graphs to file');
   exportBtn.addEventListener('click', () => {
     const data = {
-      graphs: state.compareGraphs.map(g => ({
-        name: g.name, series: g.series, thresholds: g.thresholds || [],
-        derivedSeries: g.derivedSeries || [],
-        markers: g.markers || [],
-        drawings: g.drawings || [],
-        timeWindow: g.timeWindow, smooth: g.smooth, stroke: g.stroke,
-        disconnectPoints: g.disconnectPoints, grid: g.grid,
-      })),
+      graphs: state.compareGraphs.map(compareGraphConfig),
       saved: state.savedCompareConfigs,
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -158,15 +186,7 @@ const initCompareView = () => {
           if (!Array.isArray(data.graphs)) throw new Error('Invalid format');
           stopCompareAnim();
           state.compareGraphs.length = 0;
-          for (const g of data.graphs) {
-            const graph = _newGraph(g);
-            graph.timeWindow = g.timeWindow ?? 60;
-            graph.smooth = g.smooth ?? 0;
-            graph.stroke = g.stroke ?? 1.5;
-            graph.disconnectPoints = g.disconnectPoints ?? false;
-            graph.grid = g.grid ?? false;
-            state.compareGraphs.push(graph);
-          }
+          for (const g of data.graphs) state.compareGraphs.push(newCompareGraph(g));
           if (Array.isArray(data.saved)) state.savedCompareConfigs = data.saved;
           saveSettings();
           cardsContainer.innerHTML = '';
@@ -223,7 +243,7 @@ const _refreshSavedMenu = (menu, cardsContainer) => {
     nameSpan.textContent = config.name || 'Untitled';
     nameSpan.addEventListener('click', () => {
       menu.classList.add('hidden');
-      const graph = _newGraph(config);
+      const graph = newCompareGraph(config);
       state.compareGraphs.push(graph);
       saveSettings();
       const card = _buildGraphCard(graph);
@@ -284,14 +304,14 @@ const _buildGraphCard = (graph) => {
   saveBtn.textContent = 'Save';
   saveBtn.setAttribute('aria-label', 'Save configuration');
   saveBtn.addEventListener('click', () => {
-    const name = graph.name.trim() || 'Untitled';
-    const config = {
-      name,
-      series: graph.series.map(s => ({ ...s })),
-      derivedSeries: (graph.derivedSeries || []).map(d => ({ ...d })),
-      markers: (graph.markers || []).map(m => ({ ...m })),
-      drawings: (graph.drawings || []).map(d => ({ ...d, points: d.points.map(p => ({ ...p })) })),
-    };
+    // Saved without a name, a graph gets a free one: it saves apart from
+    // other untitled graphs, and its later saves update it.
+    if (!graph.name.trim()) {
+      graph.name = _freeSavedName('Untitled');
+      nameInput.value = graph.name;
+    }
+    const name = graph.name.trim();
+    const config = { ...compareGraphConfig(graph), name };
     const existing = state.savedCompareConfigs.findIndex(c => c.name === name);
     if (existing !== -1) state.savedCompareConfigs[existing] = config;
     else state.savedCompareConfigs.push(config);
@@ -306,17 +326,10 @@ const _buildGraphCard = (graph) => {
   cloneBtn.textContent = '⧉';
   cloneBtn.setAttribute('aria-label', 'Clone graph');
   cloneBtn.addEventListener('click', () => {
-    const clone = _newGraph({
+    const clone = newCompareGraph({
+      ...compareGraphConfig(graph),
       name: graph.name ? `${graph.name} (copy)` : '',
-      series: graph.series,
-      derivedSeries: graph.derivedSeries,
     });
-    clone.timeWindow = graph.timeWindow;
-    clone.smooth = graph.smooth;
-    clone.stroke = graph.stroke;
-    clone.disconnectPoints = graph.disconnectPoints;
-    clone.grid = graph.grid;
-    clone.thresholds = graph.thresholds.map(t => ({ ...t }));
     state.compareGraphs.push(clone);
     saveSettings();
     const cloneCard = _buildGraphCard(clone);

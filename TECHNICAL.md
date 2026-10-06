@@ -217,7 +217,7 @@ The legend uses three-zone `<div>` pills: left swatch (click to pick color via n
 
 **Fingerprint-based re-rendering**: `_renderCompareGraphNow` computes a string fingerprint from all render-affecting state (series data, time window, zoom, pan, styles, markers, drawings). If the fingerprint matches the previous render, the function returns early. Any state change invalidates the fingerprint via `cfg._fingerprint = ''`.
 
-**Presets** save/load named graph configurations. **Export/Import** serializes the full workspace (all graphs + saved configs) as a JSON file.
+**Presets** save/load named graph configurations. **Export/Import** serializes the full workspace (all graphs + saved configs) as a JSON file. A preset, the workspace file, a clone and the persisted settings all hold a graph as `compareGraphConfig()` gives it, and read one back through `sanitizeCompareGraph()`, which keeps what is valid and fills in defaults.
 
 ## Telemetry event format
 

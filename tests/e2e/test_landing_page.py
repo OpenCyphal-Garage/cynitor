@@ -1343,6 +1343,36 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: saved graphs and clones keep the whole graph, and untitled ones keep apart")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    try:
+        await page.wait_for_timeout(300)
+        card = await compare_graph(page, (1100, "value"))
+        await card.locator('[aria-label="Threshold value"]').fill("82")
+        await card.locator(".plot-threshold-picker .plot-compare-add").click()
+        await card.locator('.plot-window-btn[data-secs="300"]').click()
+        # A marker and a drawing, as Shift+click and Alt+drag leave them.
+        await page.evaluate("""() => { const g = state.compareGraphs[0]; const now = Date.now() / 1000;
+            g.markers.push({t: now - 5, label: 'motor on', note: '', color: '#0969da', lineStyle: 'dashed'});
+            g.drawings.push({points: [{t: now - 8, y: 0.2}, {t: now - 2, y: 0.6}], color: '#ef4444', width: 2, dash: 'solid'}); }""")
+        await card.locator(".compare-graph-name").fill("Motor A")
+        await card.locator(".compare-graph-save").click()
+        await page.locator(".compare-saved-btn").click()
+        await page.locator(".compare-saved-name", has_text="Motor A").click()
+        await card.locator('[aria-label="Clone graph"]').click()
+        graphs = await page.evaluate(
+            "state.compareGraphs.map(g => [g.thresholds.length, g.timeWindow, g.markers.length, g.drawings.length])")
+        assert graphs == [[1, 300, 1, 1]] * 3, f"Original, opened from Saved graphs, and its clone: {graphs}"
+        for series in ((1100, "value"), (1700, "current")):
+            unnamed = await compare_graph(page, series)
+            await unnamed.locator(".compare-graph-save").click()
+        names = await page.evaluate("state.savedCompareConfigs.map(c => c.name)")
+        assert names == ["Motor A", "Untitled", "Untitled 2"], f"Saved graphs: {names}"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
