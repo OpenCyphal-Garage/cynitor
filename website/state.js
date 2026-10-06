@@ -236,15 +236,20 @@ const formatUptime = (seconds) => {
   return parts.slice(first, first + 2).map(([n, unit]) => `${n}${unit}`).join(' ');
 };
 
-const formatLastSeen = (lastSeen) => {
-  if (!Array.isArray(lastSeen) || !lastSeen.length) return '-';
-  const ts = new Date(lastSeen[lastSeen.length - 1]);
-  if (Number.isNaN(ts.getTime())) return '-';
-  const ago = Math.floor((Date.now() - ts.getTime()) / 1000);
+// How long ago, at a glance: "12s ago", "3m ago", "2h ago", "4d ago".
+const formatAgo = (seconds) => {
+  const ago = Math.max(0, Math.floor(seconds));
   if (ago < 60) return `${ago}s ago`;
   if (ago < 3600) return `${Math.floor(ago / 60)}m ago`;
   if (ago < 86400) return `${Math.floor(ago / 3600)}h ago`;
   return `${Math.floor(ago / 86400)}d ago`;
+};
+
+const formatLastSeen = (lastSeen) => {
+  if (!Array.isArray(lastSeen) || !lastSeen.length) return '-';
+  const ts = new Date(lastSeen[lastSeen.length - 1]);
+  if (Number.isNaN(ts.getTime())) return '-';
+  return formatAgo((Date.now() - ts.getTime()) / 1000);
 };
 
 const formatThroughput = (bytesPerSec) => {

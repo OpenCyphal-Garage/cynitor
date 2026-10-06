@@ -61,16 +61,26 @@ const subjectRateFormatter = (cell) => {
   return v < 1 ? '&lt;1 Hz' : `${v.toFixed(1)} Hz`;
 };
 
-// When, and from whom: the time only, today; the date too, before.
+// How long ago: "now" while messages come, then "12s ago", amber once silent.
+// The time itself, and from whom, in the tooltip.
 const lastSeenFormatter = (cell) => {
-  const t = cell.getValue();
-  if (!t) return '<span class="text-muted">-</span>';
+  const age = cell.getValue();
   const row = cell.getRow().getData();
-  const today = new Date().toDateString() === new Date(t * 1000).toDateString();
-  const when = today ? formatPlotTime(t) : `${_fmtDate(t)} ${formatPlotTime(t)}`;
+  if (age == null || !row.lastTime) return '<span class="text-muted">-</span>';
+  const t = row.lastTime;
   const who = row._lastNode != null ? `node ${row._lastNode} ${nodeDisplayName(row._lastNode)}`.trim() : '';
   const title = `${_fmtDate(t)} ${formatPlotTime(t)}${who ? `, ${who}` : ''}`;
-  return `<span title="${escapeHtml(title)}">${escapeHtml(when)}</span>`;
+  return `<span class="${row._silent ? 'status-warn' : ''}" title="${escapeHtml(title)}">${
+    escapeHtml(age < 2 ? 'now' : formatAgo(age))}</span>`;
+};
+
+// Payload bytes per second: a message's size times the subject's rate.
+const bytesRateFormatter = (cell) => {
+  const v = cell.getValue();
+  if (!(v > 0)) return '<span class="text-muted">-</span>';
+  const row = cell.getRow().getData();
+  return `<span title="${escapeHtml(`${row._payload} B × ${row.rate.toFixed(1)} Hz`)}">${
+    escapeHtml(formatBytes(Math.round(v)))}/s</span>`;
 };
 
 const nodeIdsFormatter = (cell) => {
@@ -127,7 +137,10 @@ const buildSubjectsRows = () => {
       // A row redraws a cell only when its value changes: none, not 0, once silent.
       rate: fresh ? getSubjectRate(event) : null,
       _silent: Boolean(event) && !fresh,  // it published, and has stopped
+      bytesPerSec: fresh && event.payload_bytes != null ? event.payload_bytes * getSubjectRate(event) : null,
+      _payload: event?.payload_bytes ?? null,
       lastTime: event?.timestamp_unix || null,
+      age: event?._rxMs ? Math.floor((now - event._rxMs) / 1000) : null,  // by this browser's clock
       _lastNode: event?.publisher_node_id ?? null,
       _fav: state.favouriteSubjectIds.has(sid),
     });
@@ -145,7 +158,9 @@ const buildSubjectsRows = () => {
       publishers: info.servers.sort((a, b) => a - b).join(', ') || '-',
       subscribers: info.clients.sort((a, b) => a - b).join(', ') || '-',
       rate: null,  // a service has calls, not a message rate
+      bytesPerSec: null,
       lastTime: lastCall ? lastCall.timestamp / 1000 : null,
+      age: lastCall ? Math.floor((now - lastCall.timestamp) / 1000) : null,
       _lastNode: lastCall ? lastCall.nodeId : null,
       _fav: state.favouriteSubjectIds.has(`svc:${sid}`),
     });
@@ -357,7 +372,8 @@ const initSubjectsTable = () => {
       col('Publishers / Servers', 'publishers', { minWidth: 90, widthGrow: 1, headerFilterPlaceholder: 'pub/srv', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll', formatter: nodeIdsFormatter }),
       col('Subscribers / Clients', 'subscribers', { minWidth: 90, widthGrow: 1, headerFilterPlaceholder: 'sub/clt', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll', formatter: nodeIdsFormatter }),
       col('Rate', 'rate', { sorter: 'number', minWidth: 90, widthGrow: 0.4, headerFilterPlaceholder: 'rate', formatter: subjectRateFormatter }),
-      col('Last seen', 'lastTime', { sorter: 'number', minWidth: 90, widthGrow: 0.6, headerFilter: false, formatter: lastSeenFormatter, headerTooltip: 'Last message, or last call from this dashboard' }),
+      col('Bytes/s', 'bytesPerSec', { sorter: 'number', minWidth: 100, widthGrow: 0.4, headerFilter: false, formatter: bytesRateFormatter, headerTooltip: 'Payload bytes per second: message size × rate' }),
+      col('Last seen', 'age', { sorter: 'number', minWidth: 90, widthGrow: 0.6, headerFilter: false, formatter: lastSeenFormatter, headerTooltip: 'How long ago the last message came, or this dashboard\'s last call; the time itself in the tooltip' }),
       { title: '', field: '_actions', formatter: subjectActionsFormatter, width: 56, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-actions', titleFormatter: () => { const btn = document.createElement('button'); btn.type = 'button'; btn.id = 'hiddenSubjectsChip'; btn.className = 'hidden-chip hidden'; btn.setAttribute('aria-label', 'Show hidden subjects'); btn.addEventListener('click', (e) => { e.stopPropagation(); toggleHiddenSubjectsPopover(); }); return btn; }, cellClick: (e, cell) => { e.stopPropagation(); hideSubject(cell.getRow().getData()); } },
     ],
   });

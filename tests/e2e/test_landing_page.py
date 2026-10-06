@@ -911,7 +911,9 @@ async def _(page):
 @test("Plots: Subjects plots each publisher of a subject apart")
 async def _(page):
     await page.locator("#viewTabSubjects").click()
-    row = page.locator("#subjectsTable .tabulator-row", has_text="1300").first
+    # A cell, not the row's middle, where a column's resize handle may be.
+    row = page.locator("#subjectsTable .tabulator-row", has_text="1300").first.locator(
+        '.tabulator-cell[tabulator-field="messageType"]')
     await row.click()
     try:
         await page.wait_for_function(f"{PLOT_PANELS}.join() === 'value · n20,value · n21'", timeout=3000)
@@ -939,6 +941,20 @@ async def _(page):
     finally:
         await fill.uncheck()
         await page.evaluate("closeSubjectPlot()")
+
+
+@test("Tables: Subjects say how long ago they were heard, and how many bytes a second")
+async def _(page):
+    await page.locator("#viewTabSubjects").click()
+    seen = lambda row: _cell('subjectsTabulator', row, 'age')  # noqa: E731
+    await page.wait_for_function(f"/^\\d+s ago$/.test({seen('sub:1100')})", timeout=3000)
+    warn = await page.evaluate("""subjectsTabulator.getRow('sub:1100').getCell('age').getElement()
+        .querySelector('span').classList.contains('status-warn')""")
+    assert warn, "A silent subject's age is not amber"
+    assert await page.evaluate(seen("sub:1200")) == "now", "A live subject is not heard 'now'"
+    # 1300: 4-byte messages at 15 Hz over its two publishers.
+    shown = await page.evaluate(_cell('subjectsTabulator', 'sub:1300', 'bytesPerSec'))
+    assert shown == "60 B/s", f"Subject 1300 shows {shown!r}"
 
 
 @test("Tables: the Subjects strip lists one kind, and picks out the silent")
