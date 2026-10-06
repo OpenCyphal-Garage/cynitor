@@ -158,7 +158,7 @@ The compare view provides independent graphs for multi-series comparison.
 
 - **Multi-series overlay** — add any subject + attribute from the network to a graph. A series keeps to the node it was added from (`S1300 · value · n21`), so a node that starts publishing the subject later does not mix in; for a subject several nodes publish, pick which. Series saved before publishers were told apart keep plotting what any publisher sends
 - **Derived series** — computed from raw series: delta, ratio, moving average, min/max envelope, rate of change
-- **Thresholds** — horizontal reference lines with labels
+- **Thresholds** — horizontal reference lines with labels. The y-axis fits what is in view (zooming in rescales it) and keeps the thresholds on it
 - **Interactive legend** — three-zone pills: click swatch to change color, click style indicator to cycle line style (solid/dashed/dotted/dashdot/longdash + circle/square/triangle/diamond markers), click label to toggle visibility, click × to remove. A series with nothing to plot (not heard yet, or its history cleared) stays listed, muted, so it can be removed; each series keeps its colour
 - **Timeline markers** — Shift+click to place a named marker with optional note, color, and line style. Click on an existing marker to edit. Markers persist and export with the graph config.
 - **Freehand drawing** — Alt+drag to draw annotations directly on the plot. Controls for color, line style, and size are in the toolbar. Alt+double-click to clear all drawings.

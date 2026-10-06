@@ -1475,6 +1475,31 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: the y-axis fits what is in view, thresholds included")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    ticks = """() => [...document.querySelectorAll('.compare-graph-card .plot-compare-overlay .panel-y-axis .tick text')]
+        .map(t => Number(t.textContent.replace(/,/g, '')))"""
+    try:
+        # 1100 read 1000 once, four minutes ago; live, it reads 80 ± 5.
+        await page.evaluate("""() => { const now = Date.now() / 1000;
+            state.subjectHistory.set('1100:value', [{t: now - 240, v: 1000, n: 10}, {t: now - 239.9, v: 80, n: 10}]); }""")
+        await page.wait_for_timeout(500)
+        card = await compare_graph(page, (1100, "value"))
+        await card.locator('.plot-window-btn[data-secs="30"]').click()
+        await page.wait_for_timeout(400)
+        top = max(await page.evaluate(ticks))
+        assert top < 100, f"With 75..85 in view, the y-axis goes up to {top}"
+        await card.locator('[aria-label="Threshold value"]').fill("100")
+        await card.locator(".plot-threshold-picker .plot-compare-add").click()
+        await page.wait_for_timeout(400)
+        y, height = await card.evaluate("""(c) => [Number(c.querySelector('.plot-threshold line').getAttribute('y1')),
+            Number(c.querySelector('.plot-overlay').getAttribute('height'))]""")
+        assert 0 <= y <= height, f"The threshold at 100 is drawn at y {y:.0f}, off the plot (0..{height:.0f})"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

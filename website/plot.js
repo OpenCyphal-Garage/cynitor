@@ -1460,12 +1460,26 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
   const yOffset = primaryCount * (panelH + PLOT_PANEL_GAP);
   overlay.attr('transform', `translate(0, ${yOffset})`);
 
-  let vMin = Infinity, vMax = -Infinity;
-  for (const s of compareSeries) {
-    for (const p of s.data) {
-      if (p.v < vMin) vMin = p.v;
-      if (p.v > vMax) vMax = p.v;
+  // The y-axis fits what is in view, thresholds included: a spike that has
+  // left the window, or a zoom, does not flatten what is shown. With nothing
+  // in view, it fits all there is.
+  const [tLeft, tRight] = xScale.domain();
+  const valueRange = (inViewOnly) => {
+    let lo = Infinity, hi = -Infinity;
+    for (const s of compareSeries) {
+      for (const p of s.data) {
+        if (inViewOnly && (p.t < tLeft || p.t > tRight)) continue;
+        if (p.v < lo) lo = p.v;
+        if (p.v > hi) hi = p.v;
+      }
     }
+    return [lo, hi];
+  };
+  let [vMin, vMax] = valueRange(true);
+  if (!isFinite(vMin)) [vMin, vMax] = valueRange(false);
+  for (const th of cfg?.thresholds || []) {
+    vMin = Math.min(vMin, th.value);
+    vMax = Math.max(vMax, th.value);
   }
   if (vMin === vMax) { vMin -= 1; vMax += 1; }
   const pad = (vMax - vMin) * 0.05;
