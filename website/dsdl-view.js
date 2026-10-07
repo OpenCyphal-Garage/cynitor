@@ -210,12 +210,14 @@ const DsdlView = (() => {
       ${countHtml}
       <span class="dsdl-section-right">
         ${statusHtml}
+        <button class="dsdl-hdr-btn" id="dsdlCustomNewType" title="Write a new type, in a namespace of your own">New type</button>
         <button class="dsdl-hdr-btn" id="dsdlCustomAddNs" aria-label="Add namespace" title="Add namespace">
           <svg width="10" height="10" viewBox="0 0 10 10"><path d="M5 1v8M1 5h8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
           <svg width="10" height="10" viewBox="0 0 16 16"><path d="M2 3h5l2 2h5v8H2z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
         </button>
       </span>`;
 
+    document.getElementById('dsdlCustomNewType')?.addEventListener('click', () => _openEditorNew());
     document.getElementById('dsdlCustomAddNs')?.addEventListener('click', () => _showNewNamespaceDialog());
     document.getElementById('dsdlCustomCompileBtn')?.addEventListener('click', () => _compile('custom'));
   };
@@ -1192,13 +1194,9 @@ const DsdlView = (() => {
     const titleText = isEdit ? 'Edit DSDL Type' : 'New DSDL Type';
     const saveLabel = isEdit ? 'Save changes' : 'Save';
 
-    const nsOptions = _customNamespaces.map(ns => {
-      const sel = (prefilledNs && ns === prefilledNs) ? ' selected' : '';
-      return `<option value="${escapeHtml(ns)}"${sel}>${escapeHtml(ns)}</option>`;
-    }).join('');
-    const nsHint = (!isEdit && _customNamespaces.length === 0)
-      ? `<div class="dsdl-editor-hint">No namespaces yet — create one with the “+” button in the Custom section.</div>`
-      : '';
+    // The namespaces there are, offered as one is typed; a new one is
+    // created with the type it is saved with.
+    const nsOptions = _customNamespaces.map(ns => `<option value="${escapeHtml(ns)}"></option>`).join('');
 
     const policyTip = `Only types that aren't compiled can be edited. Compiled types are loaded by the running CAN runtime — changing them would diverge source from live code. To change one: ${_lockedAdvice.toLowerCase()}`;
 
@@ -1213,14 +1211,13 @@ const DsdlView = (() => {
         </span>
       </div>
       <div class="dsdl-editor-form">
-        ${nsHint}
         <div class="dsdl-editor-row">
           <label class="dsdl-editor-label" for="dsdlEditorNs">Namespace</label>
           <div class="dsdl-editor-ns-wrap">
-            <select class="dsdl-editor-select" id="dsdlEditorNs"${lockAttr}>
-              <option value="">— select —</option>
-              ${nsOptions}
-            </select>
+            <input type="text" class="dsdl-editor-input" id="dsdlEditorNs" list="dsdlEditorNsList" autocomplete="off"
+                   placeholder="myapp or myapp.sensors" value="${escapeHtml(prefilledNs || '')}"
+                   title="Pick one of yours, or name a new one: it is created with the type"${lockAttr} />
+            <datalist id="dsdlEditorNsList">${nsOptions}</datalist>
           </div>
         </div>
         <div class="dsdl-editor-row dsdl-editor-row-inline">
@@ -1276,10 +1273,7 @@ const DsdlView = (() => {
     _applyPreviewRatio();
   };
 
-  const _getEditorNamespace = () => {
-    const select = document.getElementById('dsdlEditorNs');
-    return select?.value || '';
-  };
+  const _getEditorNamespace = () => document.getElementById('dsdlEditorNs')?.value.trim() || '';
 
   const _parseDsdlSource = (text) => {
     const fieldRe = /^(?:truncated\s+|saturated\s+)?(\S+)\s+([a-zA-Z_]\w*)(?:\s*=\s*([^#]+))?/;

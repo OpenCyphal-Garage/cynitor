@@ -2606,6 +2606,7 @@ class _DsdlServer:
                 return {"error": f"Cannot edit '{name}': type is already compiled."}, 409
             self.types[name] = _dsdl_type(name, port=body.get("fixed_port_id"), source="custom", compiled=False,
                                           text=body["source_text"])
+            self.custom_namespaces.add(body["namespace"])  # created with its first type, as the server does
             return {"full_name": name, "path": ""}, 201
         if method == "DELETE" and path.startswith("/api/dsdl/custom/type/"):
             name = path.removeprefix("/api/dsdl/custom/type/")
@@ -3274,6 +3275,27 @@ async def _(page):
             "Unsealed": ["Does not compile: Either `@sealed` or `@extent ...` are required.", []],
             "Reading": [None, []],
         }, f"What each pane says, and the source lines it marks: {shown}"
+    finally:
+        await dsdl_close(page, server)
+
+
+@test("DSDL: a first type is written from a 'New type' button, its namespace typed in")
+async def _(page):
+    server = _DsdlServer()
+    del server.types["myapp.Reading.1.0"]  # no custom types, no namespace yet
+    server.custom_namespaces.clear()
+    await dsdl_open(page, server)
+    try:
+        new_type = page.get_by_role("button", name="New type")
+        assert await new_type.count() == 1, "No 'New type' button where the custom types go"
+        await new_type.click()
+        await page.locator("#dsdlEditorNs").fill("myapp")
+        await page.locator("#dsdlEditorName").fill("Reading")
+        await page.locator("#dsdlEditorSource").fill("uint16 value\n@sealed\n")
+        said = await dsdl_save(page)
+        await page.wait_for_selector('#dsdlCustomTree .dsdl-type-row[data-type="myapp.Reading.1.0"]',
+                                     state="attached", timeout=WAIT_MS)
+        assert said == "Saved" and "myapp.Reading.1.0" in server.types, f"Saving said {said!r}"
     finally:
         await dsdl_close(page, server)
 
