@@ -2992,6 +2992,24 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+@test("DSDL: a public recompile leaves the custom types' compile error alone")
+async def _(page):
+    server = _DsdlServer()
+    server.compile_answer = ({"ok": False, "errors": ["custom/myapp: Reading.1.0.dsdl: @sealed or @extent required"]}, 422)
+    await dsdl_open(page, server)
+    try:
+        await page.locator("#dsdlCustomCompileBtn").click()
+        await page.wait_for_selector("#dsdlCustomHeader + .dsdl-compile-error", timeout=WAIT_MS)
+        server.compile_answer = ({"ok": True}, 200)
+        async with page.expect_response("**/api/dsdl/compile"):
+            await page.locator("#dsdlRecompileBtn").click()
+        await page.wait_for_timeout(300)
+        left = await page.locator("#dsdlCustomHeader + .dsdl-compile-error").count()
+        assert left == 1, "A public recompile wiped the custom types' compile error, though they did not compile"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

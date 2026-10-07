@@ -234,30 +234,31 @@ const DsdlView = (() => {
   // One compile per scope ('public', 'custom') at a time.
   const _compile = async (scope) => {
     if (_compiling.has(scope)) return;
-    const [showError, clearError] = scope === 'custom'
-      ? [_showCustomCompileError, _clearCustomCompileError]
-      : [_showCompileError, _clearCompileError];
     _compiling.add(scope);
     _renderTreeHeaders();
-    clearError();
+    _clearCompileError(scope);
     try {
       const result = await requestJson('/api/dsdl/compile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scope }),
       });
-      if (!result.ok) showError((result.errors || []).join('\n'));
+      if (!result.ok) _showCompileError(scope, (result.errors || []).join('\n'));
       await _reloadTree();
     } catch (err) {
-      showError(err.message);
+      _showCompileError(scope, err.message);
     } finally {
       _compiling.delete(scope);
       _renderTreeHeaders();
     }
   };
 
-  const _showCustomCompileError = (msg) => {
-    const header = document.getElementById('dsdlCustomHeader');
+  // A compile's errors sit under its own section's header: each scope
+  // shows and clears only its own.
+  const _sectionHeader = (scope) => document.getElementById(scope === 'custom' ? 'dsdlCustomHeader' : 'dsdlPublicHeader');
+
+  const _showCompileError = (scope, msg) => {
+    const header = _sectionHeader(scope);
     if (!header) return;
     let errEl = header.parentElement.querySelector('.dsdl-compile-error');
     if (!errEl) {
@@ -268,9 +269,8 @@ const DsdlView = (() => {
     errEl.textContent = msg;
   };
 
-  const _clearCustomCompileError = () => {
-    const section = document.getElementById('dsdlCustomHeader')?.parentElement;
-    section?.querySelector('.dsdl-compile-error')?.remove();
+  const _clearCompileError = (scope) => {
+    _sectionHeader(scope)?.parentElement.querySelector('.dsdl-compile-error')?.remove();
   };
 
   const _formatAge = (timestamp) => {
@@ -1465,22 +1465,6 @@ const DsdlView = (() => {
       banner.textContent = `This type was compiled — editing is locked. ${_lockedAdvice}`;
       panel.insertBefore(banner, form);
     }
-  };
-
-  const _showCompileError = (msg) => {
-    const header = document.getElementById('dsdlPublicHeader');
-    if (!header) return;
-    let errEl = header.parentElement.querySelector('.dsdl-compile-error');
-    if (!errEl) {
-      errEl = document.createElement('div');
-      errEl.className = 'dsdl-compile-error';
-      header.after(errEl);
-    }
-    errEl.textContent = msg;
-  };
-
-  const _clearCompileError = () => {
-    document.querySelector('.dsdl-compile-error')?.remove();
   };
 
   // The editor's own word on the type in it; other errors are said where
