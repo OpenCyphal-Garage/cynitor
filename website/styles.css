@@ -6171,14 +6171,13 @@ details.svc-history-entry[open] > summary::before {
   letter-spacing: 0.02em;
 }
 
+/* As in the Subjects table: a message's tag muted, a service's in the accent. */
 .dsdl-kind-message {
-  background: var(--accent-muted);
-  color: var(--accent);
+  color: var(--muted);
 }
 
 .dsdl-kind-service {
-  background: var(--ok-muted);
-  color: var(--ok);
+  color: var(--accent);
 }
 
 .dsdl-type-name {
@@ -6986,12 +6985,13 @@ details.svc-history-entry[open] > summary::before {
   opacity: 0.85;
 }
 
+/* Not compiled yet: a step still to take, not a fault. */
 .dsdl-ns-row.dsdl-ns-uncompiled .dsdl-ns-label {
-  color: var(--error);
+  color: var(--warn);
 }
 
 .dsdl-type-row.dsdl-type-uncompiled .dsdl-type-name {
-  color: var(--error);
+  color: var(--warn);
 }
 
 .dsdl-info-tip {

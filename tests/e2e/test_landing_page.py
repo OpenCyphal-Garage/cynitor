@@ -3441,6 +3441,37 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+# A theme colour, --muted for one, as the browser draws it.
+TOKEN_COLOUR = """(name) => { const probe = document.createElement('span'); probe.style.color = `var(--${name})`;
+    document.body.append(probe); const colour = getComputedStyle(probe).color; probe.remove(); return colour; }"""
+
+# The computed `property` of the element `selector` finds.
+COLOUR_OF = "([selector, property]) => getComputedStyle(document.querySelector(selector))[property]"
+
+
+@test("DSDL: the tree keeps colour for the unusual: a service's tag, a type not compiled yet")
+async def _(page):
+    server = _DsdlServer()
+    pending = _dsdl_type("myapp.Pending.1.0", source="custom", compiled=False)
+    service = _dsdl_type("uavcan.node.GetInfo.1.0", port=430, text="@sealed\n---\nuint8 name\n@sealed\n")
+    server.types.update({t["full_name"]: t for t in (pending, service)})
+    await dsdl_open(page, server)
+    try:
+        tokens = {name: await page.evaluate(TOKEN_COLOUR, name) for name in ("muted", "accent", "warn")}
+        seen = {
+            "message tag": await page.evaluate(COLOUR_OF, ['[data-type="uavcan.node.Heartbeat.1.0"] .dsdl-kind', "color"]),
+            "its fill": await page.evaluate(COLOUR_OF, ['[data-type="uavcan.node.Heartbeat.1.0"] .dsdl-kind', "backgroundColor"]),
+            "service tag": await page.evaluate(COLOUR_OF, ['[data-type="uavcan.node.GetInfo.1.0"] .dsdl-kind', "color"]),
+            "not compiled": await page.evaluate(COLOUR_OF, ['[data-type="myapp.Pending.1.0"] .dsdl-type-name', "color"]),
+            "its namespace": await page.evaluate(COLOUR_OF, ['.dsdl-ns-row[data-ns="myapp"] .dsdl-ns-label', "color"]),
+        }
+        assert seen == {"message tag": tokens["muted"], "its fill": "rgba(0, 0, 0, 0)", "service tag": tokens["accent"],
+                        "not compiled": tokens["warn"], "its namespace": tokens["warn"]}, \
+            f"Drawn {seen}; the theme's muted, accent and warn are {tokens}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
