@@ -6414,6 +6414,28 @@ details.svc-history-entry[open] > summary::before {
   color: var(--muted);
 }
 
+/* A type the compiler refuses: why, before a compile is tried. */
+.dsdl-problem {
+  padding: 0.5rem 0.875rem;
+  border-radius: var(--radius);
+  background: var(--error-muted);
+  color: var(--error);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+/* Its line at fault, in the source. */
+.dsdl-src-problem {
+  display: inline-block;
+  min-width: 100%;
+  background: var(--error-muted);
+}
+
+.dsdl-src-problem .dsdl-src-num {
+  color: var(--error);
+  opacity: 1;
+}
+
 /* The type's comment, its first paragraph, under the badges. */
 .dsdl-doc-summary {
   margin: 0.625rem 0 0;

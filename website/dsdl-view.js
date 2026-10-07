@@ -831,10 +831,16 @@ const DsdlView = (() => {
         ${data.dependencies.map(d => `<button type="button" class="dsdl-dep-chip" data-dep="${escapeHtml(d)}">${escapeHtml(d)}</button>`).join('')}
       </div>` : '';
 
+    // A type the compiler refuses says why before a compile is tried, the
+    // line at fault marked in its source.
+    const problem = data.problem;
+    const problemHtml = problem ? `
+      <div class="dsdl-problem" role="alert">Does not compile${problem.line ? ` — line ${problem.line}` : ''}: ${escapeHtml(problem.message)}</div>` : '';
     const sourceLines = data.source_text.replace(/\n$/, '').split('\n');
-    const numberedLines = sourceLines.map((line, i) =>
-      `<span class="dsdl-src-num">${i + 1}</span>${escapeHtml(line)}`
-    ).join('\n');
+    const numberedLines = sourceLines.map((line, i) => {
+      const numbered = `<span class="dsdl-src-num">${i + 1}</span>${escapeHtml(line)}`;
+      return problem?.line === i + 1 ? `<span class="dsdl-src-problem">${numbered}</span>` : numbered;
+    }).join('\n');
 
     const actionsHtml = data.source === 'custom' ? `
       <div class="dsdl-doc-actions">
@@ -862,6 +868,7 @@ const DsdlView = (() => {
           <div class="dsdl-bus-section hidden" id="dsdlBusActivity"></div>
         </div>
         <div class="dsdl-doc-body">
+          ${problemHtml}
           ${fieldsHtml}
           ${constantsHtml}
           ${depsHtml}

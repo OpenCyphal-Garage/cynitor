@@ -3248,6 +3248,36 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+# What the pane says of a fault, and the source lines it marks.
+PROBLEM_SHOWN = """() => [document.querySelector('#dsdlDetail .dsdl-problem')?.textContent.trim() ?? null,
+    [...document.querySelectorAll('#dsdlDetail .dsdl-src-problem')].map((line) => line.textContent)]"""
+
+
+@test("DSDL: a custom type that does not compile says why, with its line marked in the source")
+async def _(page):
+    server = _DsdlServer()
+    typo = _dsdl_type("myapp.Typo.1.0", source="custom", compiled=False, text="uint8 a\nuint9x b\n@sealed\n")
+    typo["problem"] = {"message": "Syntax error", "line": 2}
+    unsealed = _dsdl_type("myapp.Unsealed.1.0", source="custom", compiled=False, text="uint8 a\n")
+    unsealed["problem"] = {"message": "Either `@sealed` or `@extent ...` are required.", "line": None}
+    server.types.update({t["full_name"]: t for t in (typo, unsealed)})
+    await dsdl_open(page, server)
+    try:
+        await page.locator('#dsdlCustomTree .dsdl-ns-row[data-ns="myapp"]').click()
+        shown = {}
+        for name in ("Typo", "Unsealed", "Reading"):
+            await page.locator(f'.dsdl-type-row[data-type="myapp.{name}.1.0"]').click()
+            await page.wait_for_selector(f'.dsdl-doc-title:has-text("{name}")', timeout=WAIT_MS)
+            shown[name] = await page.evaluate(PROBLEM_SHOWN)
+        assert shown == {
+            "Typo": ["Does not compile — line 2: Syntax error", ["2uint9x b"]],
+            "Unsealed": ["Does not compile: Either `@sealed` or `@extent ...` are required.", []],
+            "Reading": [None, []],
+        }, f"What each pane says, and the source lines it marks: {shown}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
