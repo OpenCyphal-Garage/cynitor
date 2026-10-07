@@ -2738,6 +2738,31 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+# The theme's --error, as the browser draws it.
+ERROR_COLOUR = """(() => { const probe = document.createElement('span'); probe.style.color = 'var(--error)';
+    document.body.append(probe); const colour = getComputedStyle(probe).color; probe.remove(); return colour; })()"""
+
+
+@test("DSDL: compile and editor errors are drawn in the error colour")
+async def _(page):
+    server = _DsdlServer()
+    server.compile_answer = ({"ok": False, "errors": ["custom/myapp: Reading.1.0.dsdl: @sealed or @extent required"]}, 422)
+    await dsdl_open(page, server)
+    try:
+        error = await page.evaluate(ERROR_COLOUR)
+        await page.locator("#dsdlCustomCompileBtn").click()
+        await page.wait_for_selector(".dsdl-compile-error", timeout=WAIT_MS)
+        compile_error = await page.evaluate("getComputedStyle(document.querySelector('.dsdl-compile-error')).color")
+        await dsdl_new_type(page)
+        await page.locator("#dsdlEditorSave").click()  # nothing filled in
+        await page.wait_for_selector("#dsdlEditorStatus.dsdl-editor-error", timeout=WAIT_MS)
+        editor_error = await page.evaluate("getComputedStyle(document.getElementById('dsdlEditorStatus')).color")
+        assert compile_error == editor_error == error, \
+            f"The error colour is {error}; a compile error is drawn {compile_error}, an editor error {editor_error}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
