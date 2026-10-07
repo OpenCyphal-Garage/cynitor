@@ -509,6 +509,8 @@ Returns `201` with `{"full_name": "myapp.sensors.Temperature.1.0", "path": "..."
 
 Pass `"overwrite": true` to replace an existing custom type's source. Only allowed while the type is **not compiled** — the server returns `409` if the type has already been compiled.
 
+`fixed_port_id` is optional. A custom type may only take the fixed port-IDs the compiler accepts outside the `uavcan` namespace: 6144–7167 for a message, 256–383 for a service (a source with a `---` line). Any other value, or one that is not an integer, returns `400`.
+
 **Delete custom DSDL type:**
 ```bash
 curl -X DELETE http://localhost:8080/api/dsdl/custom/type/myapp.sensors.Temperature.1.0

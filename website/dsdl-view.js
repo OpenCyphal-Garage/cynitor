@@ -1133,7 +1133,8 @@ const DsdlView = (() => {
           </div>
           <div>
             <label class="dsdl-editor-label">Port ID</label>
-            <input type="text" class="dsdl-editor-input dsdl-editor-port" id="dsdlEditorPort" placeholder="optional" value="${escapeHtml(portValue)}" />
+            <input type="text" class="dsdl-editor-input dsdl-editor-port" id="dsdlEditorPort" placeholder="optional" value="${escapeHtml(portValue)}"
+                   title="Leave empty unless the type needs a fixed port ID: ${_FIXED_PORT_RANGES.message.join('–')} for a message, ${_FIXED_PORT_RANGES.service.join('–')} for a service" />
           </div>
         </div>
         <div class="dsdl-editor-row dsdl-editor-row-grow">
@@ -1314,16 +1315,34 @@ const DsdlView = (() => {
     };
   };
 
+  // The fixed port IDs the compiler accepts on a type of your own (the server
+  // checks them too); it refuses any other.
+  const _FIXED_PORT_RANGES = { message: [6144, 7167], service: [256, 383] };
+
+  const _fixedPortError = (portStr, source) => {
+    if (!portStr) return null;
+    const kind = _parseDsdlSource(source).kind;
+    const [low, high] = _FIXED_PORT_RANGES[kind];
+    const port = /^\d+$/.test(portStr) ? Number(portStr) : NaN;
+    if (port >= low && port <= high) return null;
+    return `A fixed port ID for a ${kind} of your own must be from ${low} to ${high}, or left empty`;
+  };
+
   const _saveType = async () => {
     const namespace = _getEditorNamespace();
     const typeName = document.getElementById('dsdlEditorName')?.value.trim();
     const version = document.getElementById('dsdlEditorVer')?.value.trim();
     const source = document.getElementById('dsdlEditorSource')?.value;
     const portStr = document.getElementById('dsdlEditorPort')?.value.trim();
-    const portId = portStr ? parseInt(portStr, 10) : null;
+    const portId = portStr ? Number(portStr) : null;
 
     if (!namespace || !typeName || !version || !source) {
       _showEditorToast('Fill in namespace, name, version, and source', true);
+      return;
+    }
+    const portError = _fixedPortError(portStr, source);
+    if (portError) {
+      _showEditorToast(portError, true);
       return;
     }
 

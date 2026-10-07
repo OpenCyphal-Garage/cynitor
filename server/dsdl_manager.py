@@ -22,6 +22,10 @@ _FIELD_RE = re.compile(
     r"(?:\s*=\s*(?P<value>[^#]+))?"
 )
 
+# The fixed port-IDs the compiler (pydsdl) accepts on a type outside the
+# uavcan namespace; it refuses any other.
+_FIXED_PORT_RANGES = {"message": (6144, 7167), "service": (256, 383)}
+
 
 class DsdlManager:
 
@@ -204,6 +208,7 @@ class DsdlManager:
             raise ValueError("Type name must start with uppercase letter and contain only alphanumeric/underscore")
         if not re.match(r"^\d+\.\d+$", version):
             raise ValueError("Version must be MAJOR.MINOR (e.g. 1.0)")
+        self._validate_fixed_port_id(fixed_port_id, source_text)
 
         ns_dir = self.custom_dir / Path(*namespace.split("."))
         ns_dir.mkdir(parents=True, exist_ok=True)
@@ -480,6 +485,18 @@ class DsdlManager:
         compiled_name = f"{parts[-3]}_{parts[-2]}_{parts[-1]}.py"
         relative = Path(*parts[:-3]) / compiled_name
         return any((root / relative).is_file() for root in (self.compiled_dir, self.custom_compiled_dir))
+
+    @staticmethod
+    def _validate_fixed_port_id(port_id: Any, source_text: str) -> None:
+        """A port the compiler would refuse, or a non-number, names no file it can read."""
+        if port_id is None:
+            return
+        if isinstance(port_id, bool) or not isinstance(port_id, int):
+            raise ValueError("Fixed port ID must be a whole number")
+        kind = "service" if any(line.strip() == "---" for line in source_text.split("\n")) else "message"
+        low, high = _FIXED_PORT_RANGES[kind]
+        if not low <= port_id <= high:
+            raise ValueError(f"A fixed port ID for a {kind} of your own must be from {low} to {high}")
 
     @staticmethod
     def _validate_namespace(namespace: str) -> None:

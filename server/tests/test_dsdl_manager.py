@@ -115,6 +115,32 @@ class TestRunCompilationRefreshHook:
         assert "syntax error" in result["errors"][0]
 
 
+_MESSAGE = "uint8 x\n@sealed\n"
+_SERVICE = "uint8 x\n@sealed\n---\nuint8 y\n@sealed\n"
+
+
+class TestFixedPortId:
+    """Outside the uavcan namespace the compiler accepts fixed port-IDs only in
+    the vendor ranges: 6144-7167 for a message, 256-383 for a service."""
+
+    @pytest.mark.parametrize("port, source", [
+        (-5, _MESSAGE), ("abc", _MESSAGE), (True, _MESSAGE), (100, _MESSAGE),
+        (7509, _MESSAGE), (300, _MESSAGE), (7000, _SERVICE),
+    ])
+    def test_refused_and_nothing_written(self, mgr: DsdlManager, port, source) -> None:
+        with pytest.raises(ValueError):
+            mgr.save_type("myapp", "Foo", "1.0", source, fixed_port_id=port)
+        assert not list(mgr.custom_dir.rglob("*.dsdl"))
+
+    @pytest.mark.parametrize("port, source", [
+        (None, _MESSAGE), (6144, _MESSAGE), (7167, _MESSAGE), (256, _SERVICE), (383, _SERVICE),
+    ])
+    def test_accepted(self, mgr: DsdlManager, port, source) -> None:
+        mgr.save_type("myapp", "Foo", "1.0", source, fixed_port_id=port)
+        [saved] = mgr.get_namespaces()["namespaces"]["myapp"]["types"]
+        assert (saved["full_name"], saved["fixed_port_id"]) == ("myapp.Foo.1.0", port)
+
+
 @pytest.fixture
 def data_dir(tmp_path: Path) -> Path:
     return tmp_path / "data"

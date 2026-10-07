@@ -2776,6 +2776,29 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+@test("DSDL: a fixed port ID the compiler would refuse is not saved, and the editor says which it takes")
+async def _(page):
+    server = _DsdlServer()
+    await dsdl_open(page, server)
+    try:
+        await dsdl_new_type(page)
+        await page.locator("#dsdlEditorName").fill("Foo")
+        await page.locator("#dsdlEditorSource").fill("uint8 a\n@sealed\n")
+        said = {}
+        for port in ("abc", "-5", "100"):
+            await page.locator("#dsdlEditorPort").fill(port)
+            await page.locator("#dsdlEditorSave").click()
+            await page.wait_for_timeout(300)
+            said[port] = await page.locator("#dsdlEditorStatus").inner_text()
+        sent = [request for request in server.requests if request[0] == "POST"]
+        assert not sent and all("6144" in text for text in said.values()), f"Sent {sent}; the editor said {said}"
+        await page.locator("#dsdlEditorPort").fill("7000")
+        assert await dsdl_save(page) == "Saved", "A port in range is refused"
+        assert server.types["myapp.Foo.1.0"]["fixed_port_id"] == 7000, "Saved without its port"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
