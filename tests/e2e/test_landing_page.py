@@ -2577,7 +2577,8 @@ class _DsdlServer:
             elif len(words) == 2 and words[0][0] not in "@#":
                 sections[-1].append({"type": words[0], "name": words[1]})
         fields = sections[0] if len(sections) == 1 else {"request": sections[0], "response": sections[1]}
-        return {**t, "source_file": "", "fields": fields, "constants": [], "dependencies": []}
+        composite = sorted({f["type"].split("[")[0] for section in sections for f in section if "." in f["type"]})
+        return {**t, "source_file": "", "fields": fields, "constants": [], "dependencies": composite}
 
     def _answer(self, method, path, body):
         if path == "/api/dsdl/status":
@@ -3102,6 +3103,38 @@ async def _(page):
                                                   "uavcan.node.Heartbeat", ["uavcan.node", "false"]) \
             and out[0] == "dsdlCustomCompileBtn", \
             f"Tab into the tree: {into}; → ↓ → ↓ Enter: {on_type}, showing {shown!r}; ← ←: {closed}; Tab: {out}"
+    finally:
+        await dsdl_close(page, server)
+
+
+@test("DSDL: a custom namespace's buttons and the 'Depends on' links work by keyboard")
+async def _(page):
+    server = _DsdlServer()
+    server.types["myapp.Pair.1.0"] = _dsdl_type("myapp.Pair.1.0", source="custom", compiled=False,
+                                                text="uavcan.si.unit.temperature.Scalar.1.0 a\n@sealed\n")
+    focused = "document.activeElement.dataset.ns ?? document.activeElement.getAttribute('aria-label')"
+    await dsdl_open(page, server)
+    try:
+        await page.locator("#dsdlSearch").focus()
+        await page.keyboard.press("Shift+Tab")  # the custom tree's stop: its namespace
+        stops = [await page.evaluate(focused)]
+        for _ in range(2):
+            await page.keyboard.press("Tab")  # on through the namespace's own buttons
+            stops.append(await page.evaluate(focused))
+        await page.keyboard.press("Enter")
+        await page.wait_for_timeout(300)
+        editor = await page.locator("#dsdlEditorName").count()
+        assert stops == ["myapp", "Add sub-namespace", "Add type"] and editor, \
+            f"Shift+Tab, Tab, Tab from the search box: {stops}; Enter opened an editor: {bool(editor)}"
+        await page.locator("#dsdlEditorClose").click()
+        await page.locator('#dsdlCustomTree .dsdl-ns-row[data-ns="myapp"]').click()
+        await page.locator('.dsdl-type-row[data-type="myapp.Pair.1.0"]').click()
+        await page.wait_for_selector(".dsdl-dep-chip", timeout=WAIT_MS)
+        await page.locator(".dsdl-dep-chip").focus()
+        await page.keyboard.press("Enter")
+        await page.wait_for_timeout(500)
+        shown = (await page.locator("#dsdlDetail").inner_text()).split("\n")[0]
+        assert shown == "uavcan.si.unit.temperature.Scalar", f"Enter on the dependency shows {shown!r}"
     finally:
         await dsdl_close(page, server)
 

@@ -838,7 +838,7 @@ const DsdlView = (() => {
     const depsHtml = data.dependencies.length ? `
       <div class="dsdl-inline-section">
         <span class="dsdl-inline-label">Depends on</span>
-        ${data.dependencies.map(d => `<a class="dsdl-dep-chip" data-dep="${escapeHtml(d)}">${escapeHtml(d)}</a>`).join('')}
+        ${data.dependencies.map(d => `<button type="button" class="dsdl-dep-chip" data-dep="${escapeHtml(d)}">${escapeHtml(d)}</button>`).join('')}
       </div>` : '';
 
     const sourceLines = data.source_text.replace(/\n$/, '').split('\n');

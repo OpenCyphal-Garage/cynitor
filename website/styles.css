@@ -5977,8 +5977,17 @@ details.svc-history-entry[open] > summary::before {
   margin-left: auto;
 }
 
-.dsdl-ns-custom:hover .dsdl-ns-actions {
+/* On hover, and while the keyboard is on the row or its buttons. */
+.dsdl-ns-custom:hover .dsdl-ns-actions,
+.dsdl-ns-custom:focus-within .dsdl-ns-actions {
   display: inline-flex;
+}
+
+/* A touch screen has no hover: there they stay in view. */
+@media (hover: none) {
+  .dsdl-ns-actions {
+    display: inline-flex;
+  }
 }
 
 .dsdl-ns-add {
@@ -6418,9 +6427,11 @@ details.svc-history-entry[open] > summary::before {
 .dsdl-dep-chip {
   font-family: var(--mono);
   font-size: 0.6875rem;
+  font-weight: 400;
   color: var(--accent);
   background: var(--accent-muted);
   padding: 0.1875rem 0.5rem;
+  border: none;
   border-radius: var(--radius);
   cursor: pointer;
   text-decoration: none;
