@@ -1604,7 +1604,7 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
   if (label.empty()) {
     label = overlay.append('text').attr('class', 'panel-label compare-panel-label').attr('x', 4).attr('y', 11);
   }
-  label.text('Compare').attr('fill', 'var(--muted)');
+  label.text(cfg?.name?.trim() || '').attr('fill', 'var(--muted)');  // the graph's name, if it has one
 };
 
 // A value as a tooltip reads it: a whole number as it is, others to six

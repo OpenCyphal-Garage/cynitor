@@ -550,7 +550,7 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   const mkKey = (graph.markers || []).map(m => `${m.t}:${m.label}:${m.color || ''}:${m.lineStyle || ''}`).join(';');
   const dwKey = (graph.drawings || []).length;
   const styleKey = compareSeries.map(s => s._lineStyle || '').join(',');
-  const fp = `cg:${graph.id}:${compareSeries.length}:${lastPts.join(',')}:w${graph.timeWindow}:p${graph.paused ? graph.pausedAt : 0}:s${graph.smooth}:d${graph.disconnectPoints}:k${graph.stroke}:g${graph.grid}:t${thKey}:m${mkKey}:dw${dwKey}:h${hiddenKey}:ls${styleKey}:z${graph._zoom || 1}:pan${graph._panOffset || 0}:l${liveKey}`;
+  const fp = `cg:${graph.id}:${compareSeries.length}:${lastPts.join(',')}:w${graph.timeWindow}:p${graph.paused ? graph.pausedAt : 0}:s${graph.smooth}:d${graph.disconnectPoints}:k${graph.stroke}:g${graph.grid}:t${thKey}:m${mkKey}:dw${dwKey}:h${hiddenKey}:ls${styleKey}:z${graph._zoom || 1}:pan${graph._panOffset || 0}:l${liveKey}:n${graph.name}`;
   const rect = plotArea.getBoundingClientRect();
   const sizeKey = `${Math.round(rect.width)}x${Math.round(rect.height)}`;
   const fullFp = `${fp}:${sizeKey}`;
@@ -578,7 +578,12 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   if (w < 40 || totalPanelsH < 40) return;
 
   const svgEl = plotArea.querySelector('svg');
-  if (svgEl) svgEl.setAttribute('height', String(rect.height - HEADER_H));
+  if (svgEl) {
+    svgEl.setAttribute('height', String(rect.height - HEADER_H));
+    // Each plot announced by its graph's name and series, not one name for all.
+    const about = `${graph.name.trim() || 'Untitled graph'}: ${legendSeries.map((s) => s.name).join(', ') || 'no series'}`;
+    if (svgEl.getAttribute('aria-label') !== about) svgEl.setAttribute('aria-label', about);
+  }
 
   const titleEl = plotArea.querySelector('.plot-title');
   if (titleEl) titleEl.style.display = 'none';

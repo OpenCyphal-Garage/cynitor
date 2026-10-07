@@ -1867,6 +1867,25 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: a plot carries its graph's name, not the word Compare")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    label = "(c) => c.querySelector('.compare-panel-label')?.textContent ?? ''"
+    named = "(c) => c.querySelector('.detail-plot-area svg').getAttribute('aria-label')"
+    try:
+        await page.wait_for_timeout(300)
+        card = await compare_graph(page, (1100, "value"))
+        await page.wait_for_timeout(300)
+        assert await card.evaluate(label) == "", f"An untitled graph's plot reads {await card.evaluate(label)!r}"
+        await card.locator(".compare-graph-name").fill("Motor A")
+        await page.wait_for_timeout(300)
+        assert await card.evaluate(label) == "Motor A", f"Named Motor A, its plot reads {await card.evaluate(label)!r}"
+        aria = await card.evaluate(named)
+        assert "Motor A" in aria and "S1100 · value · n10" in aria, f"The plot is announced as {aria!r}"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 # A graph's legend rows: series -> [label, last, min, max].
 COMPARE_LEGEND_ROWS = """(c) => Object.fromEntries([...c.querySelectorAll('.plot-legend-item')].map(r =>
     [r.dataset.series, [r.querySelector('.plot-legend-label').textContent,
