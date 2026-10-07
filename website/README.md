@@ -11,7 +11,7 @@ The current UI is network-centric: it emphasizes topology, live traffic, and sel
 - `state.js` – global state, settings persistence, API helpers
 - `cache.js` – telemetry cache and per-node accessors
 - `plot.js` – multi-panel D3 time-series plot with crosshair, interactive legend, zoom/pan, markers, freehand drawing
-- `compare-view.js` – independent multi-graph compare view with derived series, presets, export/import
+- `compare-view.js` – independent multi-graph compare view: graph cards, series picker, derived series, each graph's drawing, presets, export/import
 - `detail-panel.js` – per-node detail panel with subject cards and tab rendering
 - `nodes-table.js` – Tabulator-based nodes table with ghost row support
 - `services-panel.js` – service interaction UI, schema fetch, persistent history

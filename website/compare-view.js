@@ -1,5 +1,6 @@
 // Compare view — multiple independent graphs, each with its own series,
-// controls and animation. Uses plot.js utilities for rendering.
+// controls and animation: their cards, editing rows, derived series and
+// drawing. The plot itself (axes, legend, tooltip, zoom, markers) is plot.js's.
 
 let _compareGraphIdCounter = 0;
 // An id no graph has: past every graph's, wherever the new one is made (a
@@ -67,6 +68,136 @@ const _freeSavedName = (base) => {
   let name = base;
   for (let n = 2; taken.has(name); n++) name = `${base} ${n}`;
   return name;
+};
+
+// A Nodes or Subjects plot's series, as shown, in a new Compare graph, opened
+// there: from a subject found in a table to comparing it with others.
+const openPlotInCompare = (plotArea) => {
+  const sid = state.selectedPlotSubject;
+  const shown = plotArea._plotCtx?.visible || [];
+  if (sid == null || !shown.length) return;
+  const graph = newCompareGraph({
+    name: `S${sid}`,
+    series: shown.map((s) => (s.nodeId == null
+      ? { subjectId: sid, attribute: s.field }
+      : { subjectId: sid, attribute: s.field, nodeId: s.nodeId })),
+  });
+  state.compareGraphs.push(graph);
+  saveSettings();
+  switchView('compare');
+  el('compareContainer').querySelector(`[data-graph-id="${graph.id}"]`)?.scrollIntoView({ block: 'nearest' });
+};
+
+// ── Derived series ──
+//
+// Computed from a graph's series when it draws: their kinds, how each is made, named.
+const DERIVED_TYPES = {
+  delta:       { label: 'Delta (A−B)',   sources: 2, hasWindow: false },
+  rolling_avg: { label: 'Rolling Avg',        sources: 1, hasWindow: true  },
+  min_max:     { label: 'Min/Max',             sources: 1, hasWindow: false },
+  rate:        { label: 'Rate (dv/dt)',       sources: 1, hasWindow: false },
+  ratio:       { label: 'Ratio (A/B)',        sources: 2, hasWindow: false },
+};
+
+const _ALIGN_TOLERANCE = 2;
+
+const _alignSeries = (dataA, dataB) => {
+  if (!dataA?.length || !dataB?.length) return [];
+  const result = [];
+  let j = 0;
+  for (const a of dataA) {
+    while (j < dataB.length - 1 && dataB[j + 1].t <= a.t) j++;
+    let best = dataB[j];
+    if (j + 1 < dataB.length && Math.abs(dataB[j + 1].t - a.t) < Math.abs(best.t - a.t)) {
+      best = dataB[j + 1];
+    }
+    if (Math.abs(best.t - a.t) <= _ALIGN_TOLERANCE) {
+      result.push({ t: a.t, vA: a.v, vB: best.v });
+    }
+  }
+  return result;
+};
+
+const _computeDerived = (type, dataA, dataB, windowSize) => {
+  switch (type) {
+    case 'delta': {
+      const aligned = _alignSeries(dataA, dataB);
+      return [aligned.map(p => ({ t: p.t, v: p.vA - p.vB }))];
+    }
+    case 'ratio': {
+      const aligned = _alignSeries(dataA, dataB);
+      return [aligned.filter(p => p.vB !== 0).map(p => ({ t: p.t, v: p.vA / p.vB }))];
+    }
+    case 'rate': {
+      if (!dataA || dataA.length < 2) return [[]];
+      const result = [];
+      for (let i = 1; i < dataA.length; i++) {
+        const dt = dataA[i].t - dataA[i - 1].t;
+        if (dt > 0 && dt <= PLOT_GAP_THRESHOLD) {
+          result.push({ t: dataA[i].t, v: (dataA[i].v - dataA[i - 1].v) / dt });
+        }
+      }
+      return [result];
+    }
+    case 'rolling_avg': {
+      if (!dataA || dataA.length < 2) return [[]];
+      const w = Math.max(2, windowSize || 10);
+      const result = [];
+      let sum = 0;
+      for (let i = 0; i < dataA.length; i++) {
+        sum += dataA[i].v;
+        if (i >= w) sum -= dataA[i - w].v;
+        const count = Math.min(i + 1, w);
+        result.push({ t: dataA[i].t, v: sum / count });
+      }
+      return [result];
+    }
+    case 'min_max': {
+      if (!dataA || dataA.length < 2) return [[], []];
+      const tMin = windowSize > 0 ? dataA[dataA.length - 1].t - windowSize : -Infinity;
+      let lo = Infinity, hi = -Infinity;
+      for (const p of dataA) {
+        if (p.t < tMin) continue;
+        if (p.v < lo) lo = p.v;
+        if (p.v > hi) hi = p.v;
+      }
+      if (!isFinite(lo)) return [[], []];
+      const t0 = Math.max(dataA[0].t, tMin === -Infinity ? dataA[0].t : tMin);
+      const t1 = dataA[dataA.length - 1].t;
+      return [
+        [{ t: t0, v: lo }, { t: t1, v: lo }],
+        [{ t: t0, v: hi }, { t: t1, v: hi }],
+      ];
+    }
+    default:
+      return [];
+  }
+};
+
+const _derivedLabel = (d) => {
+  const nameA = d.sourceA ? _keyLabel(d.sourceA) : '?';
+  const nameB = d.sourceB ? _keyLabel(d.sourceB) : '';
+  switch (d.type) {
+    case 'delta': return `Δ(${nameA} − ${nameB})`;
+    case 'ratio': return `${nameA} / ${nameB}`;
+    case 'rolling_avg': return `Avg${d.window || 10}(${nameA})`;
+    case 'rate': return `d/dt(${nameA})`;
+    default: return '?';
+  }
+};
+
+const _derivedMinMaxLabels = (d) => {
+  const nameA = d.sourceA ? _keyLabel(d.sourceA) : '?';
+  return [`Min(${nameA})`, `Max(${nameA})`];
+};
+
+const _nextDerivedId = (graph) => {
+  let max = 0;
+  for (const d of graph.derivedSeries || []) {
+    const m = d.id?.match(/^ds_(\d+)$/);
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return `ds_${max + 1}`;
 };
 
 const initCompareView = () => {
@@ -300,6 +431,255 @@ const _refreshSavedMenu = (menu, cardsContainer) => {
     item.appendChild(delBtn);
     menu.appendChild(item);
   }
+};
+
+// Every series Compare can plot: a numeric field of a subject from one of the
+// nodes its history has it from (or from no node: anonymous), with what
+// names it besides (type, node), by subject-ID, field and node.
+const _comparableSeries = () => {
+  const found = [];
+  for (const [key, points] of state.subjectHistory) {
+    const at = key.indexOf(':');
+    const sid = Number(key.slice(0, at));
+    const field = key.slice(at + 1);
+    const type = dsdlTypeName(state.latestBySubject.get(sid)?.message_type) || '';
+    const nids = new Set();
+    for (const p of points) nids.add(Number.isInteger(p.n) ? p.n : null);
+    for (const nid of nids) {
+      const series = nid == null ? { subjectId: sid, attribute: field } : { subjectId: sid, attribute: field, nodeId: nid };
+      found.push({ ...series, about: [type, nid == null ? 'anonymous' : nodeDisplayName(nid)].filter(Boolean).join(' · ') });
+    }
+  }
+  return found.sort((a, b) => a.subjectId - b.subjectId
+    || a.attribute.localeCompare(b.attribute, undefined, { numeric: true })
+    || (a.nodeId ?? Infinity) - (b.nodeId ?? Infinity) || 0);
+};
+
+// A graph's editing rows: its series, derived series and thresholds, a row each.
+const buildComparePanel = (graph, onUpdate) => {
+  const panel = document.createElement('div');
+  panel.className = 'plot-compare-panel';
+
+  const seriesSection = document.createElement('div');
+  seriesSection.className = 'plot-series-section';
+  const hdr = document.createElement('div');
+  hdr.className = 'plot-compare-hdr';
+  const title = document.createElement('span');
+  title.textContent = 'Series';
+  hdr.appendChild(title);
+  seriesSection.appendChild(hdr);
+
+  // Every series heard, in one list: the filter's words find them by any part
+  // of their name, node or type; ticked, a series is in the graph. A series
+  // keeps to one node ("S1300 · value · n21"), so a node that starts
+  // publishing its subject later does not mix in.
+  const picker = document.createElement('div');
+  picker.className = 'plot-series-picker';
+  const seriesFilter = document.createElement('input');
+  seriesFilter.type = 'search';
+  seriesFilter.className = 'plot-series-filter';
+  seriesFilter.placeholder = 'Find by subject-ID, field, node or type';
+  seriesFilter.setAttribute('aria-label', 'Find series to compare');
+  const seriesList = document.createElement('div');
+  seriesList.className = 'plot-series-list';
+  seriesList.setAttribute('role', 'group');
+  seriesList.setAttribute('aria-label', 'Series to compare');
+
+  let listed = new Map();  // key -> series, as last listed
+  const refreshSeriesList = () => {
+    const words = seriesFilter.value.toLowerCase().split(/\s+/).filter(Boolean);
+    const all = _comparableSeries();
+    const shown = all.filter((s) => {
+      const text = `${compareSeriesName(s)} ${s.about}`.toLowerCase();
+      return words.every((w) => text.includes(w));
+    });
+    listed = new Map(shown.map((s) => [compareSeriesKey(s), s]));
+    const fresh = document.createElement('div');
+    fresh.innerHTML = shown.length
+      ? shown.map((s) => `<label class="plot-series-option"><input type="checkbox" data-key="${escapeHtml(compareSeriesKey(s))}">`
+        + `<span class="plot-series-key">${escapeHtml(compareSeriesName(s))}</span>`
+        + `<span class="plot-series-about">${escapeHtml(s.about)}</span></label>`).join('')
+      : `<div class="plot-series-none">${all.length
+        ? `No series match “${escapeHtml(seriesFilter.value.trim())}”`
+        : 'Nothing heard yet: the list fills as messages come.'}</div>`;
+    // Rewritten in place, so a box under the pointer is not swapped out;
+    // ticked as the graph has it (a box keeps its own state otherwise).
+    patchChildren(seriesList, fresh);
+    const inGraph = new Set(graph.series.map(compareSeriesKey));
+    for (const box of seriesList.querySelectorAll('input[type="checkbox"]')) box.checked = inGraph.has(box.dataset.key);
+  };
+  seriesFilter.addEventListener('input', refreshSeriesList);
+  seriesFilter.addEventListener('focus', refreshSeriesList);
+
+  seriesList.addEventListener('change', (e) => {
+    const key = e.target.dataset?.key;
+    const s = listed.get(key);
+    if (!s) return;
+    const at = graph.series.findIndex((c) => compareSeriesKey(c) === key);
+    if (e.target.checked && at === -1) {
+      graph.series.push(s.nodeId == null
+        ? { subjectId: s.subjectId, attribute: s.attribute }
+        : { subjectId: s.subjectId, attribute: s.attribute, nodeId: s.nodeId });
+    } else if (!e.target.checked && at !== -1) {
+      graph.series.splice(at, 1);
+    }
+    onUpdate();
+  });
+
+  picker.appendChild(seriesFilter);
+  picker.appendChild(seriesList);
+  seriesSection.appendChild(picker);
+  panel.appendChild(seriesSection);
+  panel._refreshSeriesList = refreshSeriesList;
+  refreshSeriesList();
+
+  const derivedSection = document.createElement('div');
+  derivedSection.className = 'plot-derived-section';
+  const derivedHdr = document.createElement('span');
+  derivedHdr.className = 'plot-threshold-hdr';
+  derivedHdr.textContent = 'Derived';
+  derivedSection.appendChild(derivedHdr);
+
+  const derivedPicker = document.createElement('div');
+  derivedPicker.className = 'plot-compare-picker';
+
+  const typeSel = document.createElement('select');
+  typeSel.className = 'plot-derived-type';
+  typeSel.setAttribute('aria-label', 'Derived series type');
+  for (const [key, info] of Object.entries(DERIVED_TYPES)) {
+    const opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = info.label;
+    typeSel.appendChild(opt);
+  }
+
+  const srcASel = document.createElement('select');
+  srcASel.className = 'plot-derived-source';
+  srcASel.setAttribute('aria-label', 'Source A');
+
+  const srcBSel = document.createElement('select');
+  srcBSel.className = 'plot-derived-source';
+  srcBSel.setAttribute('aria-label', 'Source B');
+
+  const windowInput = document.createElement('input');
+  windowInput.type = 'number';
+  windowInput.className = 'plot-derived-window';
+  windowInput.placeholder = 'Window';
+  windowInput.value = '10';
+  windowInput.min = '2';
+  windowInput.max = '200';
+  windowInput.setAttribute('aria-label', 'Window size (samples)');
+
+  const _refreshDerivedSources = () => {
+    const buildOpts = (sel, label) => {
+      const prev = sel.value;
+      sel.innerHTML = '';
+      const def = document.createElement('option');
+      def.value = '';
+      def.textContent = label;
+      sel.appendChild(def);
+      for (const s of graph.series) {
+        const opt = document.createElement('option');
+        opt.value = compareSeriesKey(s);
+        opt.textContent = compareSeriesName(s);
+        sel.appendChild(opt);
+      }
+      if (prev && sel.querySelector(`option[value="${prev}"]`)) sel.value = prev;
+    };
+    buildOpts(srcASel, 'Source A…');
+    buildOpts(srcBSel, 'Source B…');
+  };
+
+  const _updateDerivedVisibility = () => {
+    const info = DERIVED_TYPES[typeSel.value];
+    srcBSel.classList.toggle('hidden', info?.sources !== 2);
+    windowInput.classList.toggle('hidden', !info?.hasWindow);
+  };
+
+  typeSel.addEventListener('change', _updateDerivedVisibility);
+
+  const derivedAddBtn = document.createElement('button');
+  derivedAddBtn.className = 'plot-compare-add';
+  derivedAddBtn.type = 'button';
+  derivedAddBtn.textContent = 'Add';
+  derivedAddBtn.setAttribute('aria-label', 'Add derived series');
+  derivedAddBtn.addEventListener('click', () => {
+    const type = typeSel.value;
+    const info = DERIVED_TYPES[type];
+    if (!info) return;
+    const srcA = srcASel.value;
+    if (!srcA) return;
+    if (info.sources === 2 && !srcBSel.value) return;
+    const srcB = info.sources === 2 ? srcBSel.value : '';
+    const win = info.hasWindow ? Math.max(2, parseInt(windowInput.value) || 10) : 0;
+    if (!graph.derivedSeries) graph.derivedSeries = [];
+    graph.derivedSeries.push({
+      id: _nextDerivedId(graph),
+      type,
+      sourceA: srcA,
+      sourceB: srcB,
+      window: win,
+      color: '',
+    });
+    onUpdate();
+  });
+
+  derivedPicker.appendChild(typeSel);
+  derivedPicker.appendChild(srcASel);
+  derivedPicker.appendChild(srcBSel);
+  derivedPicker.appendChild(windowInput);
+  derivedPicker.appendChild(derivedAddBtn);
+  derivedSection.appendChild(derivedPicker);
+
+  panel.appendChild(derivedSection);
+
+  panel._refreshDerivedSources = _refreshDerivedSources;
+  _refreshDerivedSources();
+  _updateDerivedVisibility();
+
+  const thSection = document.createElement('div');
+  thSection.className = 'plot-threshold-section';
+  const thLabel = document.createElement('span');
+  thLabel.className = 'plot-threshold-hdr';
+  thLabel.textContent = 'Thresholds';
+  thSection.appendChild(thLabel);
+  const thPicker = document.createElement('div');
+  thPicker.className = 'plot-threshold-picker';
+  const thInput = document.createElement('input');
+  thInput.type = 'number';
+  thInput.className = 'plot-threshold-input';
+  thInput.placeholder = 'Value';
+  thInput.setAttribute('aria-label', 'Threshold value');
+  const thNameInput = document.createElement('input');
+  thNameInput.type = 'text';
+  thNameInput.className = 'plot-threshold-name-input';
+  thNameInput.placeholder = 'Label';
+  thNameInput.setAttribute('aria-label', 'Threshold label');
+  const thAddBtn = document.createElement('button');
+  thAddBtn.className = 'plot-compare-add';
+  thAddBtn.type = 'button';
+  thAddBtn.textContent = 'Add';
+  thAddBtn.setAttribute('aria-label', 'Add threshold line');
+  thAddBtn.addEventListener('click', () => {
+    const val = parseFloat(thInput.value);
+    if (isNaN(val)) return;
+    graph.thresholds.push({
+      value: val,
+      label: thNameInput.value.trim() || String(val),
+      color: '',  // the theme's red, until one is picked
+      style: 'dashed',
+    });
+    thInput.value = '';
+    thNameInput.value = '';
+    onUpdate();
+  });
+  thPicker.appendChild(thInput);
+  thPicker.appendChild(thNameInput);
+  thPicker.appendChild(thAddBtn);
+  thSection.appendChild(thPicker);
+  panel.appendChild(thSection);
+
+  return panel;
 };
 
 const _buildGraphCard = (graph) => {
@@ -539,6 +919,180 @@ const _compareNote = (problem, compareSeries, xScale) => {
     return false;
   };
   return compareSeries.some((s) => inView(s.data)) ? '' : 'No data in view';
+};
+
+// The points of a line worth drawing: those in view and one beyond each edge,
+// so it runs to them; of a pixel column holding more, only its lowest and
+// highest, so no spike is lost. A point after a gap stays: the line breaks
+// there. A redraw then costs what the plot shows, not what the history holds.
+const _pointsToDraw = (data, xScale) => {
+  const [tLeft, tRight] = xScale.domain();
+  const bisect = d3.bisector((p) => p.t);
+  const from = Math.max(0, bisect.left(data, tLeft) - 1);
+  const to = Math.min(data.length, bisect.right(data, tRight) + 1);
+  if (to - from <= 2 * xScale.range()[1]) return data.slice(from, to);
+  const out = [];
+  let column = null;
+  let lo = null;
+  let hi = null;
+  const flush = () => {
+    if (lo) out.push(...(lo === hi ? [lo] : lo.t < hi.t ? [lo, hi] : [hi, lo]));
+    lo = hi = null;
+  };
+  for (let i = from; i < to; i++) {
+    const p = data[i];
+    const c = Math.floor(xScale(p.t));
+    if (p._gap || c !== column) {
+      flush();
+      column = c;
+      if (p._gap) {
+        out.push(p);
+        continue;
+      }
+    }
+    if (!lo || p.v < lo.v) lo = p;
+    if (!hi || p.v > hi.v) hi = p;
+  }
+  flush();
+  return out;
+};
+
+const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, cfg) => {
+  let overlay = g.select('.plot-compare-overlay');
+
+  if (!compareSeries.length) {
+    if (!overlay.empty()) overlay.selectAll('*').remove();
+    return;
+  }
+
+  if (overlay.empty()) {
+    overlay = g.insert('g', '.plot-x-axis').attr('class', 'plot-compare-overlay');
+  }
+
+  // The y-axis fits what is in view, thresholds included: a spike that has
+  // left the window, or a zoom, does not flatten what is shown. With nothing
+  // in view, it fits all there is.
+  const [tLeft, tRight] = xScale.domain();
+  const valueRange = (inViewOnly) => {
+    let lo = Infinity, hi = -Infinity;
+    for (const s of compareSeries) {
+      for (const p of s.data) {
+        if (inViewOnly && (p.t < tLeft || p.t > tRight)) continue;
+        if (p.v < lo) lo = p.v;
+        if (p.v > hi) hi = p.v;
+      }
+    }
+    return [lo, hi];
+  };
+  let [vMin, vMax] = valueRange(true);
+  if (!isFinite(vMin)) [vMin, vMax] = valueRange(false);
+  // A threshold hidden from the legend is neither drawn nor kept on the axis.
+  const thresholds = (cfg?.thresholds || []).filter((th) => !cfg._hidden?.has(thresholdName(th)));
+  for (const th of thresholds) {
+    vMin = Math.min(vMin, th.value);
+    vMax = Math.max(vMax, th.value);
+  }
+  if (vMin === vMax) { vMin -= 1; vMax += 1; }
+  const pad = (vMax - vMin) * 0.05;
+  const yScale = d3.scaleLinear().domain([vMin - pad, vMax + pad]).range([panelH, 0]);
+
+  // Each graph its own clip path: under one id for the page, every graph
+  // would be clipped to the first one's size.
+  const clipId = `compare-panel-clip-${_safeId(cfg.id)}`;
+  let clip = overlay.select('clipPath');
+  if (clip.empty()) {
+    clip = overlay.append('clipPath').attr('id', clipId);
+    clip.append('rect');
+  }
+  clip.select('rect').attr('width', w).attr('height', panelH);
+
+  let yAxisG = overlay.select('.panel-y-axis');
+  if (yAxisG.empty()) yAxisG = overlay.append('g').attr('class', 'panel-y-axis');
+  yAxisG.call(d3.axisLeft(yScale).ticks(3).tickSize(2));
+
+  const showGrid = cfg ? cfg.grid : false;
+  if (showGrid) _renderGrid(overlay, xScale, yScale, w, panelH);
+  else overlay.select('.plot-grid').remove();
+
+  _renderThresholds(overlay, thresholds, yScale, w);
+  _renderMarkers(overlay, cfg?.markers, xScale, panelH);
+  _renderDrawings(overlay, cfg?.drawings, xScale, panelH);
+
+  const strokeW = cfg ? cfg.stroke : 1.5;
+  const showDots = cfg ? cfg.disconnectPoints : false;
+  // A tenth of a pixel is fine enough, and shortens the path the browser parses.
+  const lineGen = d3.line().defined((p) => !p._gap).x((p) => xScale(p.t)).y((p) => yScale(p.v))
+    .curve(d3.curveLinear).digits(1);
+  const showLine = !showDots;
+
+  const lines = overlay.selectAll('.compare-line').data(compareSeries, (d) => d.name);
+  lines.enter().append('path')
+    .attr('class', 'compare-line')
+    .attr('fill', 'none')
+    .attr('clip-path', `url(#${clipId})`)
+    .merge(lines)
+    .attr('stroke', (d, i) => d.color || PLOT_COLORS[i % PLOT_COLORS.length])
+    .attr('stroke-width', strokeW)
+    .attr('stroke-dasharray', (d) => {
+      const st = d._lineStyle || 'solid';
+      if (MARKER_SHAPES[st]) return null;
+      return THRESHOLD_STYLES[st] || null;
+    })
+    .attr('d', (d) => showLine && d.data.length >= 2 ? lineGen(_pointsToDraw(d.data, xScale)) : null)
+    .attr('opacity', (d) => showLine && d.data.length >= 2 ? 1 : 0);
+  lines.exit().remove();
+
+  const markerR = Math.max(2, strokeW);
+  const maxMarkers = 200;
+  compareSeries.forEach((s, i) => {
+    const color = s.color || PLOT_COLORS[i % PLOT_COLORS.length];
+    const safeN = _safeId(s.name);
+    const shape = MARKER_SHAPES[s._lineStyle];
+    const needMarkers = showLine && shape;
+    const needDots = showDots && !shape;
+    const cls = `compare-markers-${safeN}`;
+    let mG = overlay.select(`.${cls}`);
+    if (!needMarkers && !needDots) {
+      if (!mG.empty()) mG.remove();
+      return;
+    }
+    if (mG.empty()) {
+      mG = overlay.append('g').attr('class', cls)
+        .attr('clip-path', `url(#${clipId})`);
+    }
+    const vis = s.data.filter((p) => !p._gap && xScale(p.t) >= 0 && xScale(p.t) <= w);
+    const step = vis.length > maxMarkers ? Math.ceil(vis.length / maxMarkers) : 1;
+    const sampled = step > 1 ? vis.filter((_, j) => j % step === 0) : vis;
+    if (needMarkers) {
+      mG.selectAll('circle').remove();
+      const paths = mG.selectAll('path').data(sampled, (p) => p.t);
+      paths.enter().append('path')
+        .merge(paths)
+        .attr('d', (p) => shape(xScale(p.t), yScale(p.v), markerR))
+        .attr('fill', color)
+        .attr('stroke', 'none');
+      paths.exit().remove();
+    } else {
+      mG.selectAll('path').remove();
+      const dots = mG.selectAll('circle').data(sampled, (p) => p.t);
+      dots.enter().append('circle').attr('fill', color)
+        .merge(dots)
+        .attr('r', strokeW)
+        .attr('cx', (p) => xScale(p.t))
+        .attr('cy', (p) => yScale(p.v));
+      dots.exit().remove();
+    }
+  });
+  const activeMarkerClasses = new Set(compareSeries.map(s => `compare-markers-${_safeId(s.name)}`));
+  overlay.selectAll('[class^="compare-markers-"]').each(function () {
+    if (!activeMarkerClasses.has(this.getAttribute('class'))) d3.select(this).remove();
+  });
+
+  let label = overlay.select('.compare-panel-label');
+  if (label.empty()) {
+    label = overlay.append('text').attr('class', 'panel-label compare-panel-label').attr('x', 4).attr('y', 11);
+  }
+  label.text(cfg?.name?.trim() || '').attr('fill', 'var(--muted)');  // the graph's name, if it has one
 };
 
 const _renderCompareGraphNow = (graph, plotArea) => {
