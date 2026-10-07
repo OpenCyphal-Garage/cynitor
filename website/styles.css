@@ -6932,8 +6932,11 @@ details.svc-history-entry[open] > summary::before {
   background: var(--error-muted);
 }
 
+/* Where there is no room beside the buttons, the note goes under them. */
 .dsdl-doc-actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 0.375rem;
   margin-top: 0.5rem;
 }

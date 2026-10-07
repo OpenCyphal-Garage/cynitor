@@ -3513,6 +3513,23 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+@test("DSDL: a type's buttons keep their height when the note beside them wraps")
+async def _(page):
+    server = _DsdlServer()
+    await dsdl_open(page, server)
+    try:
+        await page.locator('#dsdlCustomTree .dsdl-ns-row[data-ns="myapp"]').click()
+        await page.locator('.dsdl-type-row[data-type="myapp.Reading.1.0"]').click()  # compiled: a note by its buttons
+        await page.wait_for_selector("#dsdlNewVersionBtn", timeout=WAIT_MS)
+        await dsdl_new_type(page)  # the editor beside it narrows the pane
+        await page.wait_for_timeout(300)
+        heights = await page.evaluate("""['dsdlEditorSave', 'dsdlNewVersionBtn', 'dsdlDeleteBtn']
+            .map((id) => Math.round(document.getElementById(id).getBoundingClientRect().height))""")
+        assert heights[0] == heights[1] == heights[2], f"Save, New version and Delete are {heights} tall"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
