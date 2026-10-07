@@ -671,7 +671,7 @@ const _renderCompareGraphNow = (graph, plotArea) => {
       const th = graph.thresholds[i];
       legendSeries.push({
         name: thresholdName(th),
-        color: th.color || '#ef4444',
+        color: th.color || 'var(--error)',
         _threshold: true,
         _thresholdIdx: i,
         _lineStyle: th.style || 'dashed',

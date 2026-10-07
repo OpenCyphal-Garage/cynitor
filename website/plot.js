@@ -6,7 +6,8 @@ const PLOT_PANEL_GAP = 8;
 const PLOT_GAP_THRESHOLD = 3;
 const PLOT_SHOWN_MAX = 8;  // series a subject's plot shows at first, at most
 const _safeId = (s) => s.replace(/[^a-zA-Z0-9_-]/g, '_');
-const _safeColor = (c) => /^#[0-9a-fA-F]{3,8}$/.test(c) ? c : '#888';
+// A colour safe to write into a style: hex, or a theme colour (var(--error)).
+const _safeColor = (c) => /^(#[0-9a-fA-F]{3,8}|var\(--[a-z0-9-]+\))$/.test(c) ? c : 'var(--muted)';
 const PLOT_TIME_WINDOWS = [
   { label: '30s', secs: 30 },
   { label: '1m', secs: 60 },
@@ -46,15 +47,19 @@ const _detailPlotCfg = {
   set _resumeStart(v) { state._plotResumeStart = v; },
 };
 
+// A colour as a colour box takes it (#rrggbb): a theme colour (var(--error))
+// as the theme in use has it; one it cannot read, the theme's first plot colour.
 const _colorToHex = (str) => {
-  if (!str) return '#58a6ff';
+  const token = /^var\((--[a-z0-9-]+)\)$/.exec(str || '');
+  if (token) str = getComputedStyle(document.documentElement).getPropertyValue(token[1]).trim();
+  if (!str) return PLOT_COLORS[0];
   if (str.startsWith('#')) {
     if (str.length === 4) return `#${str[1]}${str[1]}${str[2]}${str[2]}${str[3]}${str[3]}`;
     return str;
   }
   const m = str.match(/\d+/g);
   if (m && m.length >= 3) return '#' + m.slice(0, 3).map(n => (+n).toString(16).padStart(2, '0')).join('');
-  return '#58a6ff';
+  return PLOT_COLORS[0];
 };
 
 const _openSwatchPicker = (swatch, currentColor, onChange) => {
@@ -671,12 +676,13 @@ const buildPlotControls = (opts = {}) => {
 
     const drawColorWrap = document.createElement('div');
     drawColorWrap.className = 'plot-draw-color-wrap';
+    // Until a colour is picked, drawings take the theme's red (see styles.css).
     const drawSwatch = document.createElement('span');
     drawSwatch.className = 'plot-draw-swatch';
-    drawSwatch.style.background = cfg._drawColor || '#ef4444';
+    if (cfg._drawColor) drawSwatch.style.background = cfg._drawColor;
     const drawColorInput = document.createElement('input');
     drawColorInput.type = 'color';
-    drawColorInput.value = _colorToHex(cfg._drawColor || '#ef4444');
+    drawColorInput.value = _colorToHex(cfg._drawColor || 'var(--error)');
     drawColorInput.setAttribute('aria-label', 'Drawing color');
     drawColorInput.addEventListener('input', () => {
       cfg._drawColor = drawColorInput.value;
@@ -949,7 +955,7 @@ const buildComparePanel = (graph, onUpdate) => {
     graph.thresholds.push({
       value: val,
       label: thNameInput.value.trim() || String(val),
-      color: '#ef4444',
+      color: '',  // the theme's red, until one is picked
       style: 'dashed',
     });
     thInput.value = '';
@@ -1010,7 +1016,7 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
       e.stopPropagation();
       const seriesName = btn.dataset.series;
       const th = _legendGetThreshold(btn);
-      _openSwatchPicker(swatch, swatch.dataset.hex || '#58a6ff', (newColor) => {
+      _openSwatchPicker(swatch, swatch.dataset.hex || PLOT_COLORS[0], (newColor) => {
         swatch.dataset.hex = newColor;
         if (th) {
           th.color = newColor;
@@ -1178,14 +1184,14 @@ const _renderThresholds = (container, thresholds, yScale, w) => {
   merged.select('line')
     .attr('x1', 0).attr('x2', w)
     .attr('y1', d => yScale(d.value)).attr('y2', d => yScale(d.value))
-    .attr('stroke', d => d.color || '#ef4444')
+    .attr('stroke', d => d.color || 'var(--error)')
     .attr('stroke-width', 1)
     .attr('stroke-dasharray', d => THRESHOLD_STYLES[d.style] || THRESHOLD_STYLES.dashed);
   merged.select('text')
     .attr('x', w - 4).attr('y', d => yScale(d.value) - 3)
     .attr('text-anchor', 'end')
     .attr('class', 'plot-threshold-label')
-    .attr('fill', d => d.color || '#ef4444')
+    .attr('fill', d => d.color || 'var(--error)')
     .text(d => d.label || String(d.value));
   lines.exit().remove();
 };
@@ -1238,7 +1244,7 @@ const _renderDrawings = (container, drawings, xScale, panelH) => {
   paths.enter().append('path')
     .attr('fill', 'none')
     .merge(paths)
-    .attr('stroke', d => d.color || '#ef4444')
+    .attr('stroke', d => d.color || 'var(--error)')
     .attr('stroke-width', d => d.width || 2)
     .attr('stroke-dasharray', d => _drawDashFor(d.dash, d.width || 2))
     .attr('stroke-linecap', d => d.dash === 'dotted' ? 'round' : (d.dash === 'dashed' ? 'butt' : 'round'))
@@ -1282,14 +1288,17 @@ const _openMarkerForm = (plotArea, cfg, marker, isNew, onDone) => {
 
   const colorWrap = document.createElement('div');
   colorWrap.className = 'plot-marker-form-color';
+  // Until a colour is picked, a marker takes the theme's accent (see styles.css).
   const colorSwatch = document.createElement('span');
   colorSwatch.className = 'plot-marker-form-swatch';
-  colorSwatch.style.background = marker.color || 'var(--accent)';
+  if (marker.color) colorSwatch.style.background = marker.color;
   const colorInput = document.createElement('input');
   colorInput.type = 'color';
-  colorInput.value = _colorToHex(marker.color || '#0969da');
+  colorInput.value = _colorToHex(marker.color || 'var(--accent)');
   colorInput.setAttribute('aria-label', 'Marker color');
+  let picked = Boolean(marker.color);
   colorInput.addEventListener('input', () => {
+    picked = true;
     colorSwatch.style.background = colorInput.value;
   });
   colorWrap.appendChild(colorSwatch);
@@ -1316,7 +1325,7 @@ const _openMarkerForm = (plotArea, cfg, marker, isNew, onDone) => {
     if (!label) { labelInput.focus(); return; }
     marker.label = label;
     marker.note = noteInput.value.trim() || '';
-    marker.color = colorInput.value;
+    marker.color = picked ? colorInput.value : '';
     marker.lineStyle = styleSel.value;
     if (isNew) {
       if (!cfg.markers) cfg.markers = [];
@@ -1810,7 +1819,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
         const style = cfg._drawStyle || 'solid';
         drawingStroke = {
           points: [{ t: curXScale.invert(mx), y: my / totalH }],
-          color: cfg._drawColor || '#ef4444',
+          color: cfg._drawColor || '',  // the theme's red, unless one is picked
           width,
           dash: style,
           _totalH: totalH,
@@ -1838,7 +1847,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
         if (tempPath.empty()) {
           const ov = g.select('.plot-compare-overlay');
           (ov.empty() ? g : ov).append('path').attr('class', 'plot-drawing-temp')
-            .attr('fill', 'none').attr('stroke', drawingStroke.color)
+            .attr('fill', 'none').attr('stroke', drawingStroke.color || 'var(--error)')
             .attr('stroke-width', drawingStroke.width)
             .attr('stroke-dasharray', drawingStroke._dashArray)
             .attr('stroke-linecap', drawingStroke._linecap).attr('stroke-linejoin', 'round').attr('pointer-events', 'none')

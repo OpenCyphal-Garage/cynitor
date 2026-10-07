@@ -1843,6 +1843,7 @@ button:focus-visible,
   height: 1rem;
   border-radius: var(--radius);
   border: 1px solid var(--border);
+  background: var(--error);  /* drawings' colour until one is picked */
   cursor: pointer;
 }
 
@@ -1957,6 +1958,7 @@ button:focus-visible,
   height: 1.25rem;
   border-radius: var(--radius);
   border: 1px solid var(--border);
+  background: var(--accent);  /* a marker's colour until one is picked */
   cursor: pointer;
 }
 

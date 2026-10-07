@@ -2066,6 +2066,56 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+# The colours a graph's threshold (line and legend pill), drawing and marker
+# are in, and the theme's red and accent, all as computed ("rgb(...)").
+COMPARE_MARK_COLOURS = """(c) => {
+    const drawn = (sel, prop) => { const e = c.querySelector(sel); return e ? getComputedStyle(e)[prop] : null; };
+    const token = (name) => { const probe = document.createElement('i');
+        probe.style.color = `var(${name})`; document.body.appendChild(probe);
+        const rgb = getComputedStyle(probe).color; probe.remove(); return rgb; };
+    return {threshold: drawn('.plot-threshold line', 'stroke'),
+            pill: drawn('.plot-legend-item[data-threshold-idx] .plot-legend-swatch', 'backgroundColor'),
+            drawing: drawn('.plot-drawings path', 'stroke'), marker: drawn('.plot-marker line', 'stroke'),
+            red: token('--error'), accent: token('--accent')}; }"""
+
+
+@test("Compare: thresholds, drawings and markers left at their default colour take the theme's")
+async def _(page):
+    theme = "document.documentElement.getAttribute('data-theme') || 'light'"
+    started_in = await page.evaluate(theme)
+    await page.evaluate(COMPARE_START)
+    try:
+        await page.wait_for_timeout(300)
+        card = await compare_graph(page, (1100, "value"))
+        await card.locator('[aria-label="Threshold value"]').fill("82")
+        await card.locator('[aria-label="Add threshold line"]').click()
+        box = await card.locator(".plot-overlay").bounding_box()
+        x, y = box["x"] + box["width"] * 0.5, box["y"] + box["height"] / 2
+        await page.keyboard.down("Alt")  # Alt+drag draws
+        await page.mouse.move(x, y)
+        await page.mouse.down()
+        await page.mouse.move(x + 80, y + 20, steps=4)
+        await page.mouse.up()
+        await page.keyboard.up("Alt")
+        await page.keyboard.down("Shift")  # Shift+click marks
+        await page.mouse.click(x + 40, box["y"] + 40)
+        await page.keyboard.up("Shift")
+        await page.keyboard.type("start")
+        await page.keyboard.press("Enter")
+        for _ in range(2):  # in this theme, then the other
+            await page.wait_for_timeout(400)
+            c, now_in = await card.evaluate(COMPARE_MARK_COLOURS), await page.evaluate(theme)
+            assert c["threshold"] == c["pill"] == c["red"], \
+                f"In {now_in}, a threshold is {c['threshold']} (pill {c['pill']}), not the theme's red {c['red']}"
+            assert c["drawing"] == c["red"], f"In {now_in}, a drawing is {c['drawing']}, not the theme's red {c['red']}"
+            assert c["marker"] == c["accent"], f"In {now_in}, a marker is {c['marker']}, not the theme's accent {c['accent']}"
+            await page.locator("#themeToggle").click()
+    finally:
+        if await page.evaluate(theme) != started_in:
+            await page.locator("#themeToggle").click()
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
