@@ -21,6 +21,7 @@ script then never starts a server.
 import asyncio
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -2589,6 +2590,8 @@ class _DsdlServer:
             t = self.types.get(path.removeprefix("/api/dsdl/type/"))
             return (self._detail(t), 200) if t else ({"error": "Type not found"}, 404)
         if method == "POST" and path == "/api/dsdl/custom/namespace":
+            if not re.fullmatch(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*", body["namespace"]):
+                return {"error": "Namespace must be lowercase dotted identifiers (e.g. myapp.sensors)"}, 400
             self.custom_namespaces.add(body["namespace"])
             return {"namespace": body["namespace"], "path": ""}, 201
         if method == "POST" and path == "/api/dsdl/custom/type":
@@ -2956,6 +2959,35 @@ async def _(page):
         after = await page.locator(status).inner_text()
         assert "2m ago" in before and "3h ago" in after, \
             f"Compiled two minutes ago, the header said {before!r}; three hours on, {after!r}"
+    finally:
+        await dsdl_close(page, server)
+
+
+@test("DSDL: a refused namespace or delete is said where it was asked for")
+async def _(page):
+    server = _DsdlServer()
+    await dsdl_open(page, server)
+    try:
+        await dsdl_new_type(page)  # an editor open: its status line is about the type in it
+        await page.locator("#dsdlCustomAddNs").click()
+        await page.locator("#dsdlNsInput").fill("My-NS")
+        await page.locator("#dsdlNsOk").click()
+        await page.wait_for_timeout(300)
+        in_dialog = await page.locator("#dsdlNsDialog").inner_text()
+        in_editor = await page.locator("#dsdlEditorStatus").inner_text()
+        await page.locator("#dsdlNsCancel").click()
+        # Gone from the server since it was shown: deleting it is refused.
+        await page.locator('#dsdlCustomTree .dsdl-ns-row[data-ns="myapp"]').click()
+        await page.locator('.dsdl-type-row[data-type="myapp.Reading.1.0"]').click()
+        await page.wait_for_selector("#dsdlDeleteBtn", timeout=WAIT_MS)
+        del server.types["myapp.Reading.1.0"]
+        await page.locator("#dsdlDeleteBtn").click()
+        await page.locator("#dsdlDelOk").click()
+        await page.wait_for_timeout(300)
+        bar = page.locator(".dsdl-confirm-bar")
+        in_bar = await bar.inner_text() if await bar.count() else "(no confirmation bar)"
+        assert "lowercase" in in_dialog and not in_editor and "not found" in in_bar, \
+            f"The namespace dialog says {in_dialog!r}, the editor {in_editor!r}; the delete bar {in_bar!r}"
     finally:
         await dsdl_close(page, server)
 

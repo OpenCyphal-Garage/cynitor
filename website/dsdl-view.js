@@ -980,7 +980,7 @@ const DsdlView = (() => {
         _expandedNodes.add(ns.split('.')[0]);
         _renderCustomTree();
       } catch (err) {
-        _showEditorToast(err.message, true);
+        _showDialogError(dialog, err.message);
       }
     });
 
@@ -989,6 +989,18 @@ const DsdlView = (() => {
       if (e.key === 'Enter') document.getElementById('dsdlNsOk')?.click();
       if (e.key === 'Escape') dialog.remove();
     });
+  };
+
+  // An error said in the inline dialog it answers, on a line of its own.
+  const _showDialogError = (dialog, msg) => {
+    let line = dialog.querySelector('.dsdl-dialog-error');
+    if (!line) {
+      line = document.createElement('div');
+      line.className = 'dsdl-dialog-error';
+      line.setAttribute('role', 'alert');
+      dialog.appendChild(line);
+    }
+    line.textContent = msg;
   };
 
   // ------------------------------------------------------------------
@@ -1017,19 +1029,26 @@ const DsdlView = (() => {
       <button class="dsdl-dialog-ok dsdl-dialog-danger" id="dsdlDelOk">Delete</button>
       <button class="dsdl-dialog-cancel" id="dsdlDelCancel" aria-label="Cancel delete">&times;</button>`;
     panel.insertBefore(bar, panel.firstChild);
-    document.getElementById('dsdlDelOk')?.addEventListener('click', async () => {
-      bar.remove();
-      await _deleteType(fullName);
+    // The bar stays until the server answers: deleted, the type's pane goes
+    // with it; refused, the bar says why.
+    const ok = document.getElementById('dsdlDelOk');
+    ok?.addEventListener('click', async () => {
+      ok.disabled = true;
+      const refused = await _deleteType(fullName);
+      if (refused) {
+        ok.disabled = false;
+        _showDialogError(bar, refused);
+      }
     });
     document.getElementById('dsdlDelCancel')?.addEventListener('click', () => bar.remove());
   };
 
+  // Deletes a custom type; returns why not when the server refuses.
   const _deleteType = async (fullName) => {
     try {
       await requestJson(`/api/dsdl/custom/type/${encodeURIComponent(fullName)}`, { method: 'DELETE' });
     } catch (err) {
-      _showEditorToast(err.message, true);
-      return;
+      return err.message;
     }
     if (_editorOpen && _editorMode === 'edit' && _editPrefill?.full_name === fullName) {
       _closeEditor();
@@ -1364,12 +1383,12 @@ const DsdlView = (() => {
     const portId = portStr ? Number(portStr) : null;
 
     if (!namespace || !typeName || !version || !source) {
-      _showEditorToast('Fill in namespace, name, version, and source', true);
+      _showEditorStatus('Fill in namespace, name, version, and source', true);
       return;
     }
     const portError = _fixedPortError(portStr, source);
     if (portError) {
-      _showEditorToast(portError, true);
+      _showEditorStatus(portError, true);
       return;
     }
 
@@ -1398,12 +1417,12 @@ const DsdlView = (() => {
         full_name: fullName,
       };
 
-      _showEditorToast('Saved', false);
+      _showEditorStatus('Saved', false);
       await _reloadTree();
       _loadTypeDetail(fullName);
       _expandToType(fullName);
     } catch (err) {
-      _showEditorToast(err.message, true);
+      _showEditorStatus(err.message, true);
     }
   };
 
@@ -1464,21 +1483,14 @@ const DsdlView = (() => {
     document.querySelector('.dsdl-compile-error')?.remove();
   };
 
-  const _showEditorToast = (msg, isError) => {
+  // The editor's own word on the type in it; other errors are said where
+  // they happen (_showDialogError, the compile errors).
+  const _showEditorStatus = (msg, isError) => {
     const status = document.getElementById('dsdlEditorStatus');
-    if (status) {
-      status.textContent = msg;
-      status.className = `dsdl-editor-status ${isError ? 'dsdl-editor-error' : 'dsdl-editor-ok'}`;
-      setTimeout(() => { if (status.textContent === msg) status.textContent = ''; }, 5000);
-      return;
-    }
-    const tree = document.getElementById('dsdlTree');
-    if (!tree) return;
-    const toast = document.createElement('div');
-    toast.className = `dsdl-toast ${isError ? 'dsdl-toast-error' : 'dsdl-toast-ok'}`;
-    toast.textContent = msg;
-    tree.parentElement.appendChild(toast);
-    setTimeout(() => toast.remove(), 4000);
+    if (!status) return;
+    status.textContent = msg;
+    status.className = `dsdl-editor-status ${isError ? 'dsdl-editor-error' : 'dsdl-editor-ok'}`;
+    setTimeout(() => { if (status.textContent === msg) status.textContent = ''; }, 5000);
   };
 
   const _initEditorDrag = () => {
