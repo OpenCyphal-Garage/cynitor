@@ -1519,9 +1519,12 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
   const pad = (vMax - vMin) * 0.05;
   const yScale = d3.scaleLinear().domain([vMin - pad, vMax + pad]).range([panelH, 0]);
 
+  // Each graph its own clip path: under one id for the page, every graph
+  // would be clipped to the first one's size.
+  const clipId = `compare-panel-clip-${_safeId(cfg.id)}`;
   let clip = overlay.select('clipPath');
   if (clip.empty()) {
-    clip = overlay.append('clipPath').attr('id', 'compare-panel-clip');
+    clip = overlay.append('clipPath').attr('id', clipId);
     clip.append('rect');
   }
   clip.select('rect').attr('width', w).attr('height', panelH);
@@ -1549,7 +1552,7 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
   lines.enter().append('path')
     .attr('class', 'compare-line')
     .attr('fill', 'none')
-    .attr('clip-path', 'url(#compare-panel-clip)')
+    .attr('clip-path', `url(#${clipId})`)
     .merge(lines)
     .attr('stroke', (d, i) => d.color || PLOT_COLORS[(primaryCount + i) % PLOT_COLORS.length])
     .attr('stroke-width', strokeW)
@@ -1578,7 +1581,7 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
     }
     if (mG.empty()) {
       mG = overlay.append('g').attr('class', cls)
-        .attr('clip-path', 'url(#compare-panel-clip)');
+        .attr('clip-path', `url(#${clipId})`);
     }
     const vis = s.data.filter((p) => !p._gap && xScale(p.t) >= 0 && xScale(p.t) <= w);
     const step = vis.length > maxMarkers ? Math.ceil(vis.length / maxMarkers) : 1;

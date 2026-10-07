@@ -2116,6 +2116,30 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+# Each graph: is its line clipped by a clip path of its own, as tall as its plot?
+COMPARE_OWN_CLIPS = """() => [...document.querySelectorAll('.compare-graph-card')].map(card => {
+    const id = card.querySelector('.compare-line')?.getAttribute('clip-path')?.match(/#([^)]+)/)?.[1];
+    const clip = id && document.getElementById(id);
+    return !!clip && card.contains(clip)
+        && clip.querySelector('rect').getAttribute('height') === card.querySelector('.plot-overlay').getAttribute('height'); })"""
+
+
+@test("Compare: each graph clips its lines to its own plot, not to the first graph's")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    try:
+        await page.wait_for_timeout(300)
+        await compare_graph(page, (1100, "value"))  # its editing rows open: a short plot
+        second = await compare_graph(page, (1100, "value"))
+        await second.locator(".compare-edit-btn").click()  # folded away: a taller plot
+        await second.scroll_into_view_if_needed()
+        await page.wait_for_timeout(400)
+        own = await page.evaluate(COMPARE_OWN_CLIPS)
+        assert own == [True, True], f"Graphs clipped by a clip path of their own, as tall as their plot: {own}"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
