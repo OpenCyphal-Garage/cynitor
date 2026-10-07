@@ -2832,6 +2832,32 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+@test("DSDL: the namespace Create and delete-confirm buttons keep their colours under the pointer")
+async def _(page):
+    server = _DsdlServer()
+    background = "(id) => getComputedStyle(document.getElementById(id)).backgroundColor"
+
+    async def resting_and_hovered(button_id):
+        resting = await page.evaluate(background, button_id)
+        await page.locator(f"#{button_id}").hover()
+        await page.wait_for_timeout(400)  # past the hover transition
+        return resting, await page.evaluate(background, button_id)
+
+    await dsdl_open(page, server)
+    try:
+        await page.locator("#dsdlCustomAddNs").click()
+        create = await resting_and_hovered("dsdlNsOk")
+        await page.locator("#dsdlNsCancel").click()
+        await page.locator('#dsdlCustomTree .dsdl-ns-row[data-ns="myapp"]').click()
+        await page.locator('.dsdl-type-row[data-type="myapp.Reading.1.0"]').click()
+        await page.locator("#dsdlDeleteBtn").click()
+        delete = await resting_and_hovered("dsdlDelOk")
+        assert create[0] == create[1] and delete[0] == delete[1], \
+            f"At rest and under the pointer: Create {create}, Delete {delete}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

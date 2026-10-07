@@ -6584,7 +6584,8 @@ details.svc-history-entry[open] > summary::before {
   border-color: var(--accent);
 }
 
-.dsdl-dialog-ok:hover { opacity: 0.85; }
+/* Their own colours under the pointer too: button:hover would grey them, under white text. */
+.dsdl-dialog-ok:hover { background: var(--accent); border-color: var(--accent); opacity: 0.85; }
 .dsdl-dialog-cancel:hover { color: var(--text); }
 
 /* ── Editor panel ── */
@@ -6895,6 +6896,8 @@ details.svc-history-entry[open] > summary::before {
 }
 
 .dsdl-dialog-danger:hover {
+  background: var(--error);
+  border-color: var(--error);
   opacity: 0.85;
 }
 
