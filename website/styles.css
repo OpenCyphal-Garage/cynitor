@@ -6358,18 +6358,19 @@ details.svc-history-entry[open] > summary::before {
   background: var(--surface-hover);
 }
 
+/* Long types and names wrap in a narrow pane rather than run into each other. */
 .dsdl-fcol-type {
   padding: 0.375rem 0.875rem;
   color: var(--accent);
-  white-space: nowrap;
   width: 40%;
-  max-width: 16rem;
+  overflow-wrap: anywhere;
 }
 
 .dsdl-fcol-name {
   padding: 0.375rem 0.875rem;
   color: var(--text-bright);
   font-weight: 500;
+  overflow-wrap: anywhere;
 }
 
 .dsdl-fcol-val {

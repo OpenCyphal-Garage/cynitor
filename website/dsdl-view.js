@@ -866,12 +866,16 @@ const DsdlView = (() => {
     }
   };
 
+  // A field's type, free to wrap after the dots between its names in a
+  // narrow pane ("uavcan.si.unit." over "Scalar.1.0"), not inside a version.
+  const _fieldTypeHtml = (type) => escapeHtml(type).replace(/\.(?=[A-Za-z_])/g, '.<wbr>');
+
   const _renderFieldTable = (fields) => {
     if (!fields.length) return '<div class="dsdl-field-empty">No fields</div>';
     return `<table class="dsdl-ftable"><tbody>
       ${fields.map(f => `
         <tr class="dsdl-frow">
-          <td class="dsdl-fcol-type">${escapeHtml(f.type)}</td>
+          <td class="dsdl-fcol-type">${_fieldTypeHtml(f.type)}</td>
           <td class="dsdl-fcol-name">${escapeHtml(f.name)}</td>
         </tr>`).join('')}
     </tbody></table>`;
@@ -1275,7 +1279,7 @@ const DsdlView = (() => {
     if (!fields.length) return '<div class="dsdl-custom-empty">No fields</div>';
     return `<table class="dsdl-ftable"><tbody>
       ${fields.map(f => `<tr class="dsdl-frow">
-        <td class="dsdl-fcol-type">${escapeHtml(f.type)}</td>
+        <td class="dsdl-fcol-type">${_fieldTypeHtml(f.type)}</td>
         <td class="dsdl-fcol-name">${escapeHtml(f.name)}</td>
       </tr>`).join('')}
     </tbody></table>`;

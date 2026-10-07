@@ -2858,6 +2858,36 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+# The field names cut off by their card, or with their type's text run into them.
+FIELD_NAMES_UNREADABLE = """() => [...document.querySelectorAll('#dsdlDetail .dsdl-fcol-name')].filter((cell) => {
+    const card = cell.closest('.dsdl-card').getBoundingClientRect();
+    const text = (node) => { const range = document.createRange(); range.selectNodeContents(node);
+        return range.getBoundingClientRect(); };
+    const name = text(cell), type = text(cell.previousElementSibling);
+    return name.right > card.right + 0.5 || type.right > name.left;
+}).map((cell) => cell.textContent)"""
+
+
+@test("DSDL: long field types wrap, and never cut off or run into the field names")
+async def _(page):
+    server = _DsdlServer()
+    long_type = "uavcan.si.unit.electric_current.Scalar.1.0"
+    server.types["myapp.Pair.1.0"] = _dsdl_type("myapp.Pair.1.0", source="custom", compiled=False,
+                                                text=f"{long_type} a\n{long_type} b\n@sealed\n")
+    await dsdl_open(page, server)
+    try:
+        await page.locator('#dsdlCustomTree .dsdl-ns-row[data-ns="myapp"]').click()
+        await page.locator('.dsdl-type-row[data-type="myapp.Pair.1.0"]').click()
+        await page.wait_for_selector('.dsdl-doc-title:has-text("Pair")', timeout=WAIT_MS)
+        await dsdl_new_type(page)  # the editor takes half the room
+        await page.wait_for_timeout(300)
+        width = await page.evaluate("Math.round(document.getElementById('dsdlDetail').getBoundingClientRect().width)")
+        unreadable = await page.evaluate(FIELD_NAMES_UNREADABLE)
+        assert not unreadable, f"In a {width} px pane these field names are cut off or run into: {unreadable}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
