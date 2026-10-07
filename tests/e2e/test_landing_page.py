@@ -1048,6 +1048,25 @@ async def _(page):
             switchView('nodes'); clearSelectedNode(); }""")
 
 
+@test("Plots: a graph made from a plot before Compare has opened gets an id of its own")
+async def _(page):
+    # As after a reload: a graph kept from before, and the Compare tab not
+    # opened yet, so nothing has counted the graphs there are.
+    await page.evaluate("""() => { state.compareGraphs.push(newCompareGraph({name: 'Kept', series: []}, 'cg_1'));
+        _compareGraphIdCounter = 0; }""")
+    await page.locator("#viewTabNodes").click()
+    await page.evaluate("setSelectedNode(20)")
+    await page.locator('#selectedNodeContent .subject-card[data-subject="1200"]').click()
+    try:
+        await page.wait_for_function(f"{PLOT_PANELS}.join() === 'velocity[0],velocity[1],velocity[2]'", timeout=3000)
+        await page.locator("#selectedNodeContent .plot-to-compare").click()
+        ids = await page.evaluate("state.compareGraphs.map(g => g.id)")
+        assert len(set(ids)) == len(ids), f"Graphs share an id, and so a card: {ids}"
+    finally:
+        await page.evaluate("""() => { for (const b of [...document.querySelectorAll('.compare-graph-delete')]) b.click();
+            state.compareGraphs.length = 0; saveSettings(); switchView('nodes'); clearSelectedNode(); }""")
+
+
 @test("Tables: Subjects say how long ago they were heard, and how many bytes a second")
 async def _(page):
     await page.locator("#viewTabSubjects").click()

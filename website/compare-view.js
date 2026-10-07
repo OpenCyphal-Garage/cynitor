@@ -2,13 +2,15 @@
 // controls and animation. Uses plot.js utilities for rendering.
 
 let _compareGraphIdCounter = 0;
-const _seedGraphIdCounter = () => {
+// An id no graph has: past every graph's, wherever the new one is made (a
+// Nodes or Subjects plot makes one before the Compare tab may have opened).
+const _nextGraphId = () => {
   for (const g of state.compareGraphs) {
     const m = g.id && g.id.match(/^cg_(\d+)$/);
     if (m) _compareGraphIdCounter = Math.max(_compareGraphIdCounter, Number(m[1]));
   }
+  return `cg_${++_compareGraphIdCounter}`;
 };
-const _nextGraphId = () => `cg_${++_compareGraphIdCounter}`;
 
 // A graph's settings, whole and copied: what a saved graph, the workspace
 // file, the dashboard's settings and a clone keep of it. Not its live state
@@ -68,7 +70,6 @@ const _freeSavedName = (base) => {
 };
 
 const initCompareView = () => {
-  _seedGraphIdCounter();
   const container = el('compareContainer');
   if (container.querySelector('.compare-toolbar')) {
     for (const graph of state.compareGraphs) {
