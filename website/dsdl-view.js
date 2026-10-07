@@ -14,6 +14,7 @@ const DsdlView = (() => {
   let _statusPollTimer = null;
   let _lastDetailData = null;
   let _editorOpen = false;
+  let _editorDirty = false;  // the editor holds changes not saved yet
   let _editorMode = 'new';
   let _editPrefill = null;
   let _editorSplitRatio = 0.5;
@@ -1007,7 +1008,12 @@ const DsdlView = (() => {
   // Editor panel
   // ------------------------------------------------------------------
 
+  // True when the editor holds nothing unsaved, or the user lets it go.
+  const _mayDropDraft = () => !_editorOpen || !_editorDirty
+    || window.confirm('Discard the unsaved changes in the editor?');
+
   const _openEditorNew = async (prefilledNs) => {
+    if (!_mayDropDraft()) return;
     _editorOpen = true;
     _editorMode = 'new';
     _editPrefill = null;
@@ -1064,6 +1070,7 @@ const DsdlView = (() => {
   };
 
   const _openEditorEdit = async (typeData) => {
+    if (!_mayDropDraft()) return;
     _editorOpen = true;
     _editorMode = 'edit';
     _editPrefill = {
@@ -1083,6 +1090,7 @@ const DsdlView = (() => {
 
   const _closeEditor = () => {
     _editorOpen = false;
+    _editorDirty = false;
     const area = document.getElementById('dsdlDetailArea');
     if (!area) return;
 
@@ -1201,7 +1209,13 @@ const DsdlView = (() => {
 
     if (isEdit && sourceValue) _updatePreview(sourceValue);
 
-    document.getElementById('dsdlEditorClose')?.addEventListener('click', _closeEditor);
+    // Anything typed or picked is a draft until it is saved.
+    _editorDirty = false;
+    editorPanel.querySelector('.dsdl-editor-form')?.addEventListener('input', () => { _editorDirty = true; });
+
+    document.getElementById('dsdlEditorClose')?.addEventListener('click', () => {
+      if (_mayDropDraft()) _closeEditor();
+    });
     document.getElementById('dsdlEditorSave')?.addEventListener('click', _saveType);
 
     const sourceEl = document.getElementById('dsdlEditorSource');
@@ -1417,6 +1431,7 @@ const DsdlView = (() => {
         full_name: fullName,
       };
 
+      _editorDirty = false;
       _showEditorStatus('Saved', false);
       await _reloadTree();
       _loadTypeDetail(fullName);

@@ -3010,6 +3010,41 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+@test("DSDL: the editor asks before unsaved changes are dropped")
+async def _(page):
+    server = _DsdlServer()
+    asked, answer = [], {"accept": False}
+
+    async def on_dialog(dialog):
+        asked.append(dialog.message)
+        await (dialog.accept() if answer["accept"] else dialog.dismiss())
+
+    async def source():
+        return await page.locator("#dsdlEditorSource").input_value() if await page.locator("#dsdlEditorSource").count() else None
+
+    page.on("dialog", on_dialog)
+    await dsdl_open(page, server)
+    try:
+        await dsdl_new_type(page)
+        await page.locator("#dsdlEditorClose").click()  # nothing written: closed without a word
+        assert not asked and await source() is None, f"An empty editor: asked {asked}, left {await source()!r}"
+        draft = "uint8 lots_of_work\n@sealed\n"
+        await dsdl_new_type(page)
+        await page.locator("#dsdlEditorSource").fill(draft)
+        await page.locator("#dsdlEditorClose").click()  # declined: the draft stays
+        after_close = await source()
+        await dsdl_new_type(page)  # a new type over the draft: declined too
+        after_new = await source()
+        answer["accept"] = True
+        await page.locator("#dsdlEditorClose").click()
+        assert len(asked) == 3 and after_close == after_new == draft and await source() is None, \
+            f"Asked {len(asked)} times; the draft after a declined close {after_close!r}, " \
+            f"after a declined new type {after_new!r}; once agreed, the editor holds {await source()!r}"
+    finally:
+        page.remove_listener("dialog", on_dialog)
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
