@@ -2540,7 +2540,7 @@ class _DsdlServer:
         self.custom_namespaces = {"myapp"}
         self.last_custom_compiled = 1.0e9
         self.requests = []          # (method, path, JSON body)
-        self.compile_gate = None    # an asyncio.Event a compile waits for
+        self.gates = {}             # path -> an asyncio.Event its answer waits for
         self.compile_answer = ({"ok": True}, 200)
 
     def _status(self):
@@ -2613,18 +2613,19 @@ class _DsdlServer:
         path = unquote(urlparse(request.url).path)
         body = request.post_data_json if request.post_data else None
         self.requests.append((request.method, path, body))
+        if path in self.gates:
+            await self.gates[path].wait()
         if (request.method, path) == ("POST", "/api/dsdl/compile"):
-            if self.compile_gate:
-                await self.compile_gate.wait()
             answer, status = self.compile_answer
         else:
             answer, status = self._answer(request.method, path, body)
         await route.fulfill(json=answer, status=status, headers={"Access-Control-Allow-Origin": "*"})
 
 
-async def dsdl_open(page, server, setup=None, connected=True):
+async def dsdl_open(page, server, setup=None, connected=True, wait=True):
     """The DSDL tab on a freshly loaded page, connected to `server` or not.
-    `setup` runs in the page before the tab opens (nodes, messages)."""
+    `setup` runs in the page before the tab opens (nodes, messages); `wait`
+    waits for its tree."""
     await page.evaluate("""() => { state.dashboardConnected = false; _writeSettingsNow();
         localStorage.removeItem('cynitor.dsdl.state'); }""")
     await page.reload(wait_until="load")
@@ -2633,7 +2634,9 @@ async def dsdl_open(page, server, setup=None, connected=True):
     if setup:
         await page.evaluate(setup)
     await page.evaluate("switchView('dsdl')")
-    await page.wait_for_selector("#dsdlTree .dsdl-ns-row" if connected else "#dsdlTree .dsdl-tree-empty", timeout=5000)
+    if wait:
+        await page.wait_for_selector("#dsdlTree .dsdl-ns-row" if connected else "#dsdlTree .dsdl-tree-empty",
+                                     timeout=5000)
 
 
 async def dsdl_close(page, server):
@@ -2802,7 +2805,7 @@ async def _(page):
 @test("DSDL: a compile keeps its button busy until it ends, and is not asked for twice")
 async def _(page):
     server = _DsdlServer()
-    server.compile_gate = asyncio.Event()
+    compiled = server.gates["/api/dsdl/compile"] = asyncio.Event()
 
     def asked(path):
         return sum(request[1] == path for request in server.requests)
@@ -2825,10 +2828,10 @@ async def _(page):
         await page.wait_for_timeout(300)
         assert button == {"busy": True, "disabled": True} and asked("/api/dsdl/compile") == 1, \
             f"Redrawn mid-compile, the button is {button}; compiles asked for: {asked('/api/dsdl/compile')}"
-        server.compile_gate.set()
+        compiled.set()
         await page.wait_for_function("!document.getElementById('dsdlCustomCompileBtn').disabled", timeout=WAIT_MS)
     finally:
-        server.compile_gate.set()
+        compiled.set()
         await dsdl_close(page, server)
 
 
@@ -2920,6 +2923,22 @@ async def _(page):
         await page.evaluate("state.dashboardConnected = true; DsdlView.init()")
         await page.wait_for_selector('.dsdl-doc-title:has-text("Heartbeat")', timeout=WAIT_MS)
     finally:
+        await dsdl_close(page, server)
+
+
+@test("DSDL: the tree says it is loading until the types arrive")
+async def _(page):
+    server = _DsdlServer()
+    arrived = server.gates["/api/dsdl/namespaces"] = asyncio.Event()
+    await dsdl_open(page, server, wait=False)
+    try:
+        await page.wait_for_timeout(300)
+        loading = await page.locator("#dsdlTree").inner_text()
+        arrived.set()
+        await page.wait_for_selector("#dsdlTree .dsdl-ns-row", timeout=WAIT_MS)
+        assert "Loading" in loading, f"While the types load, the tree reads {loading!r}"
+    finally:
+        arrived.set()
         await dsdl_close(page, server)
 
 

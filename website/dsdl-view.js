@@ -86,6 +86,8 @@ const DsdlView = (() => {
       _renderDisconnected();
       return;
     }
+    // A tree already shown stays until the new one arrives.
+    if (!_namespacesData) el('dsdlTree').innerHTML = '<div class="dsdl-tree-empty">Loading types…</div>';
     try {
       const [statusResp, nsResp] = await Promise.all([
         requestJson('/api/dsdl/status'),
