@@ -267,6 +267,22 @@ const initCompareView = () => {
   });
   toolbar.appendChild(pauseAllBtn);
 
+  const collapseAllBtn = document.createElement('button');
+  collapseAllBtn.className = 'compare-add-btn compare-collapse-all';
+  collapseAllBtn.type = 'button';
+  collapseAllBtn.addEventListener('click', () => {
+    // Every graph collapsed to its plot, or, when all are, expanded again.
+    const collapse = !_allCompareCollapsed();
+    for (const card of cardsContainer.querySelectorAll('.compare-graph-card')) card._setCollapsed(collapse);
+    saveSettings();
+    _syncCollapseAll();
+    for (const graph of state.compareGraphs) {
+      graph._fingerprint = '';
+      _renderOneGraph(graph);  // its plot has another size
+    }
+  });
+  toolbar.appendChild(collapseAllBtn);
+
   const savedWrap = document.createElement('div');
   savedWrap.className = 'compare-saved-wrap';
   const savedBtn = document.createElement('button');
@@ -1070,6 +1086,7 @@ const _buildGraphCard = (graph) => {
   expandBtn.addEventListener('click', () => toggleCollapsed(false, collapseBtn));
   cardActions.prepend(collapseBtn);
   setCollapsed(graph.collapsed);
+  card._setCollapsed = setCollapsed;  // for Collapse All / Expand All
 
   const body = document.createElement('div');
   body.className = 'compare-card-body';
@@ -1539,6 +1556,15 @@ const _allComparePaused = () => state.compareGraphs.length > 0 && state.compareG
 
 // Pause All says what a click on it does, however the graphs got paused: by
 // it, by their own buttons, by a click on their plots.
+const _allCompareCollapsed = () => state.compareGraphs.length > 0 && state.compareGraphs.every((g) => g.collapsed);
+
+// Collapse All says what a click on it does, however the graphs got collapsed.
+const _syncCollapseAll = () => {
+  const btn = document.querySelector('.compare-collapse-all');
+  const label = _allCompareCollapsed() ? 'Expand All' : 'Collapse All';
+  if (btn && btn.textContent !== label) btn.textContent = label;
+};
+
 const _syncPauseAll = () => {
   const btn = document.querySelector('.compare-pause-all');
   const label = _allComparePaused() ? 'Resume All' : 'Pause All';
@@ -1592,6 +1618,7 @@ const _compareAnimTick = () => {
     if (!graph.paused) _renderOneGraph(graph, true);
   }
   _syncPauseAll();
+  _syncCollapseAll();
   _syncCompareEmpty();
   _syncCompareStatus();
   // An open list of series follows what is heard, once a second.
@@ -1609,6 +1636,7 @@ const startCompareAnim = () => {
     if (graph.paused) _renderOneGraph(graph);
   }
   _syncPauseAll();
+  _syncCollapseAll();
   _syncCompareEmpty();
   _syncCompareStatus();
   if (!_compareAnimTimer) {

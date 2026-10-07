@@ -1934,6 +1934,29 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: Collapse All collapses every graph, Expand All expands them, and the button says which it does")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    button = page.locator(".compare-collapse-all")
+    collapsed = "() => [...document.querySelectorAll('.compare-graph-card')].map(c => c.classList.contains('collapsed'))"
+    try:
+        await page.wait_for_timeout(300)
+        first, *_ = [await compare_graph(page, (1100, "value")) for _ in range(3)]
+        await first.locator('[aria-label="Collapse the graph to its plot"]').click()  # one collapsed on its own
+        await page.wait_for_timeout(200)
+        assert await button.inner_text() == "Collapse All", f"With one graph collapsed, the toolbar says {await button.inner_text()!r}"
+        await button.click()
+        assert await page.evaluate(collapsed) == [True, True, True], "Collapse All left some graphs expanded"
+        await page.wait_for_timeout(200)
+        assert await button.inner_text() == "Expand All", f"With every graph collapsed, the toolbar says {await button.inner_text()!r}"
+        await button.click()
+        assert await page.evaluate(collapsed) == [False, False, False], "Expand All left some graphs collapsed"
+        kept = await page.evaluate("state.compareGraphs.map(g => compareGraphConfig(g).collapsed)")
+        assert kept == [False, False, False], f"The graphs keep {kept}"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 @test("Compare: a collapsed graph is its plot, a line of names and, at its side, its pause, window and Sync")
 async def _(page):
     await page.evaluate(COMPARE_START)
