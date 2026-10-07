@@ -37,6 +37,12 @@ const DsdlView = (() => {
 
   const hide = () => { _stopBusRefresh(); _stopStatusPoll(); };
 
+  const _placeholderHtml = `
+    <div class="dsdl-detail-placeholder">
+      <div class="dsdl-detail-placeholder-icon">{&nbsp;}</div>
+      <div class="dsdl-detail-placeholder-text">Select a type to inspect</div>
+    </div>`;
+
   const _buildLayout = () => `
     <div class="dsdl-view">
       <div class="dsdl-split">
@@ -59,12 +65,7 @@ const DsdlView = (() => {
         </div>
         <div class="dsdl-split-handle" id="dsdlSplitHandle"></div>
         <div class="dsdl-detail-area" id="dsdlDetailArea">
-          <div class="dsdl-detail-panel" id="dsdlDetail">
-            <div class="dsdl-detail-placeholder">
-              <div class="dsdl-detail-placeholder-icon">{&nbsp;}</div>
-              <div class="dsdl-detail-placeholder-text">Select a type to inspect</div>
-            </div>
-          </div>
+          <div class="dsdl-detail-panel" id="dsdlDetail">${_placeholderHtml}</div>
         </div>
       </div>
     </div>`;
@@ -94,6 +95,9 @@ const DsdlView = (() => {
       if (_selectedType) {
         _loadTypeDetail(_selectedType);
         _expandToType(_selectedType);
+      } else {
+        // In place of "Not connected." when the tab was open before connecting.
+        el('dsdlDetail').innerHTML = _placeholderHtml;
       }
     } catch (err) {
       _renderError(err.message);
@@ -1003,13 +1007,7 @@ const DsdlView = (() => {
     _lastDetailData = null;
     _saveDsdlState();
     const panel = document.getElementById('dsdlDetail');
-    if (panel) {
-      panel.innerHTML = `
-        <div class="dsdl-detail-placeholder">
-          <div class="dsdl-detail-placeholder-icon">{&nbsp;}</div>
-          <div class="dsdl-detail-placeholder-text">Select a type to inspect</div>
-        </div>`;
-    }
+    if (panel) panel.innerHTML = _placeholderHtml;
     await _reloadTree();
   };
 

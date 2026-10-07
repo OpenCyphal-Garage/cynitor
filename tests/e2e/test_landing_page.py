@@ -2622,18 +2622,18 @@ class _DsdlServer:
         await route.fulfill(json=answer, status=status, headers={"Access-Control-Allow-Origin": "*"})
 
 
-async def dsdl_open(page, server, setup=None):
-    """The DSDL tab on a freshly loaded page, connected to `server`. `setup`
-    runs in the page before the tab opens (nodes, messages)."""
+async def dsdl_open(page, server, setup=None, connected=True):
+    """The DSDL tab on a freshly loaded page, connected to `server` or not.
+    `setup` runs in the page before the tab opens (nodes, messages)."""
     await page.evaluate("""() => { state.dashboardConnected = false; _writeSettingsNow();
         localStorage.removeItem('cynitor.dsdl.state'); }""")
     await page.reload(wait_until="load")
     await page.route("**/api/dsdl/**", server.handle)
-    await page.evaluate("state.dashboardConnected = true")
+    await page.evaluate(f"state.dashboardConnected = {json.dumps(connected)}")
     if setup:
         await page.evaluate(setup)
     await page.evaluate("switchView('dsdl')")
-    await page.wait_for_selector("#dsdlTree .dsdl-ns-row", timeout=5000)
+    await page.wait_for_selector("#dsdlTree .dsdl-ns-row" if connected else "#dsdlTree .dsdl-tree-empty", timeout=5000)
 
 
 async def dsdl_close(page, server):
@@ -2695,6 +2695,22 @@ async def _(page):
         assert (first, second) == ("Saved", "Saved"), f"Saved, then saved again: {first!r}, {second!r}"
         kept = server.types["myapp.Draft.1.0"]["source_text"]
         assert kept == "uint8 a\nuint8 b\n@sealed\n", f"The server keeps {kept!r}"
+    finally:
+        await dsdl_close(page, server)
+
+
+@test("DSDL: opened before connecting, the tab stops saying 'Not connected.' once connected")
+async def _(page):
+    server = _DsdlServer()
+    await dsdl_open(page, server, connected=False)
+    try:
+        before = await page.locator("#dsdlDetail").inner_text()
+        # What connectDashboard does with the tab open.
+        await page.evaluate("state.dashboardConnected = true; DsdlView.init()")
+        await page.wait_for_selector("#dsdlTree .dsdl-ns-row", timeout=5000)
+        after = await page.locator("#dsdlDetail").inner_text()
+        assert "Not connected" in before and "Select a type to inspect" in after, \
+            f"Before connecting the pane said {before!r}; after, {after!r}"
     finally:
         await dsdl_close(page, server)
 
