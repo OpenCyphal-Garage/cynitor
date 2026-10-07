@@ -1,6 +1,7 @@
 """Tests for WebSocketServer REST endpoints including CAN connect/disconnect."""
 
 import asyncio
+import time
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from aiohttp import web
@@ -981,3 +982,27 @@ class TestRecentNodeEvents:
     @pytest.mark.asyncio
     async def test_needs_the_event_logger(self, client):
         assert (await client.get("/api/nodes/events")).status == 503
+
+
+class TestDsdlCompile:
+    """Two compiles at once would write the same compiled files at once."""
+
+    @pytest.mark.asyncio
+    async def test_one_compile_at_a_time(self, session, log_store):
+        running, overlapped = [], []
+
+        class SlowDsdl:
+            def compile_custom(self):
+                running.append(1)
+                overlapped.append(len(running) > 1)
+                time.sleep(0.2)
+                running.pop()
+                return {"ok": True}
+
+        server = WebSocketServer(session=session, host="127.0.0.1", port=0, log_store=log_store,
+                                 dsdl_manager=SlowDsdl())
+        async with TestClient(TestServer(server.app)) as c:
+            server._running = True
+            answers = await asyncio.gather(*(c.post("/api/dsdl/compile", json={"scope": "custom"}) for _ in range(2)))
+        assert [a.status for a in answers] == [200, 200]
+        assert overlapped == [False, False]

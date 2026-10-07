@@ -120,6 +120,8 @@ class WebSocketServer:
         self.port = port
         self.log_store = log_store
         self.dsdl_manager = dsdl_manager
+        # One DSDL compile at a time: two would write the same files at once.
+        self._dsdl_compile_lock = asyncio.Lock()
         # When present, the dashboard is served from this server so a single
         # binary is all a deployment needs. None means API-only, which is what
         # --no-frontend selects and what a checkout without website/ gets.
@@ -1889,12 +1891,13 @@ class WebSocketServer:
         except Exception:
             body = {}
         scope = body.get("scope", "all")
-        if scope == "custom":
-            data = await asyncio.to_thread(self.dsdl_manager.compile_custom)
-        elif scope == "public":
-            data = await asyncio.to_thread(self.dsdl_manager.compile_public)
-        else:
-            data = await asyncio.to_thread(self.dsdl_manager.compile_all)
+        async with self._dsdl_compile_lock:
+            if scope == "custom":
+                data = await asyncio.to_thread(self.dsdl_manager.compile_custom)
+            elif scope == "public":
+                data = await asyncio.to_thread(self.dsdl_manager.compile_public)
+            else:
+                data = await asyncio.to_thread(self.dsdl_manager.compile_all)
         if data.get("ok") and hasattr(self.session, "rescan_registrations"):
             self.session.rescan_registrations()
         status = 200 if data.get("ok") else 422

@@ -535,7 +535,7 @@ curl -X POST http://localhost:8080/api/dsdl/compile \
   -H 'Content-Type: application/json' \
   -d '{"scope": "all"}'
 ```
-Returns `200` with `{"ok": true}` on success, or `422` with `{"ok": false, "errors": [...]}`.
+Returns `200` with `{"ok": true}` on success, or `422` with `{"ok": false, "errors": [...]}`. Compiles run one at a time: a request made while one runs waits for it to end.
 
 Compilation runs inside the server. In the packaged binaries the public types are built in: `"public"` is refused and `"all"` compiles the custom types; `GET /api/dsdl/status` reports this as `"public_compilable": false`. Custom types and their compiled code are kept in the data folder (`dsdl/custom`, `dsdl/compiled`).
 

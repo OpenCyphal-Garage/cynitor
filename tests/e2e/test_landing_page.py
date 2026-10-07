@@ -2799,6 +2799,39 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+@test("DSDL: a compile keeps its button busy until it ends, and is not asked for twice")
+async def _(page):
+    server = _DsdlServer()
+    server.compile_gate = asyncio.Event()
+
+    def asked(path):
+        return sum(request[1] == path for request in server.requests)
+
+    await dsdl_open(page, server)
+    try:
+        await page.locator("#dsdlCustomCompileBtn").click()
+        # A compile writes files as it goes: the status polled every 4 s
+        # changes, and the tab redraws its headers mid-compile.
+        server.last_custom_compiled += 1
+        reloads = asked("/api/dsdl/namespaces")
+        for _ in range(40):
+            if asked("/api/dsdl/namespaces") > reloads:
+                break
+            await page.wait_for_timeout(200)
+        await page.wait_for_timeout(300)
+        button = await page.evaluate("""(() => { const b = document.getElementById('dsdlCustomCompileBtn');
+            return {busy: b.classList.contains('dsdl-spin'), disabled: b.disabled}; })()""")
+        await page.evaluate("document.getElementById('dsdlCustomCompileBtn').click()")
+        await page.wait_for_timeout(300)
+        assert button == {"busy": True, "disabled": True} and asked("/api/dsdl/compile") == 1, \
+            f"Redrawn mid-compile, the button is {button}; compiles asked for: {asked('/api/dsdl/compile')}"
+        server.compile_gate.set()
+        await page.wait_for_function("!document.getElementById('dsdlCustomCompileBtn').disabled", timeout=WAIT_MS)
+    finally:
+        server.compile_gate.set()
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

@@ -21,6 +21,7 @@ const DsdlView = (() => {
   let _customNamespaces = [];
   let _hiddenNamespaces = new Set();
   let _showHidden = false;
+  const _compiling = new Set();  // the scopes ('public', 'custom') compiling now
 
   const init = () => {
     const container = el('dsdlContainer');
@@ -170,12 +171,19 @@ const DsdlView = (() => {
       <span class="dsdl-section-count">${count}</span>
       <span class="dsdl-section-right">
         <span class="dsdl-tree-status"><span class="dsdl-dot ${dot}"></span>${escapeHtml(label)}${escapeHtml(age)}</span>
-        ${canRecompile ? `<button class="dsdl-hdr-btn dsdl-hdr-compile" id="dsdlRecompileBtn" aria-label="Recompile public types" title="Recompile public types">
-          <svg width="10" height="10" viewBox="0 0 12 12"><path d="M1 6a5 5 0 019-2M11 6a5 5 0 01-9 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>
-        </button>` : ''}
+        ${canRecompile ? _compileButtonHtml('dsdlRecompileBtn', 'public', 'Recompile public types') : ''}
       </span>`;
 
-    document.getElementById('dsdlRecompileBtn')?.addEventListener('click', _recompilePublic);
+    document.getElementById('dsdlRecompileBtn')?.addEventListener('click', () => _compile('public'));
+  };
+
+  // A header's compile button, busy (spinning, disabled) while its scope
+  // compiles: drawn from _compiling, it stays busy when a header is redrawn.
+  const _compileButtonHtml = (id, scope, label) => {
+    const busy = _compiling.has(scope);
+    return `<button class="dsdl-hdr-btn dsdl-hdr-compile${busy ? ' dsdl-spin' : ''}" id="${id}" aria-label="${label}" title="${label}"${busy ? ' disabled' : ''}>
+      <svg width="10" height="10" viewBox="0 0 12 12"><path d="M1 6a5 5 0 019-2M11 6a5 5 0 01-9 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>
+    </button>`;
   };
 
   const _renderCustomHeader = () => {
@@ -193,9 +201,7 @@ const DsdlView = (() => {
       ? ` · ${_formatAge(_statusData.last_custom_compiled)}` : '';
     const statusHtml = hasCustom ? `
       <span class="dsdl-tree-status"><span class="dsdl-dot ${dotCls}"></span>${escapeHtml(statusLabel)}${escapeHtml(age)}</span>
-      <button class="dsdl-hdr-btn dsdl-hdr-compile" id="dsdlCustomCompileBtn" aria-label="Compile custom types" title="Compile custom types">
-        <svg width="10" height="10" viewBox="0 0 12 12"><path d="M1 6a5 5 0 019-2M11 6a5 5 0 01-9 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>
-      </button>` : '';
+      ${_compileButtonHtml('dsdlCustomCompileBtn', 'custom', 'Compile custom types')}` : '';
 
     header.innerHTML = `
       <span class="dsdl-section-title">Custom</span>
@@ -209,7 +215,7 @@ const DsdlView = (() => {
       </span>`;
 
     document.getElementById('dsdlCustomAddNs')?.addEventListener('click', () => _showNewNamespaceDialog());
-    document.getElementById('dsdlCustomCompileBtn')?.addEventListener('click', _compileCustom);
+    document.getElementById('dsdlCustomCompileBtn')?.addEventListener('click', () => _compile('custom'));
   };
 
   const _isCustomFullyCompiled = () => {
@@ -224,24 +230,28 @@ const DsdlView = (() => {
     return any;
   };
 
-  const _compileCustom = async () => {
-    const btn = document.getElementById('dsdlCustomCompileBtn');
-    if (btn) btn.classList.add('dsdl-spin');
-    _clearCustomCompileError();
+  // One compile per scope ('public', 'custom') at a time.
+  const _compile = async (scope) => {
+    if (_compiling.has(scope)) return;
+    const [showError, clearError] = scope === 'custom'
+      ? [_showCustomCompileError, _clearCustomCompileError]
+      : [_showCompileError, _clearCompileError];
+    _compiling.add(scope);
+    _renderTreeHeaders();
+    clearError();
     try {
       const result = await requestJson('/api/dsdl/compile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope: 'custom' }),
+        body: JSON.stringify({ scope }),
       });
-      if (!result.ok) {
-        _showCustomCompileError((result.errors || []).join('\n'));
-      }
+      if (!result.ok) showError((result.errors || []).join('\n'));
       await _reloadTree();
     } catch (err) {
-      _showCustomCompileError(err.message);
+      showError(err.message);
     } finally {
-      if (btn) btn.classList.remove('dsdl-spin');
+      _compiling.delete(scope);
+      _renderTreeHeaders();
     }
   };
 
@@ -1418,27 +1428,6 @@ const DsdlView = (() => {
       banner.className = 'dsdl-editor-locked-banner';
       banner.textContent = `This type was compiled — editing is locked. ${_lockedAdvice}`;
       panel.insertBefore(banner, form);
-    }
-  };
-
-  const _recompilePublic = async () => {
-    const btn = document.getElementById('dsdlRecompileBtn');
-    if (btn) btn.classList.add('dsdl-spin');
-    _clearCompileError();
-    try {
-      const result = await requestJson('/api/dsdl/compile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope: 'public' }),
-      });
-      if (!result.ok) {
-        _showCompileError((result.errors || []).join('\n'));
-      }
-      await _reloadTree();
-    } catch (err) {
-      _showCompileError(err.message);
-    } finally {
-      if (btn) btn.classList.remove('dsdl-spin');
     }
   };
 
