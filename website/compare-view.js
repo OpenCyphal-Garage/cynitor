@@ -29,6 +29,7 @@ const compareGraphConfig = (g) => ({
   disconnectPoints: g.disconnectPoints,
   grid: g.grid,
   clickPauses: g.clickPauses,
+  sync: g.sync,
 });
 
 // A graph's settings as read from storage or a file: what is valid of them,
@@ -49,6 +50,7 @@ const sanitizeCompareGraph = (g) => {
     disconnectPoints: g.disconnectPoints === true,
     grid: g.grid === true,
     clickPauses: g.clickPauses === true,
+    sync: g.sync === true,
   };
 };
 
@@ -249,6 +251,9 @@ const initCompareView = () => {
     for (const graph of state.compareGraphs) {
       if (graph.paused === allPaused) togglePlotPause(graph);
     }
+    // Synced graphs, each paused where it was drawn last, hold one moment.
+    const synced = state.compareGraphs.find((g) => g.sync);
+    if (synced) _shareView(synced);
     saveSettings();
     _syncPauseAll();
     for (const graph of state.compareGraphs) {
@@ -761,7 +766,34 @@ const _showMarker = (graph, marker) => {
   graph._panOffset = 0;
   graph._fingerprint = '';
   syncPauseButton(el('compareContainer').querySelector(`[data-graph-id="${graph.id}"] .plot-pause-btn`), graph);
+  _shareView(graph);
   _renderOneGraph(graph);
+};
+
+// What a synced graph shares with the others: whether and where it is paused,
+// its time window, zoom and pan.
+const _viewOf = (g) => [g.paused, g.pausedAt, g.timeWindow, g._zoom, g._panOffset, g._resumeFrom, g._resumeStart].join('|');
+
+// A synced graph's view goes to the other synced graphs, so they show the
+// same time: one paused, given a window, zoomed or moved takes them with it.
+const _shareView = (graph) => {
+  if (!graph.sync) return;
+  const view = _viewOf(graph);
+  for (const other of state.compareGraphs) {
+    if (other === graph || !other.sync || _viewOf(other) === view) continue;
+    if (other.paused !== graph.paused) togglePlotPause(other);  // resumed, its Fill Rate starts anew
+    Object.assign(other, {
+      pausedAt: graph.pausedAt, _resumeFrom: graph._resumeFrom, _resumeStart: graph._resumeStart,
+      timeWindow: graph.timeWindow, _zoom: graph._zoom, _panOffset: graph._panOffset, _fingerprint: '',
+    });
+    const card = el('compareContainer').querySelector(`[data-graph-id="${other.id}"]`);
+    syncPauseButton(card?.querySelector('.plot-pause-btn'), other);
+    for (const btn of card?.querySelectorAll('.plot-window-btn') || []) {
+      btn.classList.toggle('active', Number(btn.dataset.secs) === other.timeWindow);
+    }
+    _renderOneGraph(other);
+    saveSettings();  // its window is kept
+  }
 };
 
 // The Markers row follows markers and drawings however they change: on the
@@ -873,6 +905,7 @@ const _buildGraphCard = (graph) => {
     invalidate: () => {
       graph._fingerprint = '';
       if (graph.paused && !graph._frozen) _renderOneGraph(graph);  // just paused: keeps what it shows
+      _shareView(graph);  // paused, resumed or given a window: synced graphs follow
     },
     rerender: () => _renderCompareGraphNow(graph, plotArea),
     restart: () => _renderOneGraph(graph),
@@ -900,6 +933,26 @@ const _buildGraphCard = (graph) => {
   const kept = document.createElement('span');  // how much history there is, when short (_syncKept)
   kept.className = 'compare-kept hidden';
   timeControls.appendChild(kept);
+
+  // Synced graphs show the same time: see _shareView. One that joins takes the group's view.
+  const syncBtn = document.createElement('button');
+  syncBtn.type = 'button';
+  syncBtn.className = 'compare-sync-btn';
+  syncBtn.textContent = 'Sync';
+  syncBtn.title = 'Pause, time window, zoom and pan together with the other synced graphs';
+  const showSync = () => {
+    syncBtn.classList.toggle('active', graph.sync);
+    syncBtn.setAttribute('aria-pressed', String(graph.sync));
+  };
+  syncBtn.addEventListener('click', () => {
+    graph.sync = !graph.sync;
+    showSync();
+    saveSettings();
+    const group = state.compareGraphs.find((g) => g.sync && g !== graph);
+    if (graph.sync && group) _shareView(group);
+  });
+  showSync();
+  timeControls.appendChild(syncBtn);
 
   // A click on the plot pauses it only when asked to: by accident, it would.
   const clickLabel = document.createElement('label');
@@ -1345,7 +1398,11 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   g.select('.plot-overlay').attr('width', w).attr('height', totalPanelsH);
   g.select('.plot-crosshair').attr('y1', 0).attr('y2', totalPanelsH);
 
-  bindPlotTooltip(g, plotArea, visibleSeries, xScale, w, HEADER_H, rect, graph, () => _renderOneGraph(graph));
+  // Zoomed, moved, reset or paused on its plot, a synced graph takes the others with it.
+  bindPlotTooltip(g, plotArea, visibleSeries, xScale, w, HEADER_H, rect, graph, () => {
+    _shareView(graph);
+    _renderOneGraph(graph);
+  });
   setPlotNote(plotArea, _compareNote(problem, compareSeries, xScale));
   // The legend's values: each series' last, lowest and highest in view.
   const [tLeft, tRight] = xScale.domain();

@@ -1701,6 +1701,7 @@ button:focus-visible,
    the time-window buttons beside them. */
 .plot-window-btn,
 .compare-edit-btn,
+.compare-sync-btn,
 .plot-to-compare {
   font-family: var(--mono);
   font-size: 0.625rem;
@@ -1716,13 +1717,15 @@ button:focus-visible,
 
 .plot-window-btn:hover,
 .compare-edit-btn:hover,
+.compare-sync-btn:hover,
 .plot-to-compare:hover {
   background: var(--surface-2);
   color: var(--text);
 }
 
 .plot-window-btn.active,
-.compare-edit-btn.active {
+.compare-edit-btn.active,
+.compare-sync-btn.active {
   background: var(--accent-muted);
   border-color: var(--accent);
   color: var(--accent);

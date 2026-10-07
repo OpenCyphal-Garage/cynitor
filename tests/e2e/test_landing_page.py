@@ -1847,6 +1847,45 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: synced graphs pause, take a time window and zoom together, and a graph that joins takes their view")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    view = "(i) => { const g = state.compareGraphs[i]; return [g.paused, g.pausedAt, g.timeWindow, g._zoom]; }"
+    try:
+        await page.wait_for_timeout(300)
+        a = await compare_graph(page, (1100, "value"))
+        b = await compare_graph(page, (1100, "value"))
+        c = await compare_graph(page, (1100, "value"))
+        for card in (a, b):
+            await card.locator(".compare-sync-btn").click()
+        assert await a.locator(".compare-sync-btn").get_attribute("aria-pressed") == "true", "Sync is not shown as on"
+        await a.locator(".plot-pause-btn").click()
+        va, vb, vc = [await page.evaluate(view, i) for i in range(3)]
+        assert va[0] and va[:2] == vb[:2], f"Paused, the synced graphs read {va} and {vb}"
+        assert not vc[0], "A graph not synced was paused with them"
+        assert await b.locator(".plot-pause-btn").inner_text() == "▶", "The other synced graph's button does not say it is paused"
+        await b.locator('.plot-window-btn[data-secs="300"]').click()
+        assert (await page.evaluate(view, 0))[2] == 300, "A window picked on one synced graph is not the other's"
+        assert "active" in (await a.locator('.plot-window-btn[data-secs="300"]').get_attribute("class")), "Its 5m button is not lit"
+        assert (await page.evaluate(view, 2))[2] == 60, "A graph not synced took the window"
+        await a.locator(".compare-edit-btn").click()  # its plot, not its editing rows, under the pointer
+        await a.scroll_into_view_if_needed()
+        box = await a.locator(".plot-overlay").bounding_box()
+        await page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        await page.keyboard.down("Control")
+        await page.mouse.wheel(0, -300)
+        await page.keyboard.up("Control")
+        za, zb = (await page.evaluate(view, 0))[3], (await page.evaluate(view, 1))[3]
+        assert za > 1 and za == zb, f"Zoomed, the synced graphs read {za} and {zb}"
+        await b.locator(".plot-pause-btn").click()  # resumed from the other: both go on
+        assert not (await page.evaluate(view, 0))[0], "Resumed from one synced graph, the other stays paused"
+        await c.locator(".compare-sync-btn").click()  # joins: takes their view
+        assert await page.evaluate(view, 2) == await page.evaluate(view, 0), "A graph that joins keeps its own view"
+        assert await page.evaluate("compareGraphConfig(state.compareGraphs[0]).sync") is True, "Sync is not kept with the graph"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 @test("Compare: Min/Max follows the lowest and highest of the last samples, and an Add says what it is missing")
 async def _(page):
     await page.evaluate(COMPARE_START)
