@@ -226,6 +226,19 @@ const initCompareView = () => {
 
   container.appendChild(toolbar);
 
+  // What needs a look, over the graphs (_syncCompareStatus); a count, clicked,
+  // brings the first graph it counts into view.
+  const status = document.createElement('div');
+  status.className = 'table-status-bar compare-status';
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-label', 'Graphs that need a look');
+  status.addEventListener('click', (e) => {
+    const kind = _COMPARE_STATUS.find((k) => k.key === e.target.closest('[data-focus]')?.dataset.focus);
+    const graph = kind && state.compareGraphs.find((g) => kind.count(g));
+    if (graph) cardsContainer.querySelector(`[data-graph-id="${graph.id}"]`)?.scrollIntoView({ block: 'nearest' });
+  });
+  container.appendChild(status);
+
   const cardsContainer = document.createElement('div');
   cardsContainer.className = 'compare-cards';
 
@@ -668,6 +681,38 @@ const _syncCompareEmpty = () => {
   document.querySelector('#compareContainer .compare-empty')?.classList.toggle('hidden', state.compareGraphs.length > 0);
 };
 
+// A series is quiet when its node no longer sends it, by the rule the
+// tables call a subject silent (isEventFresh).
+const _seriesQuiet = (s) => !isEventFresh(s.nodeId == null
+  ? state.latestBySubject.get(s.subjectId)
+  : state.latestByNode.get(s.nodeId)?.get(s.subjectId));
+
+// What the strip over the graphs counts: quiet series (unusual), paused graphs.
+const _COMPARE_STATUS = [
+  { key: 'quiet', level: 'warn', label: 'series quiet', count: (g) => g.series.filter(_seriesQuiet).length },
+  { key: 'paused', level: '', label: 'paused', count: (g) => (g.paused ? 1 : 0) },
+];
+
+// The strip: how many graphs and series, then what needs a look, else that
+// nothing does; empty (hidden) with no graph, where the tab says how to start.
+const _syncCompareStatus = () => {
+  const strip = document.querySelector('#compareContainer .compare-status');
+  if (!strip) return;
+  const graphs = state.compareGraphs;
+  const fresh = document.createElement('div');
+  if (graphs.length) {
+    const series = graphs.reduce((n, g) => n + g.series.length, 0);
+    const counts = _COMPARE_STATUS.map((k) => ({ ...k, n: graphs.reduce((sum, g) => sum + k.count(g), 0) }))
+      .filter((k) => k.n);
+    fresh.innerHTML = `<span class="table-status-total">${graphs.length} graph${graphs.length === 1 ? '' : 's'} · ${series} series</span>`
+      + (counts.length
+        ? counts.map((k) => `<button type="button" class="table-chip${k.level ? ` table-chip--${k.level}` : ''}"`
+          + ` data-focus="${k.key}">${k.n} ${k.label}</button>`).join('')
+        : '<span class="table-status-usual">nothing unusual</span>');
+  }
+  patchChildren(strip, fresh);
+};
+
 let _seriesListsRefreshed = 0;
 
 // Runs while the tab is open, paused graphs or not: a graph resumed on its
@@ -679,6 +724,7 @@ const _compareAnimTick = () => {
   }
   _syncPauseAll();
   _syncCompareEmpty();
+  _syncCompareStatus();
   // An open list of series follows what is heard, once a second.
   if (Date.now() - _seriesListsRefreshed >= 1000) {
     _seriesListsRefreshed = Date.now();
@@ -695,6 +741,7 @@ const startCompareAnim = () => {
   }
   _syncPauseAll();
   _syncCompareEmpty();
+  _syncCompareStatus();
   if (!_compareAnimTimer) {
     _compareAnimTimer = window.setTimeout(_compareAnimTick, PLOT_TICK_MS);
   }

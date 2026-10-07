@@ -1904,6 +1904,36 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: a strip counts the graphs, and picks out quiet series and paused graphs")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    strip = page.locator(".compare-status")
+    says = "() => document.querySelector('.compare-status')?.innerText.replace(/\\s+/g, ' ') ?? ''"
+    try:
+        await page.wait_for_timeout(300)
+        for _ in range(3):
+            await compare_graph(page, (1100, "value"))
+        last = await compare_graph(page, (1400, "value"))  # the fourth, out of view at the top
+        await page.wait_for_timeout(300)
+        text = await page.evaluate(says)
+        assert "4 graphs · 4 series" in text and "nothing unusual" in text, f"The strip says {text!r}"
+        await page.evaluate("e2eCompare.mute1400 = true")
+        try:
+            await page.wait_for_function(f"({says})().includes('1 series quiet')", timeout=5000)
+        except Exception:
+            raise AssertionError(f"1400 gone quiet, the strip says {await page.evaluate(says)!r}") from None
+        await page.locator(".compare-cards").evaluate("(c) => { c.scrollTop = 0; }")
+        await strip.locator('[data-focus="quiet"]').click()
+        await page.wait_for_timeout(300)
+        shown = await last.evaluate("""(c) => { const r = c.getBoundingClientRect(), v = c.parentElement.getBoundingClientRect();
+            return r.top >= v.top - 1 && r.bottom <= v.bottom + 1; }""")
+        assert shown, "The quiet count does not bring its graph into view"
+        await page.locator(".compare-pause-all").click()
+        await page.wait_for_function(f"({says})().includes('4 paused')", timeout=2000)
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 @test("Compare: a plot carries its graph's name, not the word Compare")
 async def _(page):
     await page.evaluate(COMPARE_START)
