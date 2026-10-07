@@ -2763,6 +2763,19 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+@test("DSDL: the editor's example is a type that compiles")
+async def _(page):
+    server = _DsdlServer()
+    await dsdl_open(page, server)
+    try:
+        await dsdl_new_type(page)
+        example = await page.locator("#dsdlEditorSource").get_attribute("placeholder")
+        # The compiler refuses a type that is neither @sealed nor has an @extent.
+        assert "@sealed" in example or "@extent" in example, f"The example: {example!r}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

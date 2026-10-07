@@ -1140,7 +1140,7 @@ const DsdlView = (() => {
           <label class="dsdl-editor-label">Source</label>
           <div class="dsdl-editor-source-wrap" id="dsdlEditorSourceWrap">
             <textarea class="dsdl-editor-source" id="dsdlEditorSource" spellcheck="false"
-                      placeholder="# Write your DSDL definition here&#10;uint32 my_field&#10;float32 temperature&#10;# add --- to split request/response for a service">${escapeHtml(sourceValue)}</textarea>
+                      placeholder="# Write your DSDL definition here&#10;uint32 my_field&#10;float32 temperature&#10;@sealed&#10;# A service: the request, then ---, then the response, each ending in @sealed">${escapeHtml(sourceValue)}</textarea>
             <div class="dsdl-editor-preview-handle" id="dsdlPreviewHandle"></div>
             <div class="dsdl-editor-preview" id="dsdlEditorPreview">
               <div class="dsdl-editor-preview-label">Preview</div>
