@@ -301,16 +301,6 @@ const plotData = (key) => {
   return nid == null || !points ? points : points.filter((p) => p.n === Number(nid));
 };
 
-// The nodes that published a subject, as its history has them.
-const _subjectPublishers = (sid) => {
-  const nids = new Set();
-  for (const [key, points] of state.subjectHistory) {
-    if (!key.startsWith(`${sid}:`)) continue;
-    for (const p of points) if (p.n != null) nids.add(p.n);
-  }
-  return [...nids].sort((a, b) => a - b);
-};
-
 const _derivedLabel = (d) => {
   const nameA = d.sourceA ? _keyLabel(d.sourceA) : '?';
   const nameB = d.sourceB ? _keyLabel(d.sourceB) : '';
@@ -707,36 +697,26 @@ const buildPlotControls = (opts = {}) => {
   return wrap;
 };
 
-const _getCompareSubjects = () => {
-  const subjects = new Map();
-  for (const key of state.subjectHistory.keys()) {
-    const [sidStr, attr] = key.split(':');
-    const sid = Number(sidStr);
-    if (!subjects.has(sid)) subjects.set(sid, []);
-    subjects.get(sid).push(attr);
+// Every series Compare can plot: a numeric field of a subject from one of the
+// nodes its history has it from (or from no node: anonymous), with what
+// names it besides (type, node), by subject-ID, field and node.
+const _comparableSeries = () => {
+  const found = [];
+  for (const [key, points] of state.subjectHistory) {
+    const at = key.indexOf(':');
+    const sid = Number(key.slice(0, at));
+    const field = key.slice(at + 1);
+    const type = dsdlTypeName(state.latestBySubject.get(sid)?.message_type) || '';
+    const nids = new Set();
+    for (const p of points) nids.add(Number.isInteger(p.n) ? p.n : null);
+    for (const nid of nids) {
+      const series = nid == null ? { subjectId: sid, attribute: field } : { subjectId: sid, attribute: field, nodeId: nid };
+      found.push({ ...series, about: [type, nid == null ? 'anonymous' : nodeDisplayName(nid)].filter(Boolean).join(' · ') });
+    }
   }
-  return subjects;
-};
-
-const _refreshCompareSubjects = (panel) => {
-  const sel = panel.querySelector('.plot-compare-subject');
-  if (!sel) return;
-  const prev = sel.value;
-  const subjects = _getCompareSubjects();
-  sel.innerHTML = '';
-  const def = document.createElement('option');
-  def.value = '';
-  def.textContent = 'Subject…';
-  sel.appendChild(def);
-  for (const [sid] of subjects) {
-    const event = state.latestBySubject.get(sid);
-    const label = event?.message_type ? `S${sid} · ${dsdlTypeName(event.message_type)}` : `Subject ${sid}`;
-    const opt = document.createElement('option');
-    opt.value = sid;
-    opt.textContent = label;
-    sel.appendChild(opt);
-  }
-  if (prev && sel.querySelector(`option[value="${prev}"]`)) sel.value = prev;
+  return found.sort((a, b) => a.subjectId - b.subjectId
+    || a.attribute.localeCompare(b.attribute, undefined, { numeric: true })
+    || (a.nodeId ?? Infinity) - (b.nodeId ?? Infinity) || 0);
 };
 
 // A graph's editing rows: its series, derived series and thresholds, a row each.
@@ -753,108 +733,69 @@ const buildComparePanel = (graph, onUpdate) => {
   hdr.appendChild(title);
   seriesSection.appendChild(hdr);
 
+  // Every series heard, in one list: the filter's words find them by any part
+  // of their name, node or type; ticked, a series is in the graph. A series
+  // keeps to one node ("S1300 · value · n21"), so a node that starts
+  // publishing its subject later does not mix in.
   const picker = document.createElement('div');
-  picker.className = 'plot-compare-picker';
+  picker.className = 'plot-series-picker';
+  const seriesFilter = document.createElement('input');
+  seriesFilter.type = 'search';
+  seriesFilter.className = 'plot-series-filter';
+  seriesFilter.placeholder = 'Find by subject-ID, field, node or type';
+  seriesFilter.setAttribute('aria-label', 'Find series to compare');
+  const seriesList = document.createElement('div');
+  seriesList.className = 'plot-series-list';
+  seriesList.setAttribute('role', 'group');
+  seriesList.setAttribute('aria-label', 'Series to compare');
 
-  const subjectSel = document.createElement('select');
-  subjectSel.className = 'plot-compare-subject';
-  subjectSel.setAttribute('aria-label', 'Subject to compare');
-  const defSubj = document.createElement('option');
-  defSubj.value = '';
-  defSubj.textContent = 'Subject…';
-  subjectSel.appendChild(defSubj);
-
-  const attrSel = document.createElement('select');
-  attrSel.className = 'plot-compare-attr';
-  attrSel.disabled = true;
-  attrSel.setAttribute('aria-label', 'Attribute to compare');
-  const defAttr = document.createElement('option');
-  defAttr.value = '';
-  defAttr.textContent = 'Attribute…';
-  attrSel.appendChild(defAttr);
-
-  // Which publisher: a series keeps to one node, so their values plot apart,
-  // and a node that starts publishing the subject later does not mix in. The
-  // list shows when there is a choice.
-  const pubSel = document.createElement('select');
-  pubSel.className = 'plot-compare-publisher hidden';
-  pubSel.setAttribute('aria-label', 'Publisher to compare');
-  const fillPublishers = (sid) => {
-    const nids = sid != null ? _subjectPublishers(sid) : [];
-    pubSel.innerHTML = nids.map((nid) =>
-      `<option value="${nid}">${escapeHtml(`n${nid} ${nodeDisplayName(nid)}`.trim())}</option>`).join('');
-    pubSel.classList.toggle('hidden', nids.length < 2);
+  let listed = new Map();  // key -> series, as last listed
+  const refreshSeriesList = () => {
+    const words = seriesFilter.value.toLowerCase().split(/\s+/).filter(Boolean);
+    const all = _comparableSeries();
+    const shown = all.filter((s) => {
+      const text = `${compareSeriesName(s)} ${s.about}`.toLowerCase();
+      return words.every((w) => text.includes(w));
+    });
+    listed = new Map(shown.map((s) => [compareSeriesKey(s), s]));
+    const fresh = document.createElement('div');
+    fresh.innerHTML = shown.length
+      ? shown.map((s) => `<label class="plot-series-option"><input type="checkbox" data-key="${escapeHtml(compareSeriesKey(s))}">`
+        + `<span class="plot-series-key">${escapeHtml(compareSeriesName(s))}</span>`
+        + `<span class="plot-series-about">${escapeHtml(s.about)}</span></label>`).join('')
+      : `<div class="plot-series-none">${all.length
+        ? `No series match “${escapeHtml(seriesFilter.value.trim())}”`
+        : 'Nothing heard yet: the list fills as messages come.'}</div>`;
+    // Rewritten in place, so a box under the pointer is not swapped out;
+    // ticked as the graph has it (a box keeps its own state otherwise).
+    patchChildren(seriesList, fresh);
+    const inGraph = new Set(graph.series.map(compareSeriesKey));
+    for (const box of seriesList.querySelectorAll('input[type="checkbox"]')) box.checked = inGraph.has(box.dataset.key);
   };
+  seriesFilter.addEventListener('input', refreshSeriesList);
+  seriesFilter.addEventListener('focus', refreshSeriesList);
 
-  const addBtn = document.createElement('button');
-  addBtn.className = 'plot-compare-add';
-  addBtn.type = 'button';
-  addBtn.textContent = 'Add';
-  addBtn.disabled = true;
-  addBtn.setAttribute('aria-label', 'Add comparison series');
-
-  // The subject picked, or null; 0 is a subject-ID like any other.
-  const pickedSubject = () => (subjectSel.value === '' ? null : Number(subjectSel.value));
-
-  // The picked subject's fields as they are now, the one chosen kept; with no
-  // subject picked, none and the list off.
-  const fillFields = () => {
-    const sid = pickedSubject();
-    const prev = attrSel.value;
-    attrSel.innerHTML = '';
-    const def = document.createElement('option');
-    def.value = '';
-    def.textContent = 'Attribute…';
-    attrSel.appendChild(def);
-    for (const a of sid != null ? _getCompareSubjects().get(sid) || [] : []) {
-      const opt = document.createElement('option');
-      opt.value = a;
-      opt.textContent = a;
-      attrSel.appendChild(opt);
+  seriesList.addEventListener('change', (e) => {
+    const key = e.target.dataset?.key;
+    const s = listed.get(key);
+    if (!s) return;
+    const at = graph.series.findIndex((c) => compareSeriesKey(c) === key);
+    if (e.target.checked && at === -1) {
+      graph.series.push(s.nodeId == null
+        ? { subjectId: s.subjectId, attribute: s.attribute }
+        : { subjectId: s.subjectId, attribute: s.attribute, nodeId: s.nodeId });
+    } else if (!e.target.checked && at !== -1) {
+      graph.series.splice(at, 1);
     }
-    if ([...attrSel.options].some((o) => o.value === prev)) attrSel.value = prev;
-    attrSel.disabled = sid == null;
-  };
-
-  // The lists fill as they open, by mouse or keyboard: what is heard changes.
-  for (const type of ['mousedown', 'keydown']) {
-    subjectSel.addEventListener(type, () => _refreshCompareSubjects(panel));
-    attrSel.addEventListener(type, fillFields);
-  }
-
-  subjectSel.addEventListener('change', () => {
-    attrSel.value = '';
-    fillFields();
-    fillPublishers(pickedSubject());
-    addBtn.disabled = true;
-  });
-
-  attrSel.addEventListener('change', () => {
-    addBtn.disabled = !attrSel.value;
-  });
-
-  addBtn.addEventListener('click', () => {
-    const sid = pickedSubject();
-    const attr = attrSel.value;
-    if (sid == null || !attr) return;
-    const series = { subjectId: sid, attribute: attr };
-    if (pubSel.value !== '') series.nodeId = Number(pubSel.value);
-    if (graph.series.some((c) => compareSeriesKey(c) === compareSeriesKey(series))) return;
-    graph.series.push(series);
     onUpdate();
-    _refreshCompareSubjects(panel);
-    subjectSel.value = '';
-    fillFields();
-    fillPublishers(null);
-    addBtn.disabled = true;
   });
 
-  picker.appendChild(subjectSel);
-  picker.appendChild(attrSel);
-  picker.appendChild(pubSel);
-  picker.appendChild(addBtn);
+  picker.appendChild(seriesFilter);
+  picker.appendChild(seriesList);
   seriesSection.appendChild(picker);
   panel.appendChild(seriesSection);
+  panel._refreshSeriesList = refreshSeriesList;
+  refreshSeriesList();
 
   const derivedSection = document.createElement('div');
   derivedSection.className = 'plot-derived-section';
@@ -1090,6 +1031,7 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
         const card = plotArea.closest('.compare-graph-card');
         const panel = card?.querySelector('.plot-compare-panel');
         if (panel?._refreshDerivedSources) panel._refreshDerivedSources();
+        panel?._refreshSeriesList?.();  // its box unticks
       }
       if (removed) _legendCommit();
       return;

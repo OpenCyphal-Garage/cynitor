@@ -1012,14 +1012,10 @@ async def _(page):
     await page.locator(".compare-add-btn", has_text="+ Add Graph").click()
     card = page.locator(".compare-graph-card").last
     try:
-        subject = card.locator(".plot-compare-subject")
-        await subject.dispatch_event("mousedown")  # fills the list
-        await subject.select_option("1300")
-        publisher = card.locator(".plot-compare-publisher")
-        assert await publisher.is_visible(), "No publisher choice for a subject two nodes publish"
-        await card.locator(".plot-compare-attr").select_option("value")
-        await publisher.select_option("21")
-        await card.locator(".plot-compare-picker .plot-compare-add").first.click()
+        await card.locator(".plot-series-filter").fill("1300 value")
+        offered = await card.evaluate("(c) => [...c.querySelectorAll('.plot-series-list input')].map(i => i.dataset.key)")
+        assert offered == ["1300:value@20", "1300:value@21"], f"For a subject two nodes publish, the list offers {offered}"
+        await card.locator('.plot-series-list input[data-key="1300:value@21"]').check()
         await page.wait_for_function(
             "[...document.querySelectorAll('.compare-graph-card .plot-legend-item')].some(e => e.dataset.series === 'S1300 · value · n21')",
             timeout=3000)
@@ -1149,17 +1145,22 @@ COMPARE_CARDS = """() => [...document.querySelectorAll('.compare-graph-card')].m
     drawHeight: Number(c.querySelector('.plot-overlay')?.getAttribute('height') || 0)}))"""
 
 
+async def compare_pick(card, sid, field, node=None):
+    """Ticks a series in a graph's list of series, found by typing in its filter."""
+    await card.locator(".plot-series-filter").fill(f"S{sid} · {field}")
+    key = f"{sid}:{field}" + (f"@{node}" if node is not None else "")
+    match = "=" if node is not None else "^="  # any publisher's, else that node's
+    await card.locator(f'.plot-series-list input[data-key{match}"{key}"]').first.check()
+    await card.locator(".plot-series-filter").fill("")
+
+
 async def compare_graph(page, *series):
-    """A new graph with these (subject-ID, field) series, added with its picker; its card."""
+    """A new graph with these (subject-ID, field[, node]) series, ticked in its list; its card."""
     n = await page.locator(".compare-graph-card").count()
     await page.locator(".compare-add-btn", has_text="+ Add Graph").click()
     card = page.locator(".compare-graph-card").nth(n)
-    for sid, field in series:
-        subject = card.locator(".plot-compare-subject")
-        await subject.dispatch_event("mousedown")  # fills the list
-        await subject.select_option(str(sid))
-        await card.locator(".plot-compare-attr").select_option(field)
-        await card.locator(".plot-compare-picker .plot-compare-add").first.click()
+    for s in series:
+        await compare_pick(card, *s)
     return card
 
 
@@ -1534,14 +1535,7 @@ async def _(page):
     try:
         await page.evaluate("""() => { const now = Date.now() / 1000;
             state.subjectHistory.set('0:value', Array.from({length: 20}, (_, i) => ({t: now - 2 + i / 10, v: 7, n: 10}))); }""")
-        card = await compare_graph(page)
-        subject = card.locator(".plot-compare-subject")
-        await subject.dispatch_event("mousedown")
-        await subject.select_option("0")
-        field = card.locator(".plot-compare-attr")
-        assert not await field.is_disabled(), "Subject 0 picked, its fields stay disabled"
-        await field.select_option("value")
-        await card.locator(".plot-compare-picker .plot-compare-add").first.click()
+        card = await compare_graph(page, (0, "value"))
         legend = await card.evaluate(COMPARE_LEGEND)
         assert legend == ["S0 · value · n10"], f"The legend reads {legend}"
     finally:
@@ -1593,23 +1587,21 @@ async def _(page):
 
 @test("Compare: series are picked, shown, removed and saved graphs opened by keyboard")
 async def _(page):
-    # The graph is made before anything is heard: its lists start empty.
+    # The graph is made before anything is heard: its list says so, then fills as messages come.
     await page.evaluate(COMPARE_START)
     await page.evaluate("clearInterval(window.e2eCompareFeed); state.subjectHistory.clear()")
     try:
         card = await compare_graph(page)
+        heard = await card.locator(".plot-series-list").inner_text()
+        assert "Nothing heard yet" in heard, f"Before any message, the list says {heard!r}"
         await page.evaluate(COMPARE_START)
-        await page.wait_for_timeout(400)
-        subject = card.locator(".plot-compare-subject")
-        await subject.focus()
-        await page.keyboard.press("ArrowDown")
-        assert await subject.input_value() != "", "Data has come, yet the subject list is empty from the keyboard"
-        await subject.select_option("1100")
-        await card.locator(".plot-compare-attr").focus()
-        await page.keyboard.press("ArrowDown")
-        await card.locator(".plot-compare-picker .plot-compare-add").first.focus()
-        await page.keyboard.press("Enter")
+        await page.wait_for_timeout(1500)
+        await card.locator(".plot-series-filter").focus()
+        await page.keyboard.type("1100")
+        await page.keyboard.press("Tab")
+        await page.keyboard.press("Space")
         await page.wait_for_timeout(300)
+        assert await page.evaluate("state.compareGraphs[0].series.length") == 1, "Typed and ticked by keyboard, no series"
         name = "S1100 · value · n10"
         label = card.locator(f'.plot-legend-item[data-series="{name}"] .plot-legend-label')
         await label.focus()
@@ -1816,6 +1808,38 @@ async def _(page):
         assert not await opened.locator(".compare-card-editor").is_visible(), "A saved graph opens on its editing rows"
         await edit.click()
         assert await editor.is_visible(), "Edit does not bring the editing rows back"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
+@test("Compare: series are found by any part of their name, and ticked on and off in one list")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    keys = "(c) => [...c.querySelectorAll('.plot-series-list input')].map(i => i.dataset.key)"
+    ticked = "(c) => [...c.querySelectorAll('.plot-series-list input:checked')].map(i => i.dataset.key)"
+    try:
+        await page.evaluate("e2eCompare.join1400 = true")  # node 20 publishes 1400 too
+        await page.wait_for_timeout(400)
+        card = await compare_graph(page)
+        offered = await card.evaluate(keys)
+        assert offered == ["1100:value@10", "1400:value@10", "1400:value@20", "1700:current@10"], f"The list offers {offered}"
+        find = card.locator(".plot-series-filter")
+        await find.fill("1400")
+        assert await card.evaluate(keys) == ["1400:value@10", "1400:value@20"], "Filtered by 1400, the list shows others"
+        for key in ("1400:value@10", "1400:value@20"):
+            await card.locator(f'.plot-series-list input[data-key="{key}"]').check()
+        await card.locator('.plot-series-list input[data-key="1400:value@10"]').uncheck()
+        await page.wait_for_timeout(300)
+        legend = await card.evaluate(COMPARE_LEGEND)
+        assert legend == ["S1400 · value · n20"], f"Ticked on, then n10 off, the legend reads {legend}"
+        await card.locator('.plot-legend-item[data-series="S1400 · value · n20"] .plot-legend-remove').click()
+        await page.wait_for_timeout(300)
+        assert await card.evaluate(ticked) == [], "Removed from the legend, the series stays ticked in the list"
+        await find.fill("current n10")  # words in any order, of the name, the node or the type
+        assert await card.evaluate(keys) == ["1700:current@10"], "Two words do not find the series"
+        await find.fill("no such thing")
+        matched = await card.locator(".plot-series-list").inner_text()
+        assert "No series match" in matched, f"Nothing matching, the list says {matched!r}"
     finally:
         await page.evaluate(COMPARE_STOP)
 

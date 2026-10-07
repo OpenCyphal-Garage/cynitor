@@ -73,10 +73,7 @@ const initCompareView = () => {
   if (container.querySelector('.compare-toolbar')) {
     for (const graph of state.compareGraphs) {
       const card = container.querySelector(`[data-graph-id="${graph.id}"]`);
-      if (card) {
-        const panel = card.querySelector('.plot-compare-panel');
-        if (panel) _refreshCompareSubjects(panel);
-      }
+      card?.querySelector('.plot-compare-panel')?._refreshSeriesList?.();
     }
     startCompareAnim();
     return;
@@ -374,8 +371,6 @@ const _buildGraphCard = (graph) => {
   });
   cardActions.appendChild(deleteBtn);
 
-  _refreshCompareSubjects(panel);
-
   // The time controls go in the header, the display ones in the editing rows.
   const opts = {
     cfg: graph,
@@ -419,6 +414,7 @@ const _buildGraphCard = (graph) => {
     editor.classList.toggle('hidden', !open);
     editBtn.classList.toggle('active', open);
     editBtn.setAttribute('aria-expanded', String(open));
+    if (open) panel._refreshSeriesList();
   };
   editBtn.addEventListener('click', () => showEditor(editor.classList.contains('hidden')));
   // A new graph opens on its editing rows, to pick series; one that has them, on its plot.
@@ -647,6 +643,8 @@ const _syncPauseAll = () => {
   if (btn && btn.textContent !== label) btn.textContent = label;
 };
 
+let _seriesListsRefreshed = 0;
+
 // Runs while the tab is open, paused graphs or not: a graph resumed on its
 // own moves on at the next tick.
 const _compareAnimTick = () => {
@@ -655,6 +653,13 @@ const _compareAnimTick = () => {
     if (!graph.paused) _renderOneGraph(graph, true);
   }
   _syncPauseAll();
+  // An open list of series follows what is heard, once a second.
+  if (Date.now() - _seriesListsRefreshed >= 1000) {
+    _seriesListsRefreshed = Date.now();
+    for (const editor of document.querySelectorAll('#compareContainer .compare-card-editor:not(.hidden)')) {
+      editor.querySelector('.plot-compare-panel')?._refreshSeriesList?.();
+    }
+  }
   _compareAnimTimer = window.setTimeout(_compareAnimTick, PLOT_TICK_MS);
 };
 
