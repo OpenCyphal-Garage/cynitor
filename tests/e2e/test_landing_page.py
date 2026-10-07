@@ -19,6 +19,7 @@ script then never starts a server.
 """
 
 import asyncio
+import json
 import os
 import socket
 import subprocess
@@ -27,7 +28,7 @@ import time
 import traceback
 from contextlib import contextmanager
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 RESULT_FILE = Path(__file__).parent / "result.md"
 WEBSITE_DIR = Path(__file__).resolve().parents[2] / "website"
@@ -2506,6 +2507,162 @@ async def _(page):
     finally:
         page.remove_listener("dialog", on_dialog)
         await page.evaluate(COMPARE_STOP)
+
+
+# ── DSDL tab ──
+#
+# /api/dsdl/* is answered by _DsdlServer from a few types shaped as the
+# backend sends them; saving, deleting and compiling change them as the
+# backend would. Each test opens the tab on a freshly loaded page, so what
+# the tab remembers (selection, editor, search) starts empty.
+
+def _dsdl_type(full_name, port=None, source="regulated", compiled=True, text="uint8 value\n@sealed\n"):
+    *namespace, short_name, major, minor = full_name.split(".")
+    return {"full_name": full_name, "namespace": ".".join(namespace), "short_name": short_name,
+            "version": f"{major}.{minor}", "kind": "service" if "\n---\n" in text else "message",
+            "fixed_port_id": port, "source": source, "compiled": compiled, "source_text": text}
+
+
+# Two types share the class name Scalar_1_0, as 46 public ones do.
+DSDL_TYPES = [
+    _dsdl_type("uavcan.node.Heartbeat.1.0", port=7509, text="uint32 uptime\n@sealed\n"),
+    _dsdl_type("uavcan.si.unit.temperature.Scalar.1.0", text="float32 kelvin\n@sealed\n"),
+    _dsdl_type("uavcan.si.unit.voltage.Scalar.1.0", text="float32 volt\n@sealed\n"),
+    _dsdl_type("myapp.Reading.1.0", source="custom", text="uint16 value\n@sealed\n"),
+]
+
+
+class _DsdlServer:
+    """The backend's /api/dsdl/* routes, over DSDL_TYPES."""
+
+    def __init__(self):
+        self.types = {t["full_name"]: dict(t) for t in DSDL_TYPES}
+        self.custom_namespaces = {"myapp"}
+        self.last_custom_compiled = 1.0e9
+        self.requests = []          # (method, path, JSON body)
+        self.compile_gate = None    # an asyncio.Event a compile waits for
+        self.compile_answer = ({"ok": True}, 200)
+
+    def _status(self):
+        custom = sum(t["source"] == "custom" for t in self.types.values())
+        return {"paths": [], "public_compilable": True, "compiled": True, "last_compiled": self.last_custom_compiled,
+                "last_public_compiled": 1.0e9, "last_custom_compiled": self.last_custom_compiled,
+                "source_types": len(self.types) - custom, "custom_types": custom}
+
+    def _tree(self):
+        tree = {}
+        for t in self.types.values():
+            root, *rest = t["namespace"].split(".")
+            node = tree.setdefault(root, {"children": {}, "types": []})
+            for part in rest:
+                node = node["children"].setdefault(part, {"children": {}, "types": []})
+            node["types"].append({key: t[key] for key in ("short_name", "full_name", "version", "kind",
+                                                          "fixed_port_id", "source", "compiled")} | {"field_names": []})
+        for namespace in sorted(self.custom_namespaces):  # empty ones too
+            root, *rest = namespace.split(".")
+            node = tree.setdefault(root, {"children": {}, "types": []})
+            node["_source"] = "custom"
+            for part in rest:
+                node = node["children"].setdefault(part, {"children": {}, "types": []})
+                node["_source"] = "custom"
+        return {"namespaces": tree}
+
+    @staticmethod
+    def _detail(t):
+        sections = [[]]
+        for words in (line.split() for line in t["source_text"].split("\n")):
+            if words == ["---"]:
+                sections.append([])
+            elif len(words) == 2 and words[0][0] not in "@#":
+                sections[-1].append({"type": words[0], "name": words[1]})
+        fields = sections[0] if len(sections) == 1 else {"request": sections[0], "response": sections[1]}
+        return {**t, "source_file": "", "fields": fields, "constants": [], "dependencies": []}
+
+    def _answer(self, method, path, body):
+        if path == "/api/dsdl/status":
+            return self._status(), 200
+        if path == "/api/dsdl/namespaces":
+            return self._tree(), 200
+        if path == "/api/dsdl/custom/namespaces":
+            return {"namespaces": sorted(self.custom_namespaces)}, 200
+        if method == "GET" and path.startswith("/api/dsdl/type/"):
+            t = self.types.get(path.removeprefix("/api/dsdl/type/"))
+            return (self._detail(t), 200) if t else ({"error": "Type not found"}, 404)
+        if method == "POST" and path == "/api/dsdl/custom/namespace":
+            self.custom_namespaces.add(body["namespace"])
+            return {"namespace": body["namespace"], "path": ""}, 201
+        if method == "POST" and path == "/api/dsdl/custom/type":
+            name = f"{body['namespace']}.{body['type_name']}.{body['version']}"
+            old = self.types.get(name)
+            if old and not body.get("overwrite"):
+                return {"error": f"Type '{name}' already exists"}, 400
+            if old and old["compiled"]:
+                return {"error": f"Cannot edit '{name}': type is already compiled."}, 409
+            self.types[name] = _dsdl_type(name, port=body.get("fixed_port_id"), source="custom", compiled=False,
+                                          text=body["source_text"])
+            return {"full_name": name, "path": ""}, 201
+        if method == "DELETE" and path.startswith("/api/dsdl/custom/type/"):
+            name = path.removeprefix("/api/dsdl/custom/type/")
+            if self.types.pop(name, None) is None:
+                return {"error": f"Type not found: {name}"}, 404
+            return {"full_name": name, "deleted": True}, 200
+        return {"error": "not found"}, 404
+
+    async def handle(self, route):
+        request = route.request
+        path = unquote(urlparse(request.url).path)
+        body = request.post_data_json if request.post_data else None
+        self.requests.append((request.method, path, body))
+        if (request.method, path) == ("POST", "/api/dsdl/compile"):
+            if self.compile_gate:
+                await self.compile_gate.wait()
+            answer, status = self.compile_answer
+        else:
+            answer, status = self._answer(request.method, path, body)
+        await route.fulfill(json=answer, status=status, headers={"Access-Control-Allow-Origin": "*"})
+
+
+async def dsdl_open(page, server, setup=None):
+    """The DSDL tab on a freshly loaded page, connected to `server`. `setup`
+    runs in the page before the tab opens (nodes, messages)."""
+    await page.evaluate("""() => { state.dashboardConnected = false; _writeSettingsNow();
+        localStorage.removeItem('cynitor.dsdl.state'); }""")
+    await page.reload(wait_until="load")
+    await page.route("**/api/dsdl/**", server.handle)
+    await page.evaluate("state.dashboardConnected = true")
+    if setup:
+        await page.evaluate(setup)
+    await page.evaluate("switchView('dsdl')")
+    await page.wait_for_selector("#dsdlTree .dsdl-ns-row", timeout=5000)
+
+
+async def dsdl_close(page, server):
+    await page.evaluate("""() => { switchView('nodes'); state.dashboardConnected = false;
+        state.latestNodesPayload = null; state.latestBySubject.clear(); state.latestByNode.clear();
+        localStorage.removeItem('cynitor.dsdl.state'); }""")
+    await page.unroute("**/api/dsdl/**", server.handle)
+
+
+@test("DSDL: a subject's bus dot goes on its own type, not on another with its class name")
+async def _(page):
+    server = _DsdlServer()
+    # Subject 1100 is temperature by its publisher's registers; its messages
+    # name only their class, Scalar_1_0, which voltage has too.
+    nodes = {"node_count": 1, "nodes": {"10": _graph_node(10, "org.example.thermo", [1100], [], uid_byte=1)},
+             "subject_types": {"1100": {"type": "uavcan.si.unit.temperature.Scalar_1_0", "set_by": "registers"}}}
+    setup = f"""() => {{
+        state.latestNodesPayload = {json.dumps(nodes)};
+        cacheEvent({{subject_id: 1100, publisher_node_id: 10, message_type: 'Scalar_1_0', rate: 10,
+                    subject_rate: 10, payload_bytes: 4, attributes: [], timestamp_unix: Date.now() / 1000}});
+    }}"""
+    await dsdl_open(page, server, setup)
+    try:
+        await page.wait_for_selector(".dsdl-type-row .dsdl-bus-dot", state="attached", timeout=WAIT_MS)
+        dotted = await page.evaluate("""[...document.querySelectorAll('.dsdl-type-row')]
+            .filter(row => row.querySelector('.dsdl-bus-dot')).map(row => row.dataset.type)""")
+        assert dotted == ["uavcan.si.unit.temperature.Scalar.1.0"], f"Marked active on the bus: {dotted}"
+    finally:
+        await dsdl_close(page, server)
 
 
 # Keep last: it reloads the page with every other host unreachable.

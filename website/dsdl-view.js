@@ -562,10 +562,14 @@ const DsdlView = (() => {
     _busActivityMap = new Map();
     if (!_namespacesData) { _updateBusDots(); return; }
 
+    const known = _getTypeIndex();
     const subjectTypeMap = new Map();
     for (const [subjectId, evt] of state.latestBySubject) {
       if (!evt.message_type) continue;
-      const fullName = _telemetryIndex.get(evt.message_type);
+      // The type it is decoded as, named by its registers, the user or its
+      // fixed port; else its class name, when only one type has it.
+      const named = subjectTypeName(subjectId, evt);
+      const fullName = known[named] ? named : _telemetryIndex.get(evt.message_type);
       if (fullName) subjectTypeMap.set(subjectId, fullName);
     }
 
@@ -595,7 +599,9 @@ const DsdlView = (() => {
     if (!_namespacesData) return;
     const walk = (node) => {
       for (const t of (node.types || [])) {
-        _telemetryIndex.set(_dsdlToTelemetryName(t.full_name), t.full_name);
+        // A class name several types share (Scalar_1_0: 46 of them) names none.
+        const cls = _dsdlToTelemetryName(t.full_name);
+        _telemetryIndex.set(cls, _telemetryIndex.has(cls) ? null : t.full_name);
       }
       for (const child of Object.values(node.children || {})) walk(child);
     };
