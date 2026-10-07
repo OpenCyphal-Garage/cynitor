@@ -115,6 +115,14 @@ class TestRunCompilationRefreshHook:
         assert "syntax error" in result["errors"][0]
 
 
+class TestTreeEntries:
+
+    def test_a_type_lists_its_field_and_constant_names_for_search(self, mgr: DsdlManager) -> None:
+        mgr.save_type("myapp", "Reading", "1.0", "uint8 MAX = 3   # the most\nuint8 value\nvoid8\n@sealed\n")
+        [entry] = mgr.get_namespaces()["namespaces"]["myapp"]["types"]
+        assert (entry["field_names"], entry["constant_names"]) == (["value"], ["MAX"])
+
+
 class TestDeleteNamespace:
     """A custom namespace with no types left in it can go, with its empty
     sub-namespaces; one that still has types cannot."""

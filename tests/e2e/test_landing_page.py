@@ -2557,8 +2557,13 @@ class _DsdlServer:
             node = tree.setdefault(root, {"children": {}, "types": []})
             for part in rest:
                 node = node["children"].setdefault(part, {"children": {}, "types": []})
+            # The names search looks in: "type name" is a field, "type NAME = value" a constant.
+            lines = [line.split("#")[0].split() for line in t["source_text"].split("\n")]
+            named = [words for words in lines if len(words) >= 2 and words[0][0] != "@"]
             node["types"].append({key: t[key] for key in ("short_name", "full_name", "version", "kind",
-                                                          "fixed_port_id", "source", "compiled")} | {"field_names": []})
+                                                          "fixed_port_id", "source", "compiled")}
+                                 | {"field_names": [w[1] for w in named if "=" not in w],
+                                    "constant_names": [w[1] for w in named if "=" in w]})
         for namespace in sorted(self.custom_namespaces):  # empty ones too
             root, *rest = namespace.split(".")
             node = tree.setdefault(root, {"children": {}, "types": []})
@@ -3418,6 +3423,20 @@ async def _(page):
             found[term] = await page.evaluate(
                 "[...document.querySelectorAll('#dsdlTreePanel .dsdl-type-row')].map((row) => row.dataset.type)")
         assert found == {term: ["uavcan.node.Heartbeat.1.0"] for term in found}, f"Found: {found}"
+    finally:
+        await dsdl_close(page, server)
+
+
+@test("DSDL: the search finds a type by one of its constants")
+async def _(page):
+    server = _DsdlServer()
+    server.types["uavcan.node.Heartbeat.1.0"]["source_text"] = "uint16 MAX_PUBLICATION_PERIOD = 1\nuint32 uptime\n@sealed\n"
+    await dsdl_open(page, server)
+    try:
+        count = await dsdl_search(page, "max_publication")
+        found = await page.evaluate(
+            "[...document.querySelectorAll('#dsdlTreePanel .dsdl-type-row')].map((row) => row.dataset.type)")
+        assert found == ["uavcan.node.Heartbeat.1.0"], f"Found {found}; the count says {count!r}"
     finally:
         await dsdl_close(page, server)
 

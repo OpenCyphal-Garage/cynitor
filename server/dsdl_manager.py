@@ -419,7 +419,7 @@ class DsdlManager:
 
             full_ns = ".".join([ns_prefix] + ns_parts) if ns_parts else ns_prefix
             full_name = f"{full_ns}.{type_name}.{version}"
-            kind, field_names = self._quick_parse(dsdl_file)
+            kind, field_names, constant_names = self._quick_parse(dsdl_file)
             self._type_index[full_name] = dsdl_file
 
             if ns_prefix not in tree:
@@ -438,6 +438,7 @@ class DsdlManager:
                 "fixed_port_id": fixed_port_id,
                 "source": source,
                 "field_names": field_names,
+                "constant_names": constant_names,
                 "compiled": self._is_compiled(full_name),
             })
 
@@ -473,14 +474,15 @@ class DsdlManager:
         return type_name, f"{major}.{minor}", fixed_port_id
 
     @staticmethod
-    def _quick_parse(path: Path) -> tuple[str, list[str]]:
-        """Single-pass scan: returns (kind, field_names)."""
+    def _quick_parse(path: Path) -> tuple[str, list[str], list[str]]:
+        """Single-pass scan: returns (kind, field_names, constant_names), the names for search."""
         kind = "message"
         field_names: list[str] = []
+        constant_names: list[str] = []
         try:
             text = path.read_text(encoding="utf-8")
         except OSError:
-            return kind, field_names
+            return kind, field_names, constant_names
         for line in text.split("\n"):
             stripped = line.strip()
             if stripped == "---":
@@ -489,12 +491,15 @@ class DsdlManager:
             if not stripped or stripped.startswith("#") or stripped.startswith("@"):
                 continue
             m = _FIELD_RE.match(stripped)
-            if not m or m.group("value") is not None:
+            if not m:
+                continue
+            if m.group("value") is not None:
+                constant_names.append(m.group("name"))
                 continue
             if m.group("type").startswith("void"):
                 continue
             field_names.append(m.group("name"))
-        return kind, field_names
+        return kind, field_names, constant_names
 
     def _resolve_dependencies(self, raw_deps: list[str], namespace: str) -> list[str]:
         """Resolve relative dependency names to full type names."""

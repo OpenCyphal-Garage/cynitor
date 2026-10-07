@@ -477,7 +477,7 @@ Response:
 curl http://localhost:8080/api/dsdl/namespaces
 ```
 
-Returns a nested tree of namespaces with type entries. Each type includes `short_name`, `full_name`, `version`, `kind` (`"message"` or `"service"`), `fixed_port_id`, `source` (`"regulated"` or `"custom"`), `field_names` (for search), and `compiled` (`true` once its Python code exists: in `python_compiled_messages/` for a public type, in the data folder's `dsdl/compiled` for a custom one). Custom namespaces, empty ones included, carry `"_source": "custom"`.
+Returns a nested tree of namespaces with type entries. Each type includes `short_name`, `full_name`, `version`, `kind` (`"message"` or `"service"`), `fixed_port_id`, `source` (`"regulated"` or `"custom"`), `field_names` and `constant_names` (for search), and `compiled` (`true` once its Python code exists: in `python_compiled_messages/` for a public type, in the data folder's `dsdl/compiled` for a custom one). Custom namespaces, empty ones included, carry `"_source": "custom"`.
 
 **DSDL type detail:**
 ```bash

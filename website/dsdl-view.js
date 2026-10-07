@@ -57,7 +57,7 @@ const DsdlView = (() => {
         <div class="dsdl-tree-panel" id="dsdlTreePanel">
           <div class="dsdl-search-wrap">
             <input type="search" class="dsdl-search" id="dsdlSearch"
-                   placeholder="Search types or fields…" aria-label="Search DSDL types" />
+                   placeholder="Search types, fields, constants…" aria-label="Search DSDL types" />
             <div class="dsdl-search-count" id="dsdlSearchCount" role="status"></div>
           </div>
           <div class="dsdl-tree-scroll">
@@ -664,6 +664,7 @@ const DsdlView = (() => {
       if (t.full_name.toLowerCase().includes(term) || t.full_name.toLowerCase().includes(spelled)) return true;
       if (t.fixed_port_id != null && String(t.fixed_port_id).includes(term)) return true;
       if (t.field_names?.some(f => f.toLowerCase().includes(term))) return true;
+      if (t.constant_names?.some(c => c.toLowerCase().includes(term))) return true;
       return false;
     });
     return [...matching].sort(_byNameAndVersion);
