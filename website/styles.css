@@ -6133,6 +6133,13 @@ details.svc-history-entry[open] > summary::before {
   box-shadow: inset 0.1875rem 0 0 var(--accent);
 }
 
+/* The row the keyboard is on. */
+.dsdl-ns-row:focus-visible,
+.dsdl-type-row:focus-visible {
+  outline: 0.125rem solid var(--accent);
+  outline-offset: -0.125rem;
+}
+
 .dsdl-kind {
   font-size: 0.5625rem;
   font-weight: 700;

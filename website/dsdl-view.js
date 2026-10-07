@@ -58,12 +58,12 @@ const DsdlView = (() => {
           <div class="dsdl-tree-scroll">
             <div class="dsdl-tree-section">
               <div class="dsdl-section-header" id="dsdlPublicHeader"></div>
-              <div class="dsdl-tree" id="dsdlTree"></div>
+              <div class="dsdl-tree" id="dsdlTree" role="tree" aria-label="Public regulated types"></div>
             </div>
             <div class="dsdl-tree-divider"></div>
             <div class="dsdl-tree-section">
               <div class="dsdl-section-header" id="dsdlCustomHeader"></div>
-              <div class="dsdl-tree" id="dsdlCustomTree"></div>
+              <div class="dsdl-tree" id="dsdlCustomTree" role="tree" aria-label="Custom types"></div>
             </div>
           </div>
           <div class="dsdl-search-wrap">
@@ -317,6 +317,34 @@ const DsdlView = (() => {
     return custom;
   };
 
+  // Each tree is one Tab stop; the arrows go from row to row (_bindEvents).
+  const _rowKey = (row) => row.dataset.type ?? row.dataset.ns;
+  const _visibleRows = (tree) => [...tree.querySelectorAll('[role="treeitem"]')].filter((row) => row.offsetParent !== null);
+  const _focusedRowKey = (tree) => (tree.contains(document.activeElement) ? _rowKey(document.activeElement) : undefined);
+
+  // After a redraw the Tab stop, and the focus with it, go back to the row
+  // that had the focus; else the stop is on the selected type, or the top.
+  const _setTabStop = (tree, focusedKey) => {
+    const rows = _visibleRows(tree);
+    const focused = focusedKey !== undefined && rows.find((row) => _rowKey(row) === focusedKey);
+    const stop = focused || rows.find((row) => row.classList.contains('dsdl-type-selected')) || rows[0];
+    if (stop) stop.tabIndex = 0;
+    if (focused) focused.focus();
+  };
+
+  const _focusRow = (row) => {
+    if (!row) return;
+    row.closest('[role="tree"]').querySelectorAll('[role="treeitem"][tabindex="0"]').forEach((r) => { r.tabIndex = -1; });
+    row.tabIndex = 0;
+    row.focus();
+  };
+
+  // The namespace row a row sits under, or null at the top.
+  const _parentRow = (row) => {
+    const holder = row.dataset.ns !== undefined ? row.parentElement : row;
+    return holder.parentElement.closest('.dsdl-ns-children')?.previousElementSibling ?? null;
+  };
+
   const _renderTree = () => {
     const container = document.getElementById('dsdlTree');
     if (!container || !_namespacesData) return;
@@ -332,7 +360,9 @@ const DsdlView = (() => {
       container.innerHTML = '<div class="dsdl-tree-empty">No matching types.</div>';
       return;
     }
+    const focusedKey = _focusedRowKey(container);
     container.innerHTML = html;
+    _setTabStop(container, focusedKey);
     _updateBusDots();
   };
 
@@ -373,7 +403,9 @@ const DsdlView = (() => {
       container.innerHTML = '<div class="dsdl-tree-empty">No matching custom types.</div>';
       return;
     }
+    const focusedKey = _focusedRowKey(container);
     container.innerHTML = html;
+    _setTabStop(container, focusedKey);
 
     document.getElementById('dsdlToggleHidden')?.addEventListener('click', () => {
       _showHidden = !_showHidden;
@@ -448,6 +480,7 @@ const DsdlView = (() => {
         : ' title="Not compiled — recompile to load this type into the running runtime."';
       typesHtml += `
         <div class="dsdl-type-row${selected}${lockedCls}" data-type="${escapeHtml(t.full_name)}"${lockTitle}
+             role="treeitem" tabindex="-1" aria-selected="${Boolean(selected)}"
              style="padding-left: ${(depth + 1) * 1.125 + 1}rem">
           <span class="dsdl-kind ${kindCls}">${kindLabel}</span>
           <span class="dsdl-type-name">${escapeHtml(t.short_name)}</span>
@@ -489,12 +522,13 @@ const DsdlView = (() => {
       return `
         <div class="dsdl-ns${dimCls}">
           <div class="dsdl-ns-row dsdl-ns-custom${uncompiledCls}" data-ns="${escapeHtml(fullPath)}"
+               role="treeitem" tabindex="-1" aria-expanded="${Boolean(expanded)}"
                style="padding-left: ${depth * 1.125 + 0.5}rem">
             ${chevron}
             <span class="dsdl-ns-label">${escapeHtml(name)}</span>
             ${addBtns}
           </div>
-          <div class="dsdl-ns-children ${expanded ? '' : 'hidden'}">
+          <div class="dsdl-ns-children ${expanded ? '' : 'hidden'}" role="group">
             <div class="dsdl-custom-empty" style="padding-left: ${(depth + 1) * 1.125 + 1}rem">Empty</div>
           </div>
         </div>`;
@@ -504,12 +538,13 @@ const DsdlView = (() => {
     return `
       <div class="dsdl-ns${dimCls}">
         <div class="dsdl-ns-row dsdl-ns-custom${uncompiledCls}" data-ns="${escapeHtml(fullPath)}"
+             role="treeitem" tabindex="-1" aria-expanded="${Boolean(expanded)}"
              style="padding-left: ${depth * 1.125 + 0.5}rem">
           ${chevron}
           <span class="dsdl-ns-label">${escapeHtml(name)}</span>
           ${addBtns}
         </div>
-        <div class="dsdl-ns-children ${expanded ? '' : 'hidden'}">
+        <div class="dsdl-ns-children ${expanded ? '' : 'hidden'}" role="group">
           ${typesHtml}
           ${childHtml}
         </div>
@@ -545,6 +580,7 @@ const DsdlView = (() => {
       const selected = _selectedType === t.full_name ? ' dsdl-type-selected' : '';
       typesHtml += `
         <div class="dsdl-type-row${selected}" data-type="${escapeHtml(t.full_name)}"
+             role="treeitem" tabindex="-1" aria-selected="${Boolean(selected)}"
              style="padding-left: ${(depth + 1) * 1.125 + 1}rem">
           <span class="dsdl-kind ${kindCls}">${kindLabel}</span>
           <span class="dsdl-type-name">${escapeHtml(t.short_name)}</span>
@@ -560,11 +596,12 @@ const DsdlView = (() => {
     return `
       <div class="dsdl-ns">
         <div class="dsdl-ns-row" data-ns="${escapeHtml(fullPath)}"
+             role="treeitem" tabindex="-1" aria-expanded="${Boolean(expanded)}"
              style="padding-left: ${depth * 1.125 + 0.5}rem">
           ${chevron}
           <span class="dsdl-ns-label">${escapeHtml(name)}</span>
         </div>
-        <div class="dsdl-ns-children ${expanded ? '' : 'hidden'}">
+        <div class="dsdl-ns-children ${expanded ? '' : 'hidden'}" role="group">
           ${typesHtml}
           ${childHtml}
         </div>
@@ -880,6 +917,7 @@ const DsdlView = (() => {
   const _highlightSelected = () => {
     document.querySelectorAll('.dsdl-type-row').forEach(el => {
       el.classList.toggle('dsdl-type-selected', el.dataset.type === _selectedType);
+      el.setAttribute('aria-selected', String(el.dataset.type === _selectedType));
     });
   };
 
@@ -1557,8 +1595,34 @@ const DsdlView = (() => {
       if (typeRow) _loadTypeDetail(typeRow.dataset.type);
     };
 
+    // ↑/↓ row to row, Home/End, → opens a namespace or goes into it,
+    // ← closes it or goes to its parent, Enter/Space as a click.
+    const treeKeys = (e) => {
+      const row = e.target;
+      if (row.getAttribute('role') !== 'treeitem') return;  // a key on a row's button is the button's
+      const rows = _visibleRows(e.currentTarget);
+      const at = rows.indexOf(row);
+      const expanded = row.getAttribute('aria-expanded');
+      const keys = {
+        ArrowDown: () => _focusRow(rows[at + 1]),
+        ArrowUp: () => _focusRow(rows[at - 1]),
+        Home: () => _focusRow(rows[0]),
+        End: () => _focusRow(rows[rows.length - 1]),
+        ArrowRight: () => (expanded === 'false' ? row.click()
+          : _focusRow(row.nextElementSibling?.querySelector('[role="treeitem"]'))),
+        ArrowLeft: () => (expanded === 'true' ? row.click() : _focusRow(_parentRow(row))),
+        Enter: () => row.click(),
+        ' ': () => row.click(),
+      };
+      if (!keys[e.key]) return;
+      e.preventDefault();
+      keys[e.key]();
+    };
+
     document.getElementById('dsdlTree')?.addEventListener('click', treeHandler);
     document.getElementById('dsdlCustomTree')?.addEventListener('click', treeHandler);
+    document.getElementById('dsdlTree')?.addEventListener('keydown', treeKeys);
+    document.getElementById('dsdlCustomTree')?.addEventListener('keydown', treeKeys);
 
     _initSplitDrag();
   };

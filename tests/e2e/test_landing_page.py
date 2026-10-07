@@ -3078,6 +3078,34 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+@test("DSDL: the type tree works by keyboard, one Tab stop and the arrows")
+async def _(page):
+    server = _DsdlServer()
+    focused = "[document.activeElement.dataset.type ?? document.activeElement.dataset.ns ?? document.activeElement.id," \
+              " document.activeElement.getAttribute('aria-expanded')]"
+    await dsdl_open(page, server)
+    try:
+        await page.locator("#dsdlRecompileBtn").focus()
+        await page.keyboard.press("Tab")
+        into = await page.evaluate(focused)
+        for key in ("ArrowRight", "ArrowDown", "ArrowRight", "ArrowDown", "Enter"):
+            await page.keyboard.press(key)
+        await page.wait_for_timeout(500)
+        shown = (await page.locator("#dsdlDetail").inner_text()).split("\n")[0]
+        on_type = await page.evaluate(focused)
+        await page.keyboard.press("ArrowLeft")  # to its namespace
+        await page.keyboard.press("ArrowLeft")  # which closes
+        closed = await page.evaluate(focused)
+        await page.keyboard.press("Tab")  # out of the tree in one step
+        out = await page.evaluate(focused)
+        assert (into, on_type, shown, closed) == (["uavcan", "false"], ["uavcan.node.Heartbeat.1.0", None],
+                                                  "uavcan.node.Heartbeat", ["uavcan.node", "false"]) \
+            and out[0] == "dsdlCustomCompileBtn", \
+            f"Tab into the tree: {into}; → ↓ → ↓ Enter: {on_type}, showing {shown!r}; ← ←: {closed}; Tab: {out}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
