@@ -3472,6 +3472,47 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+# Each badge of the type shown, by its text: its colour.
+BADGE_COLOURS = """() => Object.fromEntries([...document.querySelectorAll('#dsdlDetail .dsdl-badge-row .dsdl-badge')]
+    .map((badge) => [badge.textContent.trim(), getComputedStyle(badge).color]))"""
+
+
+@test("DSDL: a type's pane keeps colour for the unusual: not compiled, deprecated")
+async def _(page):
+    server = _DsdlServer()
+    server.types["uavcan.node.Heartbeat.1.0"]["detail"] = {
+        "constants": [{"type": "uint16", "name": "MAX_PUBLICATION_PERIOD", "value": "1", "doc": ""}]}
+    pending = _dsdl_type("myapp.Pending.1.0", source="custom", compiled=False)
+    pending["deprecated"] = True
+    server.types[pending["full_name"]] = pending
+    await dsdl_open(page, server)
+    try:
+        tokens = {name: await page.evaluate(TOKEN_COLOUR, name) for name in ("muted", "text", "warn")}
+        await dsdl_show(page, "uavcan.node.Heartbeat.1.0")
+        heartbeat = await page.evaluate(BADGE_COLOURS)
+        cells = [await page.evaluate(COLOUR_OF, [f"#dsdlDetail {cell}", "color"])
+                 for cell in (".dsdl-fcol-type", ".dsdl-fcol-val")]
+        await page.locator('#dsdlCustomTree .dsdl-ns-row[data-ns="myapp"]').click()
+        shown = {}
+        for name in ("Reading", "Pending"):
+            await page.locator(f'.dsdl-type-row[data-type="myapp.{name}.1.0"]').click()
+            await page.wait_for_selector(f'.dsdl-doc-title:has-text("{name}")', timeout=WAIT_MS)
+            shown[name] = await page.evaluate(BADGE_COLOURS)
+        await dsdl_new_type(page)
+        await page.locator("#dsdlEditorSource").fill("uint8 a\n@sealed\n---\nuint8 b\n@sealed\n")
+        await page.wait_for_selector(".dsdl-preview-label-res", timeout=WAIT_MS)
+        response = await page.evaluate(COLOUR_OF, [".dsdl-preview-label-res", "color"])
+        plain, flagged = tokens["muted"], tokens["warn"]
+        seen = {"Message": heartbeat["Message"], "Compiled": heartbeat["Compiled"], "Custom": shown["Reading"]["Custom"],
+                "Not compiled": shown["Pending"]["Not compiled"], "Deprecated": shown["Pending"]["Deprecated"],
+                "field type, constant value": cells, "preview's Response": response}
+        assert seen == {"Message": plain, "Compiled": plain, "Custom": plain, "Not compiled": flagged,
+                        "Deprecated": flagged, "field type, constant value": [tokens["text"]] * 2,
+                        "preview's Response": plain}, f"Drawn {seen}; the theme's {tokens}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

@@ -6297,30 +6297,16 @@ details.svc-history-entry[open] > summary::before {
   line-height: 1.4;
 }
 
-.dsdl-badge-message {
-  background: var(--accent-muted);
-  color: var(--accent);
-}
-
-.dsdl-badge-service {
-  background: var(--ok-muted);
-  color: var(--ok);
-}
-
-.dsdl-badge-regulated {
+/* What a type is, plainly. Colour is for what needs a look: not compiled
+   yet, deprecated (.dsdl-badge-warn). */
+.dsdl-badge-message,
+.dsdl-badge-service,
+.dsdl-badge-regulated,
+.dsdl-badge-custom,
+.dsdl-badge-ok {
   background: var(--surface-2);
   color: var(--muted);
   border: 0.0625rem solid var(--border);
-}
-
-.dsdl-badge-custom {
-  background: var(--warn-muted);
-  color: var(--warn);
-}
-
-.dsdl-badge-ok {
-  background: var(--ok-muted);
-  color: var(--ok);
 }
 
 .dsdl-badge-warn {
@@ -6398,7 +6384,7 @@ details.svc-history-entry[open] > summary::before {
 /* Long types and names wrap in a narrow pane rather than run into each other. */
 .dsdl-fcol-type {
   padding: 0.375rem 0.875rem;
-  color: var(--accent);
+  color: var(--text);
   width: 40%;
   overflow-wrap: anywhere;
 }
@@ -6412,7 +6398,7 @@ details.svc-history-entry[open] > summary::before {
 
 .dsdl-fcol-val {
   padding: 0.375rem 0.875rem;
-  color: var(--warn);
+  color: var(--text);
 }
 
 /* A field's or constant's comment, under its name: prose, not data. */
@@ -7094,24 +7080,17 @@ details.svc-history-entry[open] > summary::before {
   user-select: none;
 }
 
-.dsdl-preview-section-req .dsdl-preview-label-req {
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.dsdl-preview-section-res .dsdl-preview-label-res {
-  color: var(--warn);
+/* A service's two halves, told apart by their labels and a rule, not colour. */
+.dsdl-preview-label-req,
+.dsdl-preview-label-res {
   font-weight: 600;
 }
 
 .dsdl-preview-section-req,
 .dsdl-preview-section-res {
-  border-left: 0.125rem solid transparent;
+  border-left: 0.125rem solid var(--border);
   padding-left: 0.375rem;
 }
-
-.dsdl-preview-section-req { border-left-color: var(--accent); }
-.dsdl-preview-section-res { border-left-color: var(--warn); }
 
 /* ── Record view ──────────────────────────────────────────────── */
 .view-graph-btn.recording-active {
