@@ -1221,6 +1221,9 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+# The Display row's box that lets a click on the plot pause it (off by default).
+CLICK_PAUSES = "A click on the plot pauses it"
+
 # How far behind now a graph's plot is: a live 1m plot ends 12 s (20% of its
 # window) after now.
 COMPARE_LAG = "(c) => Date.now() / 1000 + 12 - c.querySelector('.detail-plot-area')._plotCtx.xScale.domain()[1]"
@@ -1242,6 +1245,7 @@ async def _(page):
         label = await pause_all.inner_text()
         assert label == "Pause All", f"With one graph going on, the toolbar says {label!r}"
         # Paused by a click on its plot, the first is paused again: all are.
+        await first.locator(f'[aria-label="{CLICK_PAUSES}"]').check()
         await first.locator(".detail-plot-area svg").click(position={"x": 300, "y": 40})
         await page.wait_for_timeout(400)
         label = await pause_all.inner_text()
@@ -1261,6 +1265,7 @@ async def _(page):
         card = await compare_graph(page, (1100, "value"))
         button = card.locator(".plot-pause-btn")
         assert await button.get_attribute("aria-pressed") == "false", "Running, the pause button is not an unpressed toggle"
+        await card.locator(f'[aria-label="{CLICK_PAUSES}"]').check()
         await card.locator(".detail-plot-area svg").click(position={"x": 300, "y": 40})
         await page.wait_for_timeout(400)  # past the 250 ms that tells a click from a double-click
         assert await page.evaluate("state.compareGraphs[0].paused"), "A click on the plot did not pause it"
@@ -1268,6 +1273,26 @@ async def _(page):
         lit = await button.evaluate("(b) => b.classList.contains('active')")
         assert says == "▶" and lit, f"Paused, the graph's own button reads {says!r}{'' if lit else ', unlit'}"
         assert await button.get_attribute("aria-pressed") == "true", "Paused, the button is not pressed for a screen reader"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
+@test("Compare: a click on a plot pauses it only when the graph's Click pauses is on, and it is kept")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    try:
+        await page.wait_for_timeout(300)
+        card = await compare_graph(page, (1100, "value"))
+        plot = card.locator(".detail-plot-area svg")
+        await plot.click(position={"x": 300, "y": 40})
+        await page.wait_for_timeout(400)
+        assert not await page.evaluate("state.compareGraphs[0].paused"), "A plain click paused the graph"
+        await card.locator(f'[aria-label="{CLICK_PAUSES}"]').check()
+        await plot.click(position={"x": 300, "y": 40})
+        await page.wait_for_timeout(400)
+        assert await page.evaluate("state.compareGraphs[0].paused"), "With Click pauses on, a click did not pause the graph"
+        kept = await page.evaluate("compareGraphConfig(state.compareGraphs[0]).clickPauses")
+        assert kept is True, f"Saved, the graph's Click pauses reads {kept!r}"
     finally:
         await page.evaluate(COMPARE_STOP)
 

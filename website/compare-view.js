@@ -28,6 +28,7 @@ const compareGraphConfig = (g) => ({
   stroke: g.stroke,
   disconnectPoints: g.disconnectPoints,
   grid: g.grid,
+  clickPauses: g.clickPauses,
 });
 
 // A graph's settings as read from storage or a file: what is valid of them,
@@ -47,6 +48,7 @@ const sanitizeCompareGraph = (g) => {
     stroke: typeof g.stroke === 'number' && g.stroke > 0 ? g.stroke : 1.5,
     disconnectPoints: g.disconnectPoints === true,
     grid: g.grid === true,
+    clickPauses: g.clickPauses === true,
   };
 };
 
@@ -809,6 +811,20 @@ const _buildGraphCard = (graph) => {
   const kept = document.createElement('span');  // how much history there is, when short (_syncKept)
   kept.className = 'compare-kept hidden';
   timeControls.appendChild(kept);
+
+  // A click on the plot pauses it only when asked to: by accident, it would.
+  const clickLabel = document.createElement('label');
+  clickLabel.className = 'plot-check-label';
+  const clickCb = document.createElement('input');
+  clickCb.type = 'checkbox';
+  clickCb.checked = graph.clickPauses;
+  clickCb.setAttribute('aria-label', 'A click on the plot pauses it');
+  clickCb.addEventListener('change', () => {
+    graph.clickPauses = clickCb.checked;
+    saveSettings();
+  });
+  clickLabel.append(clickCb, ' Click pauses');
+  visualControls.querySelector('.plot-draw-group').previousElementSibling.before(clickLabel);  // after Grid
 
   const editor = document.createElement('div');
   editor.className = 'compare-card-editor';

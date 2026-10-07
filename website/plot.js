@@ -553,7 +553,7 @@ const buildPlotControls = (opts = {}) => {
     const drawInfo = document.createElement('span');
     drawInfo.className = 'plot-info-icon';
     drawInfo.textContent = '?';
-    const drawTip = 'Shift+click: add/edit marker · Click on marker: edit · Alt+drag: freehand draw · Alt+dblclick: clear drawings · Click: pause/resume · Ctrl+wheel: zoom · Drag: pan · Dblclick: reset zoom';
+    const drawTip = 'Shift+click: add/edit marker · Click on marker: edit · Alt+drag: freehand draw · Alt+dblclick: clear drawings · Ctrl+wheel: zoom · Drag: pan · Dblclick: reset zoom · Click: pause/resume, with Click pauses on';
     drawInfo.title = drawTip;
     drawInfo.setAttribute('aria-label', drawTip);
     drawGroup.appendChild(drawInfo);
@@ -1377,6 +1377,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
           _openMarkerForm(plotArea, cfg, near, false, _markerDone);
           return;
         }
+        if (!cfg.clickPauses) return;  // a click pauses only where the graph asks it to
         if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; return; }
         clickTimer = setTimeout(() => {
           clickTimer = null;
