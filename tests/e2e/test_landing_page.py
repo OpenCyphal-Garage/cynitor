@@ -1934,6 +1934,30 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: a window longer than the history keeps says so")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    kept = "(c) => { const k = c.querySelector('.compare-kept'); return k && !k.classList.contains('hidden') ? k.textContent : ''; }"
+    beyond = "(c) => [...c.querySelectorAll('.plot-window-btn--beyond')].map(b => b.textContent)"
+    try:
+        # 1500 at 100 Hz: its history is full, 3600 points over 36 s.
+        await page.evaluate("""() => { const now = Date.now() / 1000;
+            state.subjectHistory.set('1500:value', Array.from({length: 3600}, (_, i) => ({t: now - 36 + i / 100, v: 1, n: 10}))); }""")
+        card = await compare_graph(page, (1500, "value"))
+        await page.wait_for_timeout(400)
+        assert await card.evaluate(kept) == "kept 36 s", f"A 1m window over 36 s of history reads {await card.evaluate(kept)!r}"
+        assert await card.evaluate(beyond) == ["1m", "5m", "15m"], f"Windows marked as not filling: {await card.evaluate(beyond)}"
+        await card.locator('.plot-window-btn[data-secs="30"]').click()
+        await page.wait_for_timeout(300)
+        assert await card.evaluate(kept) == "", "A 30 s window, which the history fills, still says what is kept"
+        # 1100 has been heard for a moment only: its history is not full, nothing is said.
+        young = await compare_graph(page, (1100, "value"))
+        await page.wait_for_timeout(400)
+        assert await young.evaluate(kept) == "" and await young.evaluate(beyond) == [], "A history still filling is called short"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 @test("Compare: a plot carries its graph's name, not the word Compare")
 async def _(page):
     await page.evaluate(COMPARE_START)

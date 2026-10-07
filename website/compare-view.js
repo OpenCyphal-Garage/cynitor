@@ -429,6 +429,9 @@ const _buildGraphCard = (graph) => {
     }
     (pastFirstSep ? visualControls : timeControls).appendChild(child);
   }
+  const kept = document.createElement('span');  // how much history there is, when short (_syncKept)
+  kept.className = 'compare-kept hidden';
+  timeControls.appendChild(kept);
 
   const editor = document.createElement('div');
   editor.className = 'compare-card-editor';
@@ -466,6 +469,39 @@ const _graphPoints = (graph, key, raw = false) => {
   const id = raw ? `raw ${key}` : key;
   if (!graph._frozen.has(id)) graph._frozen.set(id, points()?.slice());
   return graph._frozen.get(id);
+};
+
+const _formatSpan = (secs) => (secs < 120 ? `${Math.round(secs)} s` : `${Math.round(secs / 60)} min`);
+
+// How much history a graph's series keep where the points a field keeps
+// (HISTORY_POINTS) are what limits it, not how long it has been heard: the
+// shortest such span, in seconds, or null.
+const _keptSeconds = (graph) => {
+  let kept = null;
+  for (const s of graph.series) {
+    if ((state.subjectHistory.get(`${s.subjectId}:${s.attribute}`)?.length || 0) < HISTORY_POINTS) continue;
+    const data = _graphPoints(graph, compareSeriesKey(s), true);
+    if (!data || data.length < 2) continue;
+    const span = data[data.length - 1].t - data[0].t;
+    if (kept === null || span < kept) kept = span;
+  }
+  return kept;
+};
+
+// The time window's buttons say what the history keeps: a window it cannot
+// fill is dashed, and while the one chosen cannot, "kept 36 s" says so.
+const _syncKept = (graph, card) => {
+  const kept = _keptSeconds(graph);
+  for (const btn of card.querySelectorAll('.compare-time-controls .plot-window-btn')) {
+    const short = kept !== null && Number(btn.dataset.secs) > kept;
+    const title = short ? `The history kept here covers ${_formatSpan(kept)} (${HISTORY_POINTS} points a field): this window is partly empty` : '';
+    btn.classList.toggle('plot-window-btn--beyond', short);
+    if (btn.title !== title) btn.title = title;
+  }
+  const label = card.querySelector('.compare-kept');
+  const text = kept !== null && graph.timeWindow > kept ? `kept ${_formatSpan(kept)}` : '';
+  if (label.textContent !== text) label.textContent = text;
+  label.classList.toggle('hidden', !text);
 };
 
 // A series' last, lowest and highest value in view, or null when none is.
@@ -559,6 +595,8 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   });
 
   const visibleSeries = compareSeries.filter(s => !graph._hidden.has(s.name));
+  const card = plotArea.closest('.compare-graph-card');
+  if (card) _syncKept(graph, card);
 
   if (!legendSeries.length) {
     plotArea.innerHTML = '<div class="plot-empty">Add subjects and attributes to compare</div>';

@@ -2591,6 +2591,19 @@ button:focus-visible,
   gap: 0.25rem;
 }
 
+/* A window longer than the history kept (_syncKept): dashed, and said. */
+.compare-time-controls .plot-window-btn--beyond {
+  border-style: dashed;
+}
+
+.compare-kept {
+  margin-left: 0.25rem;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 /* Its editing rows, folded away under Edit: a row each, their names aligned. */
 .compare-card-editor {
   display: flex;

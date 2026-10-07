@@ -25,6 +25,9 @@ const plottableValues = (attributes) => {
   return values;
 };
 
+// The points a field's history keeps, the newest: at 100 Hz, 36 s of it.
+const HISTORY_POINTS = 3600;
+
 const cacheEvent = (event) => {
   if (!event || !Number.isInteger(event.subject_id)) {
     return;
@@ -61,7 +64,7 @@ const cacheEvent = (event) => {
     if (!state.subjectHistory.has(key)) state.subjectHistory.set(key, []);
     const buf = state.subjectHistory.get(key);
     buf.push({ t: now, v: value, n: event.publisher_node_id });
-    if (buf.length > 3600) buf.shift();
+    if (buf.length > HISTORY_POINTS) buf.shift();
   }
 };
 

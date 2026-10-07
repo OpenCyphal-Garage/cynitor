@@ -168,7 +168,7 @@ The compare view provides independent graphs for multi-series comparison.
 - **Crosshair sync** — hovering over one graph shows synchronized crosshairs with live value readouts on all graphs. Values keep six significant digits; a series with no sample near the cursor (in a gap, or gone quiet) reads –
 - **Presets** — save/load named graph configurations, whole: series, derived series, thresholds, markers, drawings, time window and display settings (Clone copies the same). A graph saved without a name gets a free one ("Untitled 2"), so it does not replace another
 - **Export/Import** — full workspace export/import as JSON files. Import reads and checks the whole file before it changes anything, skips what is not valid, and asks before it replaces the graphs here
-- **Per-graph controls** — time window, fill rate interpolation, stroke size, disconnected points, grid
+- **Per-graph controls** — time window, fill rate interpolation, stroke size, disconnected points, grid. A field's history keeps its newest 3600 points (36 s at 100 Hz, 6 min at 10 Hz): a window longer than a graph's series keep is dashed, and while the chosen one is, "kept 36 s" beside it says how much there is
 - **Edit** — a graph's header holds its name, time window and actions; its editing rows (Series, Derived, Thresholds, Display) fold away under its Edit button, so the plot gets the card. A new graph starts on its editing rows, a graph that has series on its plot
 - **Says why a plot is empty** — not connected to the backend, CAN bus not connected, waiting for data, or no data in view; a live graph's time axis goes on when data stops
 
