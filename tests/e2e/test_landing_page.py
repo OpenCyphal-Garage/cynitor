@@ -2578,7 +2578,9 @@ class _DsdlServer:
                 sections[-1].append({"type": words[0], "name": words[1]})
         fields = sections[0] if len(sections) == 1 else {"request": sections[0], "response": sections[1]}
         composite = sorted({f["type"].split("[")[0] for section in sections for f in section if "." in f["type"]})
-        return {**t, "source_file": "", "fields": fields, "constants": [], "dependencies": composite}
+        # A test can give a type's whole detail: its fields' comments, say.
+        return {**t, "source_file": "", "fields": fields, "constants": [], "dependencies": composite,
+                **t.get("detail", {})}
 
     def _answer(self, method, path, body):
         if path == "/api/dsdl/status":
@@ -3207,6 +3209,41 @@ async def _(page):
             "uavcan.node.GetInfo.1.0": ([["Request", "0 bytes · sealed"],
                                          ["Response", "1–51 bytes · extent 448 bytes"]], False),
         }, f"Card titles and sizes, and a Deprecated badge: {seen}"
+    finally:
+        await dsdl_close(page, server)
+
+
+# Each field's and constant's name, and the comment shown under it: [text, full comment on hover].
+FIELD_COMMENTS = """() => [...document.querySelectorAll('#dsdlDetail .dsdl-fcol-name')].map((cell) => {
+    const doc = cell.querySelector('.dsdl-fcol-doc');
+    return [cell.firstChild.textContent.trim(), doc ? [doc.textContent, doc.title] : null]; })"""
+
+
+@test("DSDL: a type's pane gives its description, and the comments on its fields and constants")
+async def _(page):
+    server = _DsdlServer()
+    heartbeat = server.types["uavcan.node.Heartbeat.1.0"]
+    heartbeat["doc"] = "Abstract node status information.\nAll nodes publish it.\n\nThe rest of the story."
+    heartbeat["detail"] = {
+        "fields": [{"type": "uint32", "name": "uptime", "doc": "[second]\nSeconds since the node started."},
+                   {"type": "uint8", "name": "vendor_specific_status_code", "doc": ""}],
+        "constants": [{"type": "uint16", "name": "MAX_PUBLICATION_PERIOD", "value": "1", "doc": "[second]"}],
+    }
+    await dsdl_open(page, server)
+    try:
+        await dsdl_show(page, "uavcan.node.Heartbeat.1.0")
+        summary = await page.locator(".dsdl-doc-summary").all_inner_texts()
+        comments = await page.evaluate(FIELD_COMMENTS)
+        await page.locator('#dsdlCustomTree .dsdl-ns-row[data-ns="myapp"]').click()
+        await page.locator('.dsdl-type-row[data-type="myapp.Reading.1.0"]').click()  # no comments at all
+        await page.wait_for_selector('.dsdl-doc-title:has-text("Reading")', timeout=WAIT_MS)
+        bare = (await page.locator(".dsdl-doc-summary").count(), await page.evaluate(FIELD_COMMENTS))
+        assert summary == ["Abstract node status information. All nodes publish it."] and comments == [
+            ["uptime", ["[second]", "[second]\nSeconds since the node started."]],
+            ["vendor_specific_status_code", None],
+            ["MAX_PUBLICATION_PERIOD", ["[second]", "[second]"]],
+        ] and bare == (0, [["value", None]]), \
+            f"Description {summary}; comments {comments}; a type without any: {bare}"
     finally:
         await dsdl_close(page, server)
 

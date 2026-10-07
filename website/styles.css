@@ -6405,6 +6405,24 @@ details.svc-history-entry[open] > summary::before {
   color: var(--warn);
 }
 
+/* A field's or constant's comment, under its name: prose, not data. */
+.dsdl-fcol-doc {
+  margin-top: 0.125rem;
+  font-family: var(--sans);
+  font-size: 0.6875rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+/* The type's comment, its first paragraph, under the badges. */
+.dsdl-doc-summary {
+  margin: 0.625rem 0 0;
+  max-width: 48rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
 .dsdl-const-eq {
   color: var(--muted);
   margin-right: 0.25rem;

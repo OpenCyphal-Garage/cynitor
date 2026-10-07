@@ -815,12 +815,15 @@ const DsdlView = (() => {
             ${data.constants.map(c => `
               <tr class="dsdl-frow">
                 <td class="dsdl-fcol-type">${escapeHtml(c.type)}</td>
-                <td class="dsdl-fcol-name">${escapeHtml(c.name)}</td>
+                <td class="dsdl-fcol-name">${escapeHtml(c.name)}${_docHtml(c.doc)}</td>
                 <td class="dsdl-fcol-val"><span class="dsdl-const-eq">=</span> ${escapeHtml(c.value)}</td>
               </tr>`).join('')}
           </tbody>
         </table>
       </div>` : '';
+
+    // The type's comment, its first paragraph on one line: what it is for.
+    const summary = (data.doc || '').split(/\n\s*\n/)[0].replace(/\s*\n\s*/g, ' ').trim();
 
     const depsHtml = data.dependencies.length ? `
       <div class="dsdl-inline-section">
@@ -854,6 +857,7 @@ const DsdlView = (() => {
             <span class="dsdl-badge ${compiledCls}">${compiledLabel}</span>
             ${data.deprecated ? '<span class="dsdl-badge dsdl-badge-warn">Deprecated</span>' : ''}
           </div>
+          ${summary ? `<p class="dsdl-doc-summary">${escapeHtml(summary)}</p>` : ''}
           ${actionsHtml}
           <div class="dsdl-bus-section hidden" id="dsdlBusActivity"></div>
         </div>
@@ -908,6 +912,13 @@ const DsdlView = (() => {
       </div>`;
   };
 
+  // A comment under a field's or constant's name: its first line (often a
+  // unit, "[second]"), the whole of it on hover.
+  const _docHtml = (doc) => {
+    const first = (doc || '').split('\n').find((line) => line.trim())?.trim();
+    return first ? `<div class="dsdl-fcol-doc" title="${escapeHtml(doc)}">${escapeHtml(first)}</div>` : '';
+  };
+
   // A field's type, free to wrap after the dots between its names in a
   // narrow pane ("uavcan.si.unit." over "Scalar.1.0"), not inside a version.
   const _fieldTypeHtml = (type) => escapeHtml(type).replace(/\.(?=[A-Za-z_])/g, '.<wbr>');
@@ -918,7 +929,7 @@ const DsdlView = (() => {
       ${fields.map(f => `
         <tr class="dsdl-frow">
           <td class="dsdl-fcol-type">${_fieldTypeHtml(f.type)}</td>
-          <td class="dsdl-fcol-name">${escapeHtml(f.name)}</td>
+          <td class="dsdl-fcol-name">${escapeHtml(f.name)}${_docHtml(f.doc)}</td>
         </tr>`).join('')}
     </tbody></table>`;
   };
