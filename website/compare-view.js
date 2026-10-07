@@ -1041,6 +1041,30 @@ const _pointsToDraw = (data, xScale) => {
   return out;
 };
 
+// A line's path through its points, as d3.line().defined((p) => !p._gap)
+// draws it (a point after a gap starts it anew), in tenths of a pixel written
+// as whole numbers, for a path scaled by 0.1: as text, a fraction costs six
+// times a whole number, and a dense line's redraw was mostly that.
+const _linePath = (points, xScale, yScale) => {
+  const [t0, t1] = xScale.domain();
+  const [x0, x1] = xScale.range();
+  const [v0, v1] = yScale.domain();
+  const [y0, y1] = yScale.range();
+  const kx = ((x1 - x0) / (t1 - t0)) * 10;
+  const ky = ((y1 - y0) / (v1 - v0)) * 10;
+  let path = '';
+  let pen = 'M';
+  for (const p of points) {
+    if (p._gap) {
+      pen = 'M';
+      continue;
+    }
+    path += `${pen}${Math.round(x0 * 10 + (p.t - t0) * kx)},${Math.round(y0 * 10 + (p.v - v0) * ky)}`;
+    pen = 'L';
+  }
+  return path || null;
+};
+
 const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, cfg) => {
   let overlay = g.select('.plot-compare-overlay');
 
@@ -1104,16 +1128,19 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, cfg) => {
 
   const strokeW = cfg ? cfg.stroke : 1.5;
   const showDots = cfg ? cfg.disconnectPoints : false;
-  // A tenth of a pixel is fine enough, and shortens the path the browser parses.
-  const lineGen = d3.line().defined((p) => !p._gap).x((p) => xScale(p.t)).y((p) => yScale(p.v))
-    .curve(d3.curveLinear).digits(1);
   const showLine = !showDots;
 
-  const lines = overlay.selectAll('.compare-line').data(compareSeries, (d) => d.name);
+  // The lines, written in tenths of a pixel (_linePath) and scaled back; their
+  // stroke and dashes keep their size on screen. Their group holds the clip,
+  // which on a scaled path would be scaled too.
+  let linesG = overlay.select('.compare-lines');
+  if (linesG.empty()) linesG = overlay.append('g').attr('class', 'compare-lines').attr('clip-path', `url(#${clipId})`);
+  const lines = linesG.selectAll('.compare-line').data(compareSeries, (d) => d.name);
   lines.enter().append('path')
     .attr('class', 'compare-line')
     .attr('fill', 'none')
-    .attr('clip-path', `url(#${clipId})`)
+    .attr('transform', 'scale(0.1)')
+    .attr('vector-effect', 'non-scaling-stroke')
     .merge(lines)
     .attr('stroke', (d, i) => d.color || PLOT_COLORS[i % PLOT_COLORS.length])
     .attr('stroke-width', strokeW)
@@ -1122,7 +1149,7 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, cfg) => {
       if (MARKER_SHAPES[st]) return null;
       return THRESHOLD_STYLES[st] || null;
     })
-    .attr('d', (d) => showLine && d.data.length >= 2 ? lineGen(_pointsToDraw(d.data, xScale)) : null)
+    .attr('d', (d) => showLine && d.data.length >= 2 ? _linePath(_pointsToDraw(d.data, xScale), xScale, yScale) : null)
     .attr('opacity', (d) => showLine && d.data.length >= 2 ? 1 : 0);
   lines.exit().remove();
 

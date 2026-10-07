@@ -1298,9 +1298,10 @@ async def _(page):
 
 
 # Points of a graph's first line that fall inside its plot.
-COMPARE_POINTS_SHOWN = """(c) => { const d = c.querySelector('.compare-line')?.getAttribute('d') || '';
+COMPARE_POINTS_SHOWN = """(c) => { const line = c.querySelector('.compare-line'), d = line?.getAttribute('d') || '';
+    const k = line?.transform.baseVal.consolidate()?.matrix.a ?? 1;  // a path drawn scaled (in tenths of a pixel)
     const w = Number(c.querySelector('.plot-overlay').getAttribute('width'));
-    return d.split(/[ML]/).filter(Boolean).map(s => Number(s.split(',')[0])).filter(x => x >= 0 && x <= w).length; }"""
+    return d.split(/[ML]/).filter(Boolean).map(s => k * Number(s.split(',')[0])).filter(x => x >= 0 && x <= w).length; }"""
 
 
 @test("Compare: a paused graph keeps what it showed, in a replay too")
@@ -1784,8 +1785,9 @@ async def _(page):
 
 # A graph's first line: how many points it draws, the highest point (least y),
 # the plot's width and height.
-COMPARE_LINE = """(c) => { const d = c.querySelector('.compare-line')?.getAttribute('d') || '';
-    const ys = d.split(/[ML]/).filter(Boolean).map(s => Number(s.split(',')[1]));
+COMPARE_LINE = """(c) => { const line = c.querySelector('.compare-line'), d = line?.getAttribute('d') || '';
+    const k = line?.transform.baseVal.consolidate()?.matrix.a ?? 1;  // a path drawn scaled (in tenths of a pixel)
+    const ys = d.split(/[ML]/).filter(Boolean).map(s => k * Number(s.split(',')[1]));
     const overlay = c.querySelector('.plot-overlay');
     return {points: ys.length, top: Math.min(...ys), width: Number(overlay.getAttribute('width')),
             height: Number(overlay.getAttribute('height'))}; }"""
@@ -1812,6 +1814,35 @@ async def _(page):
         line = await card.evaluate(COMPARE_LINE)
         assert line["points"] <= 2 * line["width"] + 4, f"{line['width']:.0f} px wide, the line draws {line['points']} points"
         assert line["top"] < 0.1 * line["height"], f"The spike is lost: the line's top is at y {line['top']:.0f}"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
+@test("Compare: a redraw writes lines in whole tenths of a pixel, and filters a publisher's points once")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    # The first line's path: whole numbers only, scaled back, its stroke as wide as before.
+    written = """(c) => { const l = c.querySelector('.compare-line');
+        return {fractions: /\\./.test(l.getAttribute('d')), transform: l.getAttribute('transform'),
+                stroke: l.getAttribute('vector-effect')}; }"""
+    try:
+        await page.wait_for_timeout(300)
+        card = await compare_graph(page, (1100, "value", 10))
+        await page.wait_for_timeout(300)
+        path = await card.evaluate(written)
+        assert path == {"fractions": False, "transform": "scale(0.1)", "stroke": "non-scaling-stroke"}, \
+            f"The line is written {path}"
+        assert await card.evaluate(COMPARE_POINTS_SHOWN) > 0, "Scaled back, the line's points are not in the plot"
+        # Asked twice while nothing new came, a publisher's points are filtered once; a new point makes them anew.
+        same = await page.evaluate("""() => { clearInterval(window.e2eCompareFeed);
+            return plotData('1100:value@10') === plotData('1100:value@10'); }""")
+        assert same, "A publisher's points are filtered again with nothing new in the history"
+        fresh = await page.evaluate("""() => { const before = plotData('1100:value@10');
+            cacheEvent({subject_id: 1100, publisher_node_id: 10, message_type: 'Real32_1_0', rate: 10, subject_rate: 10,
+                payload_bytes: 4, attributes: [{attribute: 'value', value: 99}], timestamp_unix: Date.now() / 1000});
+            const after = plotData('1100:value@10');
+            return after !== before && after[after.length - 1].v === 99; }""")
+        assert fresh, "After a new point, a publisher's points are the old ones"
     finally:
         await page.evaluate(COMPARE_STOP)
 
@@ -2164,7 +2195,7 @@ async def _(page):
 
 # Each graph: is its line clipped by a clip path of its own, as tall as its plot?
 COMPARE_OWN_CLIPS = """() => [...document.querySelectorAll('.compare-graph-card')].map(card => {
-    const id = card.querySelector('.compare-line')?.getAttribute('clip-path')?.match(/#([^)]+)/)?.[1];
+    const id = card.querySelector('.compare-lines')?.getAttribute('clip-path')?.match(/#([^)]+)/)?.[1];
     const clip = id && document.getElementById(id);
     return !!clip && card.contains(clip)
         && clip.querySelector('rect').getAttribute('height') === card.querySelector('.plot-overlay').getAttribute('height'); })"""

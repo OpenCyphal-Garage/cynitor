@@ -228,11 +228,23 @@ const _keyLabel = (key) => {
 
 const compareSeriesName = (s) => _keyLabel(compareSeriesKey(s));
 
-// The points a key names: a field's history, or its one publisher's part of it.
+// The points a key names: a field's history, or its one publisher's part of
+// it, filtered once while that history stays as it is (a redraw asks for a
+// series' points more than once). Kept by the history itself: cleared, it
+// takes its filtered parts with it.
+const _publisherParts = new WeakMap();  // a field's history -> node-ID -> {length, last, points}
 const plotData = (key) => {
   const [base, nid] = key.split('@');
   const points = state.subjectHistory.get(base);
-  return nid == null || !points ? points : points.filter((p) => p.n === Number(nid));
+  if (nid == null || !points) return points;
+  let parts = _publisherParts.get(points);
+  if (!parts) _publisherParts.set(points, (parts = new Map()));
+  const last = points[points.length - 1];
+  const part = parts.get(nid);
+  if (part && part.length === points.length && part.last === last) return part.points;
+  const mine = points.filter((p) => p.n === Number(nid));
+  parts.set(nid, { length: points.length, last, points: mine });
+  return mine;
 };
 
 // A field's points by the node that published them (`n`, see cacheEvent).
