@@ -62,13 +62,13 @@ const DsdlView = (() => {
           </div>
           <div class="dsdl-tree-scroll">
             <div class="dsdl-tree-section">
-              <div class="dsdl-section-header" id="dsdlPublicHeader"></div>
-              <div class="dsdl-tree" id="dsdlTree" role="tree" aria-label="Public regulated types"></div>
+              <div class="dsdl-section-header" id="dsdlCustomHeader"></div>
+              <div class="dsdl-tree" id="dsdlCustomTree" role="tree" aria-label="Custom types"></div>
             </div>
             <div class="dsdl-tree-divider"></div>
             <div class="dsdl-tree-section">
-              <div class="dsdl-section-header" id="dsdlCustomHeader"></div>
-              <div class="dsdl-tree" id="dsdlCustomTree" role="tree" aria-label="Custom types"></div>
+              <div class="dsdl-section-header" id="dsdlPublicHeader"></div>
+              <div class="dsdl-tree" id="dsdlTree" role="tree" aria-label="Public regulated types"></div>
             </div>
           </div>
         </div>

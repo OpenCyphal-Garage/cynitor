@@ -3110,11 +3110,11 @@ async def _(page):
         await page.keyboard.press("ArrowLeft")  # which closes
         closed = await page.evaluate(focused)
         await page.keyboard.press("Tab")  # out of the tree in one step
-        out = await page.evaluate(focused)
+        out = await page.evaluate("document.activeElement.closest('#dsdlTree') === null")
         assert (into, on_type, shown, closed) == (["uavcan", "false"], ["uavcan.node.Heartbeat.1.0", None],
-                                                  "uavcan.node.Heartbeat", ["uavcan.node", "false"]) \
-            and out[0] == "dsdlCustomCompileBtn", \
-            f"Tab into the tree: {into}; → ↓ → ↓ Enter: {on_type}, showing {shown!r}; ← ←: {closed}; Tab: {out}"
+                                                  "uavcan.node.Heartbeat", ["uavcan.node", "false"]) and out, \
+            f"Tab into the tree: {into}; → ↓ → ↓ Enter: {on_type}, showing {shown!r}; ← ←: {closed}; " \
+            f"one Tab leaves the tree: {out}"
     finally:
         await dsdl_close(page, server)
 
@@ -3391,6 +3391,18 @@ async def _(page):
             "Scalar": "2 types match", "Heartbeat": "1 type matches", "zzz": "No type matches", "": "",
             "Reading, its namespace hidden": "No type matches, 1 more in hidden namespaces",
         }, f"Search above the trees: {above}; the count says {said}"
+    finally:
+        await dsdl_close(page, server)
+
+
+@test("DSDL: your own types come first, above the public ones")
+async def _(page):
+    server = _DsdlServer()
+    await dsdl_open(page, server)
+    try:
+        first = await page.evaluate("""document.getElementById('dsdlCustomHeader').getBoundingClientRect().top
+            < document.getElementById('dsdlPublicHeader').getBoundingClientRect().top""")
+        assert first, "The custom types come after all the public ones"
     finally:
         await dsdl_close(page, server)
 
