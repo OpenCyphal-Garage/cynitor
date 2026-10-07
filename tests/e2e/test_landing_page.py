@@ -3530,6 +3530,29 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+@test("DSDL: the editor's preview shows its own source, not a closed editor's")
+async def _(page):
+    server = _DsdlServer()
+    page.once("dialog", lambda dialog: asyncio.ensure_future(dialog.accept()))  # closing a draft asks
+    await dsdl_open(page, server)
+    try:
+        await dsdl_new_type(page)
+        # Typed, closed, and another editor opened, within the preview's 250 ms.
+        await page.evaluate("""() => {
+            const source = document.getElementById('dsdlEditorSource');
+            source.value = 'uint8 stale_field\\n@sealed\\n';
+            source.dispatchEvent(new Event('input', {bubbles: true}));
+            document.getElementById('dsdlEditorClose').click();
+            document.querySelector('[data-add-type="myapp"]').click();
+        }""")
+        await page.wait_for_selector("#dsdlEditorSource", timeout=WAIT_MS)
+        await page.wait_for_timeout(500)
+        preview = await page.locator("#dsdlPreviewContent").inner_text()
+        assert "stale_field" not in preview, f"A new, empty editor's preview shows {preview!r}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

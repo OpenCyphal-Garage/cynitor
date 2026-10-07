@@ -1346,7 +1346,8 @@ const DsdlView = (() => {
     let previewTimer;
     sourceEl?.addEventListener('input', () => {
       clearTimeout(previewTimer);
-      previewTimer = setTimeout(() => _updatePreview(sourceEl.value), 250);
+      // Not into another editor's preview once this one is closed or redrawn.
+      previewTimer = setTimeout(() => { if (sourceEl.isConnected) _updatePreview(sourceEl.value); }, 250);
     });
 
     _initPreviewDrag();
