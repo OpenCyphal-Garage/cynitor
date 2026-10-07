@@ -141,6 +141,34 @@ class TestFixedPortId:
         assert (saved["full_name"], saved["fixed_port_id"]) == ("myapp.Foo.1.0", port)
 
 
+class TestPublicRootNamespaces:
+    """A custom namespace under uavcan or reg would merge into the public
+    types' own, in the tree and in the compiled code."""
+
+    @pytest.mark.parametrize("namespace", ["uavcan", "reg", "uavcan.myext", "reg.udral.mine"])
+    def test_not_created(self, mgr: DsdlManager, namespace: str) -> None:
+        with pytest.raises(ValueError):
+            mgr.create_namespace(namespace)
+        assert not list(mgr.custom_dir.iterdir())
+
+    def test_no_type_saved_into_them(self, mgr: DsdlManager) -> None:
+        with pytest.raises(ValueError):
+            mgr.save_type("uavcan.node", "Heartbeat", "1.0", "uint8 x\n@sealed\n")
+        assert not list(mgr.custom_dir.iterdir())
+
+    def test_names_that_only_start_alike_are_fine(self, mgr: DsdlManager) -> None:
+        mgr.create_namespace("uavcanx")
+        mgr.create_namespace("regulator")
+        assert mgr.list_custom_namespaces() == ["regulator", "uavcanx"]
+
+    def test_one_saved_before_can_still_be_deleted(self, mgr: DsdlManager) -> None:
+        old = mgr.custom_dir / "uavcan" / "node"
+        old.mkdir(parents=True)
+        (old / "Heartbeat.1.0.dsdl").write_text("uint8 x\n@sealed\n")
+        mgr.delete_type("uavcan.node", "Heartbeat", "1.0")
+        assert not (old / "Heartbeat.1.0.dsdl").exists()
+
+
 @pytest.fixture
 def data_dir(tmp_path: Path) -> Path:
     return tmp_path / "data"

@@ -491,7 +491,7 @@ curl -X POST http://localhost:8080/api/dsdl/custom/namespace \
   -H 'Content-Type: application/json' \
   -d '{"namespace": "myapp.sensors"}'
 ```
-Returns `201` with `{"namespace": "myapp.sensors", "path": "..."}`.
+Returns `201` with `{"namespace": "myapp.sensors", "path": "..."}`. A namespace under `uavcan` or `reg`, the public regulated types' own, returns `400`; so does saving a type into one.
 
 **List custom namespaces:**
 ```bash

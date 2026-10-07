@@ -26,6 +26,10 @@ _FIELD_RE = re.compile(
 # uavcan namespace; it refuses any other.
 _FIXED_PORT_RANGES = {"message": (6144, 7167), "service": (256, 383)}
 
+# The public regulated types' root namespaces. A custom namespace under one
+# would merge into theirs, in the tree and in the compiled code.
+_PUBLIC_ROOTS = ("uavcan", "reg")
+
 
 class DsdlManager:
 
@@ -73,14 +77,13 @@ class DsdlManager:
         if self.custom_dir.is_dir():
             paths.append({"path": str(self.custom_dir), "label": "Custom types", "source": "custom"})
 
-        compiled_ok = all((self.compiled_dir / ns).is_dir() for ns in ("uavcan", "reg"))
+        compiled_ok = all((self.compiled_dir / ns).is_dir() for ns in _PUBLIC_ROOTS)
 
-        public_roots = {"uavcan", "reg"}
         last_public_compiled = self._max_compiled_mtime(
-            lambda p: p.parts and p.parts[0] in public_roots
+            lambda p: p.parts and p.parts[0] in _PUBLIC_ROOTS
         ) if compiled_ok else None
         last_custom_compiled = self._max_compiled_mtime(
-            lambda p: p.parts and p.parts[0] not in public_roots,
+            lambda p: p.parts and p.parts[0] not in _PUBLIC_ROOTS,
             self.custom_compiled_dir,
         )
         last_compiled_candidates = [t for t in (last_public_compiled, last_custom_compiled) if t is not None]
@@ -124,7 +127,7 @@ class DsdlManager:
         self._type_index.clear()
 
         if self.public_types_dir.is_dir():
-            for ns_root in ("uavcan", "reg"):
+            for ns_root in _PUBLIC_ROOTS:
                 ns_dir = self.public_types_dir / ns_root
                 if ns_dir.is_dir():
                     self._walk_namespace(ns_dir, ns_root, tree, "regulated")
@@ -192,7 +195,7 @@ class DsdlManager:
         self._type_index.clear()
 
     def create_namespace(self, namespace: str) -> dict[str, Any]:
-        self._validate_namespace(namespace)
+        self._validate_custom_namespace(namespace)
         ns_dir = self.custom_dir / Path(*namespace.split("."))
         if ns_dir.is_dir():
             raise ValueError(f"Namespace '{namespace}' already exists")
@@ -203,7 +206,7 @@ class DsdlManager:
     def save_type(self, namespace: str, type_name: str, version: str,
                   source_text: str, fixed_port_id: Optional[int] = None,
                   overwrite: bool = False) -> dict[str, Any]:
-        self._validate_namespace(namespace)
+        self._validate_custom_namespace(namespace)
         if not re.match(r"^[A-Z][A-Za-z0-9_]*$", type_name):
             raise ValueError("Type name must start with uppercase letter and contain only alphanumeric/underscore")
         if not re.match(r"^\d+\.\d+$", version):
@@ -502,6 +505,16 @@ class DsdlManager:
     def _validate_namespace(namespace: str) -> None:
         if not namespace or not re.match(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$", namespace):
             raise ValueError("Namespace must be lowercase dotted identifiers (e.g. myapp.sensors)")
+
+    @staticmethod
+    def _validate_custom_namespace(namespace: str) -> None:
+        """A namespace new types may go into. Deleting checks only the spelling,
+        so a type saved under uavcan or reg before this was refused can go."""
+        DsdlManager._validate_namespace(namespace)
+        root = namespace.split(".")[0]
+        if root in _PUBLIC_ROOTS:
+            raise ValueError(f"Namespace '{root}' belongs to the public regulated types; "
+                             "start yours with a name of your own (e.g. myapp.sensors)")
 
     def _run_compilation(self, scope: str = "all") -> dict[str, Any]:
         uavcan_dir = self.public_types_dir / "uavcan"
