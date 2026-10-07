@@ -6867,6 +6867,12 @@ details.svc-history-entry[open] > summary::before {
   margin-top: 0.5rem;
 }
 
+.dsdl-doc-note {
+  align-self: center;
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
 .dsdl-confirm-bar {
   justify-content: space-between;
 }

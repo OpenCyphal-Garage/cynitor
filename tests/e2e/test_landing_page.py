@@ -2715,6 +2715,29 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+@test("DSDL: a compiled custom type can be deleted, and the tab says how to change it")
+async def _(page):
+    server = _DsdlServer()
+    await dsdl_open(page, server)
+    try:
+        row = page.locator('#dsdlCustomTree .dsdl-type-row[data-type="myapp.Reading.1.0"]')
+        hint = await row.get_attribute("title")
+        await page.locator('#dsdlCustomTree .dsdl-ns-row[data-ns="myapp"]').click()
+        await row.click()
+        await page.wait_for_selector('.dsdl-doc-title:has-text("Reading")', timeout=WAIT_MS)
+        assert await page.locator("#dsdlDeleteBtn").count() == 1, "A compiled custom type cannot be deleted"
+        assert await page.locator("#dsdlEditBtn").count() == 0, "A compiled custom type offers Edit"
+        pane = await page.locator(".dsdl-doc-head").inner_text()
+        assert "python_compiled_messages" not in hint and "new version" in hint and "new version" in pane, \
+            f"The row says {hint!r}; the pane, {pane!r}"
+        await page.locator("#dsdlDeleteBtn").click()
+        await page.locator("#dsdlDelOk").click()
+        await page.wait_for_selector('.dsdl-type-row[data-type="myapp.Reading.1.0"]', state="detached", timeout=WAIT_MS)
+        assert "myapp.Reading.1.0" not in server.types, "The server still has the type"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

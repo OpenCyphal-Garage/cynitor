@@ -37,6 +37,12 @@ const DsdlView = (() => {
 
   const hide = () => { _stopBusRefresh(); _stopStatusPoll(); };
 
+  // A compiled custom type is not edited: the code the runtime loaded from it
+  // would no longer match it (the server refuses too). It can be deleted,
+  // its compiled code with it, and saved again.
+  const _lockedAdvice = 'Delete it and save it again, or save it under a new version.';
+  const _compiledNote = `Compiled, so it cannot be edited. ${_lockedAdvice}`;
+
   const _placeholderHtml = `
     <div class="dsdl-detail-placeholder">
       <div class="dsdl-detail-placeholder-icon">{&nbsp;}</div>
@@ -414,7 +420,7 @@ const DsdlView = (() => {
       const selected = _selectedType === t.full_name ? ' dsdl-type-selected' : '';
       const lockedCls = t.compiled ? ' dsdl-type-compiled' : ' dsdl-type-uncompiled';
       const lockTitle = t.compiled
-        ? ' title="Compiled — locked. Clear python_compiled_messages/ and recompile to edit."'
+        ? ` title="${escapeHtml(_compiledNote)}"`
         : ' title="Not compiled — recompile to load this type into the running runtime."';
       typesHtml += `
         <div class="dsdl-type-row${selected}${lockedCls}" data-type="${escapeHtml(t.full_name)}"${lockTitle}
@@ -797,11 +803,11 @@ const DsdlView = (() => {
       `<span class="dsdl-src-num">${i + 1}</span>${escapeHtml(line)}`
     ).join('\n');
 
-    const canEdit = data.source === 'custom' && !data.compiled;
-    const actionsHtml = canEdit ? `
+    const actionsHtml = data.source === 'custom' ? `
       <div class="dsdl-doc-actions">
-        <button class="dsdl-editor-btn dsdl-editor-btn-save" id="dsdlEditBtn" aria-label="Edit type">Edit</button>
+        ${data.compiled ? '' : '<button class="dsdl-editor-btn dsdl-editor-btn-save" id="dsdlEditBtn" aria-label="Edit type">Edit</button>'}
         <button class="dsdl-editor-btn dsdl-editor-btn-danger" id="dsdlDeleteBtn" aria-label="Delete type">Delete</button>
+        ${data.compiled ? `<span class="dsdl-doc-note">${escapeHtml(_compiledNote)}</span>` : ''}
       </div>` : '';
 
     panel.innerHTML = `
@@ -836,7 +842,7 @@ const DsdlView = (() => {
     });
 
     document.getElementById('dsdlEditBtn')?.addEventListener('click', () => _openEditorEdit(data));
-    document.getElementById('dsdlDeleteBtn')?.addEventListener('click', () => _confirmDeleteType(data.full_name));
+    document.getElementById('dsdlDeleteBtn')?.addEventListener('click', () => _confirmDeleteType(data.full_name, data.compiled));
 
     _updateBusDetail();
 
@@ -973,14 +979,14 @@ const DsdlView = (() => {
     _renderEditorSplit(prefilledNs);
   };
 
-  const _confirmDeleteType = (fullName) => {
+  const _confirmDeleteType = (fullName, compiled) => {
     const panel = document.getElementById('dsdlDetail');
     if (!panel) return;
     panel.querySelector('.dsdl-confirm-bar')?.remove();
     const bar = document.createElement('div');
     bar.className = 'dsdl-inline-dialog dsdl-confirm-bar';
     bar.innerHTML = `
-      <span class="dsdl-confirm-text">Delete <code class="dsdl-confirm-code">${escapeHtml(fullName)}</code>?</span>
+      <span class="dsdl-confirm-text">Delete <code class="dsdl-confirm-code">${escapeHtml(fullName)}</code>${compiled ? ' and its compiled code' : ''}?</span>
       <button class="dsdl-dialog-ok dsdl-dialog-danger" id="dsdlDelOk">Delete</button>
       <button class="dsdl-dialog-cancel" id="dsdlDelCancel" aria-label="Cancel delete">&times;</button>`;
     panel.insertBefore(bar, panel.firstChild);
@@ -1093,7 +1099,7 @@ const DsdlView = (() => {
       ? `<div class="dsdl-editor-hint">No namespaces yet — create one with the “+” button in the Custom section.</div>`
       : '';
 
-    const policyTip = "Only types that aren't compiled can be edited or deleted. Compiled types are loaded by the running CAN runtime — changing them would diverge source from live code. Recompile (or clear python_compiled_messages/) to free a type for editing.";
+    const policyTip = `Only types that aren't compiled can be edited. Compiled types are loaded by the running CAN runtime — changing them would diverge source from live code. To change one: ${_lockedAdvice.toLowerCase()}`;
 
     editorPanel.innerHTML = `
       <div class="dsdl-editor-toolbar">
@@ -1391,7 +1397,7 @@ const DsdlView = (() => {
     if (form && !panel.querySelector('.dsdl-editor-locked-banner')) {
       const banner = document.createElement('div');
       banner.className = 'dsdl-editor-locked-banner';
-      banner.textContent = 'This type was compiled — editing is locked. Clear python_compiled_messages/ and recompile to edit it again.';
+      banner.textContent = `This type was compiled — editing is locked. ${_lockedAdvice}`;
       panel.insertBefore(banner, form);
     }
   };
