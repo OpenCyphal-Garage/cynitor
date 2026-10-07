@@ -1885,6 +1885,25 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: its everyday buttons are plain, as in the Graph tab: colour is for the unusual")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    try:
+        await page.wait_for_timeout(300)
+        await compare_graph(page, (1100, "value"))
+        coloured = await page.evaluate("""() => {
+            const probe = document.createElement('span');
+            probe.style.color = 'var(--accent)';
+            document.body.append(probe);
+            const accent = getComputedStyle(probe).color;
+            probe.remove();
+            return [...document.querySelectorAll('.compare-toolbar button, .compare-graph-save, .compare-card-editor .plot-compare-add')]
+                .filter(b => getComputedStyle(b).color === accent).map(b => b.textContent.trim()); }""")
+        assert not coloured, f"These everyday buttons are in the accent colour: {coloured}"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 @test("Compare: a plot carries its graph's name, not the word Compare")
 async def _(page):
     await page.evaluate(COMPARE_START)
