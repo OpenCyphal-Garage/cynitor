@@ -3045,6 +3045,39 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+# The "Active on bus" chips and toggle not cut off by their section.
+BUS_SHOWN = """() => { const section = document.getElementById('dsdlBusActivity').getBoundingClientRect();
+    const inside = (el) => el && el.getBoundingClientRect().bottom <= section.bottom + 0.5;
+    const toggle = document.querySelector('#dsdlBusActivity .dsdl-bus-toggle');
+    return {chips: [...document.querySelectorAll('#dsdlBusActivity .dsdl-bus-chip')].filter(inside).length,
+            toggle: toggle?.textContent.trim() ?? null, toggleShown: inside(toggle)}; }"""
+
+
+@test("DSDL: a type busy on the bus shows a few of its publishers, and how many more")
+async def _(page):
+    server = _DsdlServer()
+    nodes = {"node_count": 12, "nodes": {str(nid): _graph_node(nid, f"org.example.dev{nid}", [7509], [], uid_byte=nid)
+                                         for nid in range(10, 22)}}
+    setup = f"""() => {{
+        state.latestNodesPayload = {json.dumps(nodes)};
+        cacheEvent({{subject_id: 7509, publisher_node_id: 10, message_type: 'Heartbeat_1_0', rate: 1,
+                    subject_rate: 12, payload_bytes: 7, attributes: [], timestamp_unix: Date.now() / 1000}});
+    }}"""
+    await dsdl_open(page, server, setup)
+    try:
+        await dsdl_show(page, "uavcan.node.Heartbeat.1.0")
+        await page.wait_for_selector("#dsdlBusActivity .dsdl-bus-toggle", state="attached", timeout=WAIT_MS)
+        folded = await page.evaluate(BUS_SHOWN)
+        assert folded["toggleShown"] and folded["toggle"] == f"+{12 - folded['chips']} more", \
+            f"12 publishers, folded: {folded}"
+        await page.locator("#dsdlBusActivity .dsdl-bus-toggle").click()
+        await page.wait_for_timeout(100)
+        unfolded = await page.evaluate(BUS_SHOWN)
+        assert unfolded == {"chips": 12, "toggle": "show less", "toggleShown": True}, f"12 publishers, unfolded: {unfolded}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

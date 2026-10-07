@@ -6498,11 +6498,6 @@ details.svc-history-entry[open] > summary::before {
   position: relative;
 }
 
-.dsdl-bus-section.dsdl-bus-collapsed {
-  max-height: 3.25rem;
-  overflow: hidden;
-}
-
 .dsdl-bus-section .dsdl-bus-dot {
   align-self: center;
 }

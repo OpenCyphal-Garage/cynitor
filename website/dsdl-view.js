@@ -678,6 +678,7 @@ const DsdlView = (() => {
   };
 
   let _busExpanded = false;
+  const _BUS_CHIPS_FOLDED = 4;  // the publishers shown before "+N more"
 
   const _updateBusDetail = () => {
     const section = document.getElementById('dsdlBusActivity');
@@ -689,41 +690,22 @@ const DsdlView = (() => {
       return;
     }
     section.classList.remove('hidden');
-    const chips = entries.map(s =>
+    // Folded, the first few and the count of the rest, its button in view.
+    const shown = _busExpanded ? entries : entries.slice(0, _BUS_CHIPS_FOLDED);
+    const chips = shown.map(s =>
       `<span class="dsdl-bus-chip">subject ${s.subjectId} · ${escapeHtml(_formatNodeLabel(s.nodeId))}</span>`
     ).join('');
+    const more = entries.length - shown.length;
+    const toggle = more ? `+${more} more` : entries.length > _BUS_CHIPS_FOLDED ? 'show less' : '';
 
     section.innerHTML = `
       <span class="dsdl-bus-dot"></span>
       <span class="dsdl-bus-label">Active on bus</span>
-      ${chips}`;
-
-    if (!_busExpanded) {
-      section.classList.add('dsdl-bus-collapsed');
-    } else {
-      section.classList.remove('dsdl-bus-collapsed');
-    }
-
-    requestAnimationFrame(() => {
-      const overflows = section.scrollHeight > section.clientHeight + 2;
-      const existing = section.querySelector('.dsdl-bus-toggle');
-      if (overflows && !_busExpanded) {
-        if (!existing) {
-          const btn = document.createElement('button');
-          btn.className = 'dsdl-bus-toggle';
-          btn.textContent = `+${entries.length} more`;
-          btn.addEventListener('click', () => { _busExpanded = true; _updateBusDetail(); });
-          section.appendChild(btn);
-        }
-      } else if (_busExpanded && entries.length > 4) {
-        if (!existing) {
-          const btn = document.createElement('button');
-          btn.className = 'dsdl-bus-toggle';
-          btn.textContent = 'show less';
-          btn.addEventListener('click', () => { _busExpanded = false; _updateBusDetail(); });
-          section.appendChild(btn);
-        }
-      }
+      ${chips}
+      ${toggle ? `<button class="dsdl-bus-toggle" aria-expanded="${_busExpanded}">${toggle}</button>` : ''}`;
+    section.querySelector('.dsdl-bus-toggle')?.addEventListener('click', () => {
+      _busExpanded = !_busExpanded;
+      _updateBusDetail();
     });
   };
 
