@@ -1867,6 +1867,24 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: with no graph, the tab says how to start, and starts one")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    empty = page.locator(".compare-empty")
+    try:
+        await page.wait_for_timeout(300)
+        assert await page.evaluate("state.compareGraphs.length") == 0, "The test needs no graph to start from"
+        assert await empty.is_visible(), "With no graph, the tab is blank"
+        words = await empty.inner_text()
+        assert "No graphs yet" in words and "Compare button" in words, f"The empty tab says {words!r}"
+        await empty.locator("button", has_text="Add a graph").click()
+        await page.wait_for_timeout(300)
+        assert await page.evaluate("state.compareGraphs.length") == 1, "Add a graph adds none"
+        assert not await empty.is_visible(), "With a graph, the empty tab's words stay"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 @test("Compare: a plot carries its graph's name, not the word Compare")
 async def _(page):
     await page.evaluate(COMPARE_START)

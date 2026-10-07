@@ -205,8 +205,10 @@ const initCompareView = () => {
         for (const g of graphs) state.compareGraphs.push(newCompareGraph(g));
         if (saved) state.savedCompareConfigs = saved;
         saveSettings();
-        for (const card of cardsContainer.children) _cardWatcher.unobserve(card);
-        cardsContainer.innerHTML = '';
+        for (const card of [...cardsContainer.querySelectorAll('.compare-graph-card')]) {
+          _cardWatcher.unobserve(card);
+          card.remove();
+        }
         for (const graph of state.compareGraphs) cardsContainer.appendChild(_buildGraphCard(graph));
         startCompareAnim();
         showToast('Session imported', 'info', 2000);
@@ -226,6 +228,17 @@ const initCompareView = () => {
 
   const cardsContainer = document.createElement('div');
   cardsContainer.className = 'compare-cards';
+
+  // With no graph yet, the tab says how to start (_syncCompareEmpty).
+  const empty = document.createElement('div');
+  empty.className = 'compare-empty hidden';
+  empty.innerHTML = svcStateMsg(
+    '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 18 8 10 12 14 16 6 20 12"/></svg>',
+    'No graphs yet',
+    'Add a graph, then tick the series to compare in its list. A Nodes or Subjects plot opens its series here too, with its Compare button.',
+    '<button type="button" class="graph-btn compare-empty-add">Add a graph</button>');
+  empty.querySelector('.compare-empty-add').addEventListener('click', () => addBtn.click());
+  cardsContainer.appendChild(empty);
 
   for (const graph of state.compareGraphs) {
     const card = _buildGraphCard(graph);
@@ -650,6 +663,11 @@ const _syncPauseAll = () => {
   if (btn && btn.textContent !== label) btn.textContent = label;
 };
 
+// The empty tab's words, while there is no graph, however the last one went.
+const _syncCompareEmpty = () => {
+  document.querySelector('#compareContainer .compare-empty')?.classList.toggle('hidden', state.compareGraphs.length > 0);
+};
+
 let _seriesListsRefreshed = 0;
 
 // Runs while the tab is open, paused graphs or not: a graph resumed on its
@@ -660,6 +678,7 @@ const _compareAnimTick = () => {
     if (!graph.paused) _renderOneGraph(graph, true);
   }
   _syncPauseAll();
+  _syncCompareEmpty();
   // An open list of series follows what is heard, once a second.
   if (Date.now() - _seriesListsRefreshed >= 1000) {
     _seriesListsRefreshed = Date.now();
@@ -675,6 +694,7 @@ const startCompareAnim = () => {
     if (graph.paused) _renderOneGraph(graph);
   }
   _syncPauseAll();
+  _syncCompareEmpty();
   if (!_compareAnimTimer) {
     _compareAnimTimer = window.setTimeout(_compareAnimTick, PLOT_TICK_MS);
   }

@@ -2482,6 +2482,14 @@ button:focus-visible,
   min-height: 0;
 }
 
+/* No graph yet: how to start, in the middle of the tab. */
+.compare-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 /* Graphs share the view and never get shorter than their content: with more
    than fit, the list scrolls. */
 .compare-graph-card {
