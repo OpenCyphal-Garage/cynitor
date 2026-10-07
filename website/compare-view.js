@@ -649,9 +649,6 @@ const _renderCompareGraphNow = (graph, plotArea) => {
     if (svgEl.getAttribute('aria-label') !== about) svgEl.setAttribute('aria-label', about);
   }
 
-  const titleEl = plotArea.querySelector('.plot-title');
-  if (titleEl) titleEl.style.display = 'none';
-
   const { xScale, panelH } = computePlotScales([], w, totalPanelsH, visibleSeries, graph);
 
   const g = d3.select(gNode);

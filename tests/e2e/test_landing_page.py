@@ -2031,6 +2031,41 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+# Parts of a graph shown, hidden or placed by an inline style, as "tag.class: style".
+COMPARE_INLINE_STYLES = """(c) => [...c.querySelectorAll('[style]')]
+    .filter(e => /display|cursor|position/.test(e.getAttribute('style')))
+    .map(e => `${e.tagName.toLowerCase()}.${e.getAttribute('class')}: ${e.getAttribute('style')}`)"""
+
+
+@test("Compare: a graph's parts show and hide by class, not inline style, and a dragged plot shows a grabbing hand")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    # Which of the derived row's Source B and Window boxes show.
+    derived_shown = """(c) => ['Source B', 'Window size (samples)'].map(l =>
+        c.querySelector(`.plot-derived-section [aria-label="${l}"]`).getClientRects().length > 0)"""
+    try:
+        await page.wait_for_timeout(300)
+        card = await compare_graph(page, (1100, "value"))
+        assert await card.evaluate(derived_shown) == [True, False], "Delta (A−B) should ask for Source B, not a window"
+        await card.locator(".plot-derived-type").select_option("rolling_avg")
+        assert await card.evaluate(derived_shown) == [False, True], "Rolling Avg should ask for a window, not Source B"
+        plot = card.locator(".detail-plot-area svg")
+        box = await plot.bounding_box()
+        x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+        await page.mouse.move(x, y)  # the tooltip shows
+        await page.mouse.down()
+        await page.mouse.move(x + 60, y, steps=4)
+        cursor = await card.evaluate("(c) => getComputedStyle(c.querySelector('.plot-overlay')).cursor")
+        await page.mouse.up()
+        await page.mouse.move(box["x"] + box["width"] / 2, box["y"] - 200)  # out: the tooltip hides
+        assert cursor == "grabbing", f"Dragged, the plot shows the {cursor!r} cursor"
+        await card.locator(".plot-legend-swatch").first.click()  # its colour picker opens
+        inline = await card.evaluate(COMPARE_INLINE_STYLES)
+        assert not inline, f"Shown, hidden or placed by inline styles: {inline}"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

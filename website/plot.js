@@ -62,8 +62,8 @@ const _openSwatchPicker = (swatch, currentColor, onChange) => {
   swatch._pickerOpen = true;
   const input = document.createElement('input');
   input.type = 'color';
+  input.className = 'plot-swatch-picker-input';
   input.value = _colorToHex(currentColor);
-  input.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;border:none;padding:0';
   swatch.appendChild(input);
   let committed = false;
   input.addEventListener('input', () => {
@@ -846,7 +846,7 @@ const buildComparePanel = (graph, onUpdate) => {
 
   const windowInput = document.createElement('input');
   windowInput.type = 'number';
-  windowInput.className = 'plot-threshold-input';
+  windowInput.className = 'plot-derived-window';
   windowInput.placeholder = 'Window';
   windowInput.value = '10';
   windowInput.min = '2';
@@ -875,8 +875,8 @@ const buildComparePanel = (graph, onUpdate) => {
 
   const _updateDerivedVisibility = () => {
     const info = DERIVED_TYPES[typeSel.value];
-    srcBSel.style.display = info?.sources === 2 ? '' : 'none';
-    windowInput.style.display = info?.hasWindow ? '' : 'none';
+    srcBSel.classList.toggle('hidden', info?.sources !== 2);
+    windowInput.classList.toggle('hidden', !info?.hasWindow);
   };
 
   typeSel.addEventListener('change', _updateDerivedVisibility);
@@ -1124,10 +1124,9 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
   g.append('g').attr('class', 'plot-panels');
   g.append('g').attr('class', 'plot-x-axis');
   g.append('line').attr('class', 'plot-crosshair').attr('opacity', 0);
-  g.append('rect').attr('class', 'plot-overlay').attr('fill', 'none').style('pointer-events', 'all');
+  g.append('rect').attr('class', 'plot-overlay').attr('fill', 'none').attr('pointer-events', 'all');
   const tooltip = document.createElement('div');
-  tooltip.className = 'plot-tooltip';
-  tooltip.style.display = 'none';
+  tooltip.className = 'plot-tooltip hidden';
   plotArea.appendChild(tooltip);
   return g.node();
 };
@@ -1636,7 +1635,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
   const showCrosshairAt = (mx) => {
     if (mx < 0 || mx > w || !visible.length) {
       crosshair.attr('opacity', 0);
-      tooltipEl.style.display = 'none';
+      tooltipEl.classList.add('hidden');
       return;
     }
     const t0 = xScale.invert(mx);
@@ -1644,7 +1643,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
     const first = samples.find((x) => x.sample);
     if (!first) {
       crosshair.attr('opacity', 0);
-      tooltipEl.style.display = 'none';
+      tooltipEl.classList.add('hidden');
       return;
     }
     crosshair.attr('opacity', 1).attr('x1', mx).attr('x2', mx);
@@ -1656,7 +1655,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
       return `<div class="plot-tooltip-row"><span class="plot-tooltip-swatch" style="background:${_safeColor(color)}"></span><span class="plot-tooltip-name">${escapeHtml(s.name)}</span><span class="plot-tooltip-val">${escapeHtml(v)}</span></div>`;
     }).join('');
     tooltipEl.innerHTML = `<div class="plot-tooltip-time">${formattedT}</div>${rows}`;
-    tooltipEl.style.display = 'block';
+    tooltipEl.classList.remove('hidden');
     let tx = mx + PLOT_MARGIN.left + 12;
     const tw = tooltipEl.offsetWidth;
     if (tx + tw > rect.width - 4) tx = mx + PLOT_MARGIN.left - 12 - tw;
@@ -1672,7 +1671,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
 
   const hideCrosshair = () => {
     crosshair.attr('opacity', 0);
-    tooltipEl.style.display = 'none';
+    tooltipEl.classList.add('hidden');
   };
 
   if (syncContainer) {
@@ -1818,7 +1817,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
           _dashArray: _drawDashFor(style, width),
           _linecap: style === 'dashed' ? 'butt' : 'round',
         };
-        svgEl.style.cursor = 'crosshair';
+        svgEl.classList.add('plot-drawing');
         return;
       }
       dragStart = e.clientX;
@@ -1853,7 +1852,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
       if (!didDrag && Math.abs(e.clientX - dragStart) < DRAG_THRESHOLD) return;
       if (!didDrag) {
         didDrag = true;
-        svgEl.style.cursor = 'grabbing';
+        svgEl.classList.add('plot-grabbing');
       }
       const ctx = plotArea._plotCtx || {};
       const curXScale = ctx.xScale || xScale;
@@ -1878,7 +1877,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
           if (plotArea._zoomRestart) plotArea._zoomRestart();
         }
         drawingStroke = null;
-        svgEl.style.cursor = '';
+        svgEl.classList.remove('plot-drawing');
         return;
       }
       if (dragStart === null) return;
@@ -1886,7 +1885,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
       const wasShift = downShift;
       const mx = downMx;
       dragStart = null;
-      svgEl.style.cursor = '';
+      svgEl.classList.remove('plot-grabbing');
       const _markerDone = () => {
         cfg._fingerprint = '';
         saveSettings();
