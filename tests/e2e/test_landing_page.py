@@ -3174,6 +3174,43 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+def _layout(low, high, sealed=True, extent=None, union=False):
+    return {"union": union, "sealed": sealed, "extent_bytes": high if extent is None else extent,
+            "size_bytes": [low, high]}
+
+
+# Each field card's title and, beside it, its size.
+CARD_TITLES = """() => [...document.querySelectorAll('#dsdlDetail .dsdl-card-label')]
+    .filter((label) => label.querySelector('.dsdl-card-meta'))
+    .map((label) => [label.firstChild.textContent.trim(), label.querySelector('.dsdl-card-meta').textContent])"""
+
+
+@test("DSDL: a type's pane says whether it is a union, deprecated, and how many bytes it takes")
+async def _(page):
+    server = _DsdlServer()
+    server.types["uavcan.node.Heartbeat.1.0"]["layout"] = _layout(7, 7, sealed=False, extent=12)
+    value = _dsdl_type("uavcan.register.Value.1.0", text="uavcan.primitive.Empty.1.0 empty\nuint8 natural8\n@sealed\n")
+    value.update(deprecated=True, layout=_layout(1, 259, union=True))
+    info = _dsdl_type("uavcan.node.GetInfo.1.0", port=430, text="@sealed\n---\nuint8[<=50] name\n@extent 448 * 8\n")
+    info["layout"] = {"request": _layout(0, 0), "response": _layout(1, 51, sealed=False, extent=448)}
+    server.types.update({value["full_name"]: value, info["full_name"]: info})
+    await dsdl_open(page, server)
+    try:
+        seen = {}
+        for name in ("uavcan.node.Heartbeat.1.0", "uavcan.register.Value.1.0", "uavcan.node.GetInfo.1.0"):
+            await dsdl_show(page, name)
+            badges = await page.locator(".dsdl-badge-row").inner_text()
+            seen[name] = (await page.evaluate(CARD_TITLES), "Deprecated" in badges)
+        assert seen == {
+            "uavcan.node.Heartbeat.1.0": ([["Fields", "7 bytes · extent 12 bytes"]], False),
+            "uavcan.register.Value.1.0": ([["One of", "1–259 bytes · sealed"]], True),
+            "uavcan.node.GetInfo.1.0": ([["Request", "0 bytes · sealed"],
+                                         ["Response", "1–51 bytes · extent 448 bytes"]], False),
+        }, f"Card titles and sizes, and a Deprecated badge: {seen}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

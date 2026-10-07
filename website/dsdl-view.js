@@ -802,24 +802,10 @@ const DsdlView = (() => {
 
     _lastDetailData = data;
 
-    let fieldsHtml;
-    if (data.kind === 'service') {
-      fieldsHtml = `
-        <div class="dsdl-card">
-          <div class="dsdl-card-label">Request</div>
-          ${_renderFieldTable(data.fields.request || [])}
-        </div>
-        <div class="dsdl-card">
-          <div class="dsdl-card-label">Response</div>
-          ${_renderFieldTable(data.fields.response || [])}
-        </div>`;
-    } else {
-      fieldsHtml = `
-        <div class="dsdl-card">
-          <div class="dsdl-card-label">Fields</div>
-          ${_renderFieldTable(data.fields || [])}
-        </div>`;
-    }
+    const fieldsHtml = data.kind === 'service'
+      ? _fieldCardHtml('Request', data.fields.request, data.layout?.request)
+        + _fieldCardHtml('Response', data.fields.response, data.layout?.response)
+      : _fieldCardHtml('Fields', data.fields, data.layout);
 
     const constantsHtml = data.constants.length ? `
       <div class="dsdl-card">
@@ -866,6 +852,7 @@ const DsdlView = (() => {
             ${portBadge}
             <span class="dsdl-badge ${sourceCls}">${sourceLabel}</span>
             <span class="dsdl-badge ${compiledCls}">${compiledLabel}</span>
+            ${data.deprecated ? '<span class="dsdl-badge dsdl-badge-warn">Deprecated</span>' : ''}
           </div>
           ${actionsHtml}
           <div class="dsdl-bus-section hidden" id="dsdlBusActivity"></div>
@@ -898,6 +885,27 @@ const DsdlView = (() => {
       if (editorPanel) editorPanel.style.flex = `0 0 ${_editorSplitRatio * 100}%`;
       if (detail) detail.style.flex = '1';
     }
+  };
+
+  // "7 bytes · extent 12 bytes", "1–259 bytes · sealed": what a type takes
+  // on the wire, then sealed, or how far a later version may grow it.
+  const _layoutText = (layout) => {
+    const [low, high] = layout.size_bytes;
+    const size = low === high ? `${low} ${low === 1 ? 'byte' : 'bytes'}` : `${low}–${high} bytes`;
+    return `${size} · ${layout.sealed ? 'sealed' : `extent ${layout.extent_bytes} bytes`}`;
+  };
+
+  // A card of fields, titled "one of" for a union, its size beside the title.
+  const _fieldCardHtml = (title, fields, layout) => {
+    const union = Boolean(layout?.union);
+    const heading = !union ? title : title === 'Fields' ? 'One of' : `${title}, one of`;
+    const hint = union ? ' title="A union: it holds one of these fields at a time"' : '';
+    const meta = layout ? `<span class="dsdl-card-meta">${escapeHtml(_layoutText(layout))}</span>` : '';
+    return `
+      <div class="dsdl-card">
+        <div class="dsdl-card-label"${hint}>${heading}${meta}</div>
+        ${_renderFieldTable(fields || [])}
+      </div>`;
   };
 
   // A field's type, free to wrap after the dots between its names in a

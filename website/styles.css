@@ -6343,6 +6343,9 @@ details.svc-history-entry[open] > summary::before {
 }
 
 .dsdl-card-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
   font-size: 0.6875rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -6351,6 +6354,14 @@ details.svc-history-entry[open] > summary::before {
   padding: 0.5rem 0.875rem 0.375rem;
   border-bottom: 0.0625rem solid var(--border-subtle);
   background: var(--surface-2);
+}
+
+/* Beside a field card's title: its size on the wire, a value. */
+.dsdl-card-meta {
+  font-family: var(--mono);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 /* ── Field table ── */
