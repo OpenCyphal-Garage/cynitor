@@ -1847,6 +1847,37 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: Min/Max follows the lowest and highest of the last samples, and an Add says what it is missing")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    toasts = "() => [...document.querySelectorAll('#toastContainer .toast')].map(t => t.textContent)"
+    try:
+        # 1500 rose 0, 1, ... 19 over the last 20 s.
+        await page.evaluate("""() => { const now = Date.now() / 1000;
+            state.subjectHistory.set('1500:value', Array.from({length: 20}, (_, i) => ({t: now - 19.5 + i, v: i, n: 10}))); }""")
+        card = await compare_graph(page, (1500, "value"))
+        await card.locator('.plot-window-btn[data-secs="30"]').click()
+        await card.locator(".plot-derived-type").select_option("min_max")
+        window_box = card.locator('[aria-label="Window size (samples)"]')
+        assert await window_box.is_visible(), "Min/Max asks for no window of samples"
+        await window_box.fill("5")
+        await card.locator('[aria-label="Source A"]').select_option("1500:value@10")
+        await card.locator('[aria-label="Add derived series"]').click()
+        await page.wait_for_timeout(400)
+        rows = await card.evaluate(COMPARE_LEGEND_ROWS)
+        last = {name[:4]: values[1] for name, values in rows.items() if name.startswith(("Min5", "Max5"))}
+        assert last == {"Min5": "15", "Max5": "19"}, f"Over its last 5 samples, 15 to 19, Min/Max ends at {last} ({list(rows)})"
+        # Delta with no Source B, then a threshold with no value: each Add says what it is missing.
+        await card.locator(".plot-derived-type").select_option("delta")
+        await card.locator('[aria-label="Add derived series"]').click()
+        await card.locator('[aria-label="Add threshold line"]').click()
+        said = await page.evaluate(toasts)
+        assert any("Source B" in t for t in said) and any("threshold" in t for t in said), f"The Adds say {said}"
+        assert await page.evaluate("state.compareGraphs[0].derivedSeries.length") == 1, "Delta was added with no Source B"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 @test("Compare: a graph scrolled out of view is not drawn, and catches up in view")
 async def _(page):
     await page.evaluate(COMPARE_START)

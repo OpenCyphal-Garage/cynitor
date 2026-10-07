@@ -96,7 +96,7 @@ const openPlotInCompare = (plotArea) => {
 const DERIVED_TYPES = {
   delta:       { label: 'Delta (A−B)',   sources: 2, hasWindow: false },
   rolling_avg: { label: 'Rolling Avg',        sources: 1, hasWindow: true  },
-  min_max:     { label: 'Min/Max',             sources: 1, hasWindow: false },
+  min_max:     { label: 'Rolling Min/Max',    sources: 1, hasWindow: true  },
   rate:        { label: 'Rate (dv/dt)',       sources: 1, hasWindow: false },
   ratio:       { label: 'Ratio (A/B)',        sources: 2, hasWindow: false },
 };
@@ -155,21 +155,27 @@ const _computeDerived = (type, dataA, dataB, windowSize) => {
       return [result];
     }
     case 'min_max': {
+      // At each sample, the lowest and highest of the last `windowSize`: an
+      // envelope that follows the signal. The window's candidates are kept
+      // in order (lowest or highest first), so it costs one pass.
       if (!dataA || dataA.length < 2) return [[], []];
-      const tMin = windowSize > 0 ? dataA[dataA.length - 1].t - windowSize : -Infinity;
-      let lo = Infinity, hi = -Infinity;
-      for (const p of dataA) {
-        if (p.t < tMin) continue;
-        if (p.v < lo) lo = p.v;
-        if (p.v > hi) hi = p.v;
+      const w = Math.max(2, windowSize || 10);
+      const lows = [];
+      const highs = [];
+      const lo = [];  // indexes whose values rise
+      const hi = [];  // indexes whose values fall
+      for (let i = 0; i < dataA.length; i++) {
+        const v = dataA[i].v;
+        while (lo.length && dataA[lo[lo.length - 1]].v >= v) lo.pop();
+        while (hi.length && dataA[hi[hi.length - 1]].v <= v) hi.pop();
+        lo.push(i);
+        hi.push(i);
+        if (lo[0] <= i - w) lo.shift();
+        if (hi[0] <= i - w) hi.shift();
+        lows.push({ t: dataA[i].t, v: dataA[lo[0]].v });
+        highs.push({ t: dataA[i].t, v: dataA[hi[0]].v });
       }
-      if (!isFinite(lo)) return [[], []];
-      const t0 = Math.max(dataA[0].t, tMin === -Infinity ? dataA[0].t : tMin);
-      const t1 = dataA[dataA.length - 1].t;
-      return [
-        [{ t: t0, v: lo }, { t: t1, v: lo }],
-        [{ t: t0, v: hi }, { t: t1, v: hi }],
-      ];
+      return [lows, highs];
     }
     default:
       return [];
@@ -190,7 +196,7 @@ const _derivedLabel = (d) => {
 
 const _derivedMinMaxLabels = (d) => {
   const nameA = d.sourceA ? _keyLabel(d.sourceA) : '?';
-  return [`Min(${nameA})`, `Max(${nameA})`];
+  return [`Min${d.window || 10}(${nameA})`, `Max${d.window || 10}(${nameA})`];
 };
 
 const _nextDerivedId = (graph) => {
@@ -605,13 +611,24 @@ const buildComparePanel = (graph, onUpdate) => {
   derivedAddBtn.type = 'button';
   derivedAddBtn.textContent = 'Add';
   derivedAddBtn.setAttribute('aria-label', 'Add derived series');
+  // What a derived series still needs, with the box to fill; or null.
+  const _derivedMissing = (info) => {
+    if (!graph.series.length) return [seriesFilter, 'Add a series to the graph first: derived series are made from its series'];
+    if (!srcASel.value) return [srcASel, `Pick Source A for ${info.label}`];
+    if (info.sources === 2 && !srcBSel.value) return [srcBSel, `Pick Source B for ${info.label}`];
+    return null;
+  };
   derivedAddBtn.addEventListener('click', () => {
     const type = typeSel.value;
     const info = DERIVED_TYPES[type];
     if (!info) return;
+    const missing = _derivedMissing(info);
+    if (missing) {
+      missing[0].focus();
+      showToast(missing[1], 'error');
+      return;
+    }
     const srcA = srcASel.value;
-    if (!srcA) return;
-    if (info.sources === 2 && !srcBSel.value) return;
     const srcB = info.sources === 2 ? srcBSel.value : '';
     const win = info.hasWindow ? Math.max(2, parseInt(windowInput.value) || 10) : 0;
     if (!graph.derivedSeries) graph.derivedSeries = [];
@@ -664,7 +681,11 @@ const buildComparePanel = (graph, onUpdate) => {
   thAddBtn.setAttribute('aria-label', 'Add threshold line');
   thAddBtn.addEventListener('click', () => {
     const val = parseFloat(thInput.value);
-    if (isNaN(val)) return;
+    if (isNaN(val)) {
+      thInput.focus();
+      showToast('Type a value for the threshold', 'error');
+      return;
+    }
     graph.thresholds.push({
       value: val,
       label: thNameInput.value.trim() || String(val),
@@ -1241,19 +1262,16 @@ const _renderCompareGraphNow = (graph, plotArea) => {
     const dataA = _getRawData(d.sourceA);
     const dataB = _getRawData(d.sourceB);
     const ready = dataA?.length >= 2 && (DERIVED_TYPES[d.type]?.sources !== 2 || dataB?.length >= 2);
-    const win = d.type === 'min_max' ? (graph.timeWindow || 0) : d.window;
-    const outputs = ready ? _computeDerived(d.type, dataA, dataB, win) : [];
+    const outputs = ready ? _computeDerived(d.type, dataA, dataB, d.window) : [];
     const entry = {
       color: d.color || PLOT_COLORS[(graph.series.length + di) % PLOT_COLORS.length],
       _derived: true, _derivedId: d.id, _lineStyle: d.lineStyle || 'dashed',
     };
-    if (d.type === 'min_max') {
-      // Two flat lines across the window: no gaps to mark.
-      _derivedMinMaxLabels(d).forEach((name, i) => addSeries({ ...entry, name }, outputs[i]));
-    } else {
-      if (outputs[0]) _tagGaps(outputs[0]);
-      addSeries({ ...entry, name: _derivedLabel(d) }, outputs[0]);
-    }
+    const names = d.type === 'min_max' ? _derivedMinMaxLabels(d) : [_derivedLabel(d)];
+    names.forEach((name, i) => {
+      if (outputs[i]) _tagGaps(outputs[i]);
+      addSeries({ ...entry, name }, outputs[i]);
+    });
   });
 
   const visibleSeries = compareSeries.filter(s => !graph._hidden.has(s.name));
