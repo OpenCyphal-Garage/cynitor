@@ -169,6 +169,85 @@ class TestPublicRootNamespaces:
         assert not (old / "Heartbeat.1.0.dsdl").exists()
 
 
+_PUBLIC_TYPES = {
+    "uavcan/node/7509.Heartbeat.1.0.dsdl": """\
+# Abstract node status information.
+#
+# Every node publishes it.
+
+uint16 MAX_PUBLICATION_PERIOD = 1   # [second]
+
+uint32 uptime                       # [second]
+# Seconds since the node started.
+
+uint8 vendor_specific_status_code
+@extent 12 * 8
+""",
+    "uavcan/primitive/Empty.1.0.dsdl": "@sealed\n",
+    "uavcan/register/Value.1.0.dsdl": """\
+# One value of several kinds.
+@union
+uavcan.primitive.Empty.1.0 empty    # Tag 0: nothing
+uint8 natural8                      # Tag 1: a small number
+@sealed
+""",
+    "uavcan/node/430.GetInfo.1.0.dsdl": """\
+# Full node info request.
+@sealed
+---
+uint8[<=50] name                    # Human-readable name.
+@extent 448 * 8
+""",
+    "uavcan/node/Old.1.0.dsdl": "@deprecated\nuint8 x\n@sealed\n",
+}
+
+
+class TestTypeDetailFromTheCompiler:
+    """What the compiler (pydsdl) reads in a type beyond its fields: its
+    comments, whether it is a union, sealed or how far it may grow, its
+    size, and whether it is deprecated."""
+
+    @pytest.fixture
+    def mgr(self, project_root: Path) -> DsdlManager:
+        for rel, text in _PUBLIC_TYPES.items():
+            path = project_root / "dsdl_messages" / "public_regulated_data_types" / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        return DsdlManager(project_root)
+
+    def test_a_message(self, mgr: DsdlManager) -> None:
+        detail = mgr.get_type_detail("uavcan.node.Heartbeat.1.0")
+        assert detail["doc"].startswith("Abstract node status information.")
+        assert detail["deprecated"] is False
+        assert detail["layout"] == {"union": False, "sealed": False, "extent_bytes": 12, "size_bytes": [5, 5]}
+        assert [(f["name"], f["doc"]) for f in detail["fields"]] == [
+            ("uptime", "[second]\nSeconds since the node started."), ("vendor_specific_status_code", "")]
+        assert [(c["name"], c["doc"]) for c in detail["constants"]] == [("MAX_PUBLICATION_PERIOD", "[second]")]
+
+    def test_a_union(self, mgr: DsdlManager) -> None:
+        detail = mgr.get_type_detail("uavcan.register.Value.1.0")
+        assert detail["layout"] == {"union": True, "sealed": True, "extent_bytes": 2, "size_bytes": [1, 2]}
+        assert [f["doc"] for f in detail["fields"]] == ["Tag 0: nothing", "Tag 1: a small number"]
+
+    def test_a_service_has_a_layout_each_way(self, mgr: DsdlManager) -> None:
+        detail = mgr.get_type_detail("uavcan.node.GetInfo.1.0")
+        assert detail["doc"] == "Full node info request."
+        assert detail["layout"] == {
+            "request": {"union": False, "sealed": True, "extent_bytes": 0, "size_bytes": [0, 0]},
+            "response": {"union": False, "sealed": False, "extent_bytes": 448, "size_bytes": [1, 51]},
+        }
+        assert detail["fields"]["response"][0]["doc"] == "Human-readable name."
+
+    def test_deprecated(self, mgr: DsdlManager) -> None:
+        assert mgr.get_type_detail("uavcan.node.Old.1.0")["deprecated"] is True
+
+    def test_without_pydsdl_the_detail_is_as_before(self, mgr: DsdlManager, monkeypatch) -> None:
+        monkeypatch.setitem(sys.modules, "pydsdl", None)  # import fails
+        detail = mgr.get_type_detail("uavcan.node.Heartbeat.1.0")
+        assert (detail["doc"], detail["deprecated"], detail["layout"]) == ("", False, None)
+        assert [f["name"] for f in detail["fields"]] == ["uptime", "vendor_specific_status_code"]
+
+
 @pytest.fixture
 def data_dir(tmp_path: Path) -> Path:
     return tmp_path / "data"

@@ -486,6 +486,14 @@ curl http://localhost:8080/api/dsdl/type/uavcan.node.Heartbeat.1.0
 
 Returns full type info: fields (with types), constants, dependencies, compilation status, and raw `.dsdl` source text. For services, fields are split into `request` and `response`.
 
+What the compiler (pydsdl) reads in the type comes with it: `doc` (the type's comment), `deprecated`, a `doc` on each field and constant (its comment, a unit such as `[second]` first when it has one), and `layout`:
+
+```json
+"layout": {"union": false, "sealed": false, "extent_bytes": 12, "size_bytes": [7, 7]}
+```
+
+`size_bytes` is the serialized size, smallest and largest; `extent_bytes` how far a type that is not sealed may grow in later versions (for a sealed type, its largest size). A service has one layout each way: `{"request": {...}, "response": {...}}`. When pydsdl cannot read the type, `doc` is empty, `deprecated` false and `layout` null.
+
 **Create custom namespace:**
 ```bash
 curl -X POST http://localhost:8080/api/dsdl/custom/namespace \

@@ -30,6 +30,12 @@ _FIXED_PORT_RANGES = {"message": (6144, 7167), "service": (256, 383)}
 # would merge into theirs, in the tree and in the compiled code.
 _PUBLIC_ROOTS = ("uavcan", "reg")
 
+# pydsdl and nunavut log a line per type at INFO: hundreds for a public
+# compile, a few for every type shown, which would bury the dashboard's log
+# panel. Set once here, not around each use: uses run in several threads.
+for _chatty in ("pydsdl", "nunavut"):
+    logging.getLogger(_chatty).setLevel(logging.WARNING)
+
 
 class DsdlManager:
 
@@ -174,7 +180,7 @@ class DsdlManager:
         _, _, fixed_port_id = self._parse_filename(path.name)
         is_custom = self.custom_dir.is_dir() and str(path).startswith(str(self.custom_dir))
 
-        return {
+        detail = {
             "full_name": full_name,
             "namespace": namespace,
             "short_name": short_name,
@@ -189,6 +195,60 @@ class DsdlManager:
             "dependencies": self._resolve_dependencies(parsed["dependencies"], namespace),
             "compiled": self._is_compiled(full_name),
         }
+        self._add_compiler_view(detail, path)
+        return detail
+
+    def _add_compiler_view(self, detail: dict[str, Any], path: Path) -> None:
+        """Add what the compiler (pydsdl) reads in a type beyond its fields: its
+        comments, whether it is a union, sealed or how far it may grow, its
+        size in bytes, and whether it is deprecated. Without pydsdl, or for a
+        type it cannot read, these stay empty."""
+        service = detail["kind"] == "service"
+        sections = detail["fields"] if service else {"": detail["fields"]}
+        for field in (f for fields in sections.values() for f in fields):
+            field["doc"] = ""
+        for constant in detail["constants"]:
+            constant["doc"] = ""
+        detail.update(doc="", deprecated=False, layout=None)
+        try:
+            import pydsdl
+            read = self._read_type(path, detail["namespace"].split(".")[0], detail["source"] == "custom")
+        except Exception as exc:
+            logger.debug("pydsdl did not read %s: %s", path, exc)
+            return
+
+        parts = {"request": read.request_type, "response": read.response_type} if service else {"": read}
+        layouts = {}
+        for name, part in parts.items():
+            inner = part.inner_type if isinstance(part, pydsdl.DelimitedType) else part
+            docs = {f.name: f.doc for f in inner.fields_except_padding}
+            for field in sections.get(name, []):
+                field["doc"] = docs.get(field["name"], "")
+            constants = {c.name: c.doc for c in inner.constants}
+            for constant in detail["constants"]:
+                constant["doc"] = constants.get(constant["name"], constant["doc"])
+            sizes = inner.bit_length_set
+            layouts[name] = {
+                "union": isinstance(inner, pydsdl.UnionType),
+                "sealed": not isinstance(part, pydsdl.DelimitedType),
+                "extent_bytes": (part.extent + 7) // 8,
+                "size_bytes": [(sizes.min + 7) // 8, (sizes.max + 7) // 8],
+            }
+        detail.update(doc=read.doc, deprecated=read.deprecated, layout=layouts if service else layouts[""])
+
+    def _read_type(self, path: Path, root: str, custom: bool) -> Any:
+        """The type in ``path`` as the compiler reads it, with the namespaces it
+        may use looked up as a compile looks them up. Only the file and the
+        types it uses are read: 30 to 240 ms, where reading all the public
+        types takes over a second."""
+        import pydsdl
+        own = (self.custom_dir if custom else self.public_types_dir) / root
+        others = [self.public_types_dir / ns for ns in _PUBLIC_ROOTS]
+        if self.custom_dir.is_dir():
+            others += [d for d in sorted(self.custom_dir.iterdir()) if d.is_dir() and not d.name.startswith(".")]
+        lookups = [str(d) for d in others if d.is_dir() and d != own]
+        read, _ = pydsdl.read_files(str(path), [str(own)], lookups)
+        return read[0]
 
     def invalidate_cache(self) -> None:
         self._tree_cache = None
@@ -571,21 +631,12 @@ class DsdlManager:
         In-process through pycyphal (which drives nunavut), not by running
         nnvg: the executable bundles the libraries but has no nnvg to run.
         """
-        # pydsdl and nunavut log a line per type at INFO: hundreds for the
-        # public types, which would bury the dashboard's log panel.
-        chatty = [logging.getLogger(name) for name in ("pydsdl", "nunavut")]
-        levels = [lg.level for lg in chatty]
-        for lg in chatty:
-            lg.setLevel(logging.WARNING)
         try:
             import pycyphal.dsdl
             output.mkdir(parents=True, exist_ok=True)
             pycyphal.dsdl.compile(target, [ld for ld in lookups if ld.is_dir()], output_directory=output)
         except Exception as exc:
             return [f"{label}: {exc}"]
-        finally:
-            for lg, level in zip(chatty, levels):
-                lg.setLevel(level)
         return []
 
     def _adopt_legacy_custom_types(self, legacy_dir: Path) -> None:
