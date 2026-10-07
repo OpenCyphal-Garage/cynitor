@@ -3407,6 +3407,21 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+@test("DSDL: the search finds a type by its compiled name, as messages and recordings give it")
+async def _(page):
+    server = _DsdlServer()
+    await dsdl_open(page, server)
+    try:
+        found = {}
+        for term in ("Heartbeat_1_0", "uavcan.node.Heartbeat_1_0"):
+            await dsdl_search(page, term)
+            found[term] = await page.evaluate(
+                "[...document.querySelectorAll('#dsdlTreePanel .dsdl-type-row')].map((row) => row.dataset.type)")
+        assert found == {term: ["uavcan.node.Heartbeat.1.0"] for term in found}, f"Found: {found}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

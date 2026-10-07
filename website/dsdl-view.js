@@ -654,11 +654,14 @@ const DsdlView = (() => {
     return a.short_name.localeCompare(b.short_name) || aMajor - bMajor || aMinor - bMinor;
   };
 
-  // The types matching a search, in the order they are listed.
+  // The types matching a search, in the order they are listed. A type is
+  // found by its compiled name too ("Heartbeat_1_0"), as messages and
+  // recordings give it (dsdlTypeName, cache.js).
   const _filterTypes = (types, term) => {
+    const spelled = term && dsdlTypeName(term);
     const matching = !term ? types : types.filter(t => {
       if (t.short_name.toLowerCase().includes(term)) return true;
-      if (t.full_name.toLowerCase().includes(term)) return true;
+      if (t.full_name.toLowerCase().includes(term) || t.full_name.toLowerCase().includes(spelled)) return true;
       if (t.fixed_port_id != null && String(t.fixed_port_id).includes(term)) return true;
       if (t.field_names?.some(f => f.toLowerCase().includes(term))) return true;
       return false;
