@@ -125,6 +125,7 @@ const DsdlView = (() => {
 
   const _pollStatus = async () => {
     if (!state.dashboardConnected) return;
+    _refreshAges();
     try {
       const fresh = await requestJson('/api/dsdl/status');
       if (_statusChanged(_statusData, fresh)) {
@@ -165,14 +166,13 @@ const DsdlView = (() => {
     const canRecompile = _statusData.public_compilable !== false;
     // A packaged binary unpacks its files at every start, so their age says
     // nothing about when the types were compiled.
-    const age = !canRecompile ? ' · built in'
-      : _statusData.last_public_compiled ? ` · ${_formatAge(_statusData.last_public_compiled)}` : '';
+    const age = !canRecompile ? ' · built in' : _ageHtml(_statusData.last_public_compiled);
 
     header.innerHTML = `
       <span class="dsdl-section-title">Public regulated</span>
       <span class="dsdl-section-count">${count}</span>
       <span class="dsdl-section-right">
-        <span class="dsdl-tree-status"><span class="dsdl-dot ${dot}"></span>${escapeHtml(label)}${escapeHtml(age)}</span>
+        <span class="dsdl-tree-status"><span class="dsdl-dot ${dot}"></span>${escapeHtml(label)}${age}</span>
         ${canRecompile ? _compileButtonHtml('dsdlRecompileBtn', 'public', 'Recompile public types') : ''}
       </span>`;
 
@@ -199,10 +199,9 @@ const DsdlView = (() => {
     const compiled = hasCustom && _isCustomFullyCompiled();
     const dotCls = !hasCustom ? '' : compiled ? 'dsdl-dot-ok' : 'dsdl-dot-warn';
     const statusLabel = !hasCustom ? '' : compiled ? 'Compiled' : 'Not compiled';
-    const age = hasCustom && _statusData?.last_custom_compiled
-      ? ` · ${_formatAge(_statusData.last_custom_compiled)}` : '';
+    const age = hasCustom ? _ageHtml(_statusData?.last_custom_compiled) : '';
     const statusHtml = hasCustom ? `
-      <span class="dsdl-tree-status"><span class="dsdl-dot ${dotCls}"></span>${escapeHtml(statusLabel)}${escapeHtml(age)}</span>
+      <span class="dsdl-tree-status"><span class="dsdl-dot ${dotCls}"></span>${escapeHtml(statusLabel)}${age}</span>
       ${_compileButtonHtml('dsdlCustomCompileBtn', 'custom', 'Compile custom types')}` : '';
 
     header.innerHTML = `
@@ -280,6 +279,18 @@ const DsdlView = (() => {
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
     if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
     return `${Math.floor(seconds / 86400)}d ago`;
+  };
+
+  // " · 5m ago", marked with its time so _refreshAges keeps it true.
+  const _ageHtml = (timestamp) => (timestamp
+    ? `<span data-since="${Number(timestamp)}"> · ${_formatAge(timestamp)}</span>` : '');
+
+  // The headers are redrawn only when the status changes; their ages move
+  // on with the clock in place, leaving their buttons be.
+  const _refreshAges = () => {
+    el('dsdlContainer').querySelectorAll('[data-since]').forEach((span) => {
+      span.textContent = ` · ${_formatAge(Number(span.dataset.since))}`;
+    });
   };
 
   // ------------------------------------------------------------------

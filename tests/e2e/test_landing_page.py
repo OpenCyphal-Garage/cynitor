@@ -2942,6 +2942,24 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+@test("DSDL: the time since the last compile follows the clock")
+async def _(page):
+    server = _DsdlServer()
+    server.last_custom_compiled = time.time() - 120
+    await dsdl_open(page, server)
+    try:
+        status = "#dsdlCustomHeader .dsdl-tree-status"
+        before = await page.locator(status).inner_text()
+        # Three hours on; the status, polled every 4 s, has not changed.
+        await page.evaluate("(() => { const now = Date.now; Date.now = () => now() + 3 * 3600 * 1000; })()")
+        await page.wait_for_timeout(4500)
+        after = await page.locator(status).inner_text()
+        assert "2m ago" in before and "3h ago" in after, \
+            f"Compiled two minutes ago, the header said {before!r}; three hours on, {after!r}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
