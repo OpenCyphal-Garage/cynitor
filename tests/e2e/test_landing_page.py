@@ -1886,6 +1886,31 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: synced graphs show each other's markers, and a graph that leaves no longer does")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    marks = "(i) => [...document.querySelectorAll('.compare-graph-card')[i].querySelectorAll('.plot-marker text')].map(t => t.textContent)"
+    try:
+        await page.wait_for_timeout(300)
+        a = await compare_graph(page, (1100, "value"))
+        b = await compare_graph(page, (1100, "value"))
+        await compare_graph(page, (1100, "value"))  # not synced
+        for card in (a, b):
+            await card.locator(".compare-sync-btn").click()
+        await b.locator(".plot-pause-btn").click()  # both paused: no tick redraws them
+        await page.evaluate("""() => { const g = state.compareGraphs[0];
+            g.markers.push({t: g.pausedAt - 5, label: 'motor on', note: '', color: '', lineStyle: 'dashed'});
+            g._fingerprint = ''; _renderOneGraph(g); }""")
+        shown = [await page.evaluate(marks, i) for i in range(3)]
+        assert shown == [["motor on"], ["motor on"], []], f"The markers each graph shows: {shown}"
+        said = await b.locator(".plot-marker title").text_content()
+        assert "marked on" in said, f"On hover, a marker from another graph says {said!r}"
+        await b.locator(".compare-sync-btn").click()  # leaves the group
+        assert await page.evaluate(marks, 1) == [], "A graph that left the group still shows its markers"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 @test("Compare: a collapsed graph is its plot, a line of names and, at its side, its pause, window and Sync")
 async def _(page):
     await page.evaluate(COMPARE_START)

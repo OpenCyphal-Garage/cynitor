@@ -799,12 +799,34 @@ const _shareView = (graph) => {
 };
 
 // The Markers row follows markers and drawings however they change: on the
-// plot (Shift+click, the marker form, Alt+drag), or from the row itself.
+// plot (Shift+click, the marker form, Alt+drag), or from the row itself. The
+// other synced graphs, which show its markers, are drawn again then.
 const _syncMarks = (graph, card) => {
   const key = JSON.stringify([graph.markers, graph.drawings.length]);
   if (graph._marksKey === key) return;
+  const changed = graph._marksKey !== undefined;  // not just drawn the first time
   graph._marksKey = key;
   card.querySelector('.plot-compare-panel')?._refreshMarks?.();
+  if (changed && graph.sync) _redrawSynced(graph);
+};
+
+// The markers a graph shows: its own and, with Sync on, the other synced
+// graphs' too, as they show the same time; those say where they were made
+// (they are edited there).
+const _markersShown = (graph) => {
+  if (!graph.sync) return graph.markers;
+  return state.compareGraphs.filter((g) => g.sync).flatMap((g) => (g === graph ? g.markers : g.markers.map((m) => ({
+    ...m, note: [m.note, `marked on ${g.name.trim() || 'an untitled graph'}`].filter(Boolean).join(' · '),
+  }))));
+};
+
+// The synced graphs drawn again (but `except`), when what they share changes.
+const _redrawSynced = (except = null) => {
+  for (const g of state.compareGraphs) {
+    if (!g.sync || g === except) continue;
+    g._fingerprint = '';
+    _renderOneGraph(g);
+  }
 };
 
 const _buildGraphCard = (graph) => {
@@ -878,6 +900,7 @@ const _buildGraphCard = (graph) => {
     const cloneCard = _buildGraphCard(clone);
     card.parentElement.appendChild(cloneCard);
     _renderOneGraph(clone);
+    if (clone.sync) _redrawSynced(clone);  // a clone of a synced graph joins its group
   });
   cardActions.appendChild(cloneBtn);
 
@@ -898,6 +921,7 @@ const _buildGraphCard = (graph) => {
     saveSettings();
     _cardWatcher.unobserve(card);
     card.remove();
+    if (graph.sync) _redrawSynced();  // its markers go from the others
   });
   cardActions.appendChild(deleteBtn);
 
@@ -952,6 +976,10 @@ const _buildGraphCard = (graph) => {
     saveSettings();
     const group = state.compareGraphs.find((g) => g.sync && g !== graph);
     if (graph.sync && group) _shareView(group);
+    // Joined or left, it and the group show other markers.
+    graph._fingerprint = '';
+    _renderOneGraph(graph);
+    _redrawSynced(graph);
   });
   showSync();
   timeControls.appendChild(syncBtn);
@@ -1256,7 +1284,7 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, cfg) => {
   else overlay.select('.plot-grid').remove();
 
   _renderThresholds(overlay, thresholds, yScale, w);
-  _renderMarkers(overlay, cfg?.markers, xScale, panelH);
+  _renderMarkers(overlay, _markersShown(cfg), xScale, panelH);
   _renderDrawings(overlay, cfg?.drawings, xScale, panelH);
   // Markers and drawings keep to the plot, as its lines do: scrolled past the
   // y-axis with time, they are cut there, not drawn over it.
@@ -1409,7 +1437,7 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   const lastPts = compareSeries.map(s => s.data.length ? s.data[s.data.length - 1].t : 0);
   const hiddenKey = [...graph._hidden].sort().join(',');
   const thKey = (graph.thresholds || []).map(t => `${t.value}:${t.label || ''}:${t.color || ''}:${t.style || ''}`).join(';');
-  const mkKey = (graph.markers || []).map(m => `${m.t}:${m.label}:${m.color || ''}:${m.lineStyle || ''}`).join(';');
+  const mkKey = _markersShown(graph).map(m => `${m.t}:${m.label}:${m.color || ''}:${m.lineStyle || ''}`).join(';');
   const dwKey = (graph.drawings || []).length;
   const styleKey = compareSeries.map(s => s._lineStyle || '').join(',');
   const fp = `cg:${graph.id}:${compareSeries.length}:${lastPts.join(',')}:w${graph.timeWindow}:p${graph.paused ? graph.pausedAt : 0}:s${graph.smooth}:d${graph.disconnectPoints}:k${graph.stroke}:g${graph.grid}:t${thKey}:m${mkKey}:dw${dwKey}:h${hiddenKey}:ls${styleKey}:z${graph._zoom || 1}:pan${graph._panOffset || 0}:l${liveKey}:n${graph.name}`;
