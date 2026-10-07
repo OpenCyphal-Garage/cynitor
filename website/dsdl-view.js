@@ -1326,8 +1326,10 @@ const DsdlView = (() => {
     const status = document.getElementById('dsdlEditorStatus');
     if (status) { status.textContent = 'Saving…'; status.className = 'dsdl-editor-status'; }
 
+    const fullName = `${namespace}.${typeName}.${version}`;
     try {
-      const overwrite = _editorMode === 'edit';
+      // Saving again a type this editor saved replaces it, as Edit does.
+      const overwrite = _editorMode === 'edit' || _editPrefill?.full_name === fullName;
       await requestJson('/api/dsdl/custom/type', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1337,7 +1339,6 @@ const DsdlView = (() => {
         }),
       });
 
-      const fullName = `${namespace}.${typeName}.${version}`;
       _editPrefill = {
         namespace,
         type_name: typeName,

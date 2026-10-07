@@ -2665,6 +2665,40 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+async def dsdl_new_type(page, namespace="myapp"):
+    """The editor for a new type, opened from its namespace's own button."""
+    await page.locator(f'#dsdlCustomTree .dsdl-ns-row[data-ns="{namespace}"]').hover()
+    await page.locator(f'[data-add-type="{namespace}"]').click()
+    await page.wait_for_selector("#dsdlEditorName")
+
+
+async def dsdl_save(page):
+    """Save, and what the editor says once the server has answered."""
+    async with page.expect_response("**/api/dsdl/custom/type"):
+        await page.locator("#dsdlEditorSave").click()
+    await page.wait_for_function("document.getElementById('dsdlEditorStatus').textContent !== 'Saving…'",
+                                 timeout=WAIT_MS)
+    return await page.locator("#dsdlEditorStatus").inner_text()
+
+
+@test("DSDL: a type just created saves again, as an edit")
+async def _(page):
+    server = _DsdlServer()
+    await dsdl_open(page, server)
+    try:
+        await dsdl_new_type(page)
+        await page.locator("#dsdlEditorName").fill("Draft")
+        await page.locator("#dsdlEditorSource").fill("uint8 a\n@sealed\n")
+        first = await dsdl_save(page)
+        await page.locator("#dsdlEditorSource").fill("uint8 a\nuint8 b\n@sealed\n")
+        second = await dsdl_save(page)
+        assert (first, second) == ("Saved", "Saved"), f"Saved, then saved again: {first!r}, {second!r}"
+        kept = server.types["myapp.Draft.1.0"]["source_text"]
+        assert kept == "uint8 a\nuint8 b\n@sealed\n", f"The server keeps {kept!r}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
