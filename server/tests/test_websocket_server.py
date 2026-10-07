@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from aiohttp import web
 from aiohttp.test_utils import AioHTTPTestCase, TestClient, TestServer
 from websocket_server import WebSocketServer
+from dsdl_manager import DsdlManager
 from log_store import InMemoryLogStore
 import logging
 
@@ -1006,3 +1007,21 @@ class TestDsdlCompile:
             answers = await asyncio.gather(*(c.post("/api/dsdl/compile", json={"scope": "custom"}) for _ in range(2)))
         assert [a.status for a in answers] == [200, 200]
         assert overlapped == [False, False]
+
+
+class TestDsdlDeleteNamespace:
+    """DELETE /api/dsdl/custom/namespace/{namespace}: an empty one goes."""
+
+    @pytest.mark.asyncio
+    async def test_status_codes(self, session, log_store, tmp_path):
+        (tmp_path / "dsdl_messages" / "custom").mkdir(parents=True)
+        mgr = DsdlManager(tmp_path)
+        mgr.create_namespace("spare")
+        mgr.save_type("full", "Reading", "1.0", "uint8 x\n@sealed\n")
+        server = WebSocketServer(session=session, host="127.0.0.1", port=0, log_store=log_store, dsdl_manager=mgr)
+        async with TestClient(TestServer(server.app)) as c:
+            server._running = True
+            statuses = {ns: (await c.delete(f"/api/dsdl/custom/namespace/{ns}")).status
+                        for ns in ("spare", "full", "nowhere", "Bad-Name")}
+        assert statuses == {"spare": 200, "full": 400, "nowhere": 404, "Bad-Name": 400}
+        assert mgr.list_custom_namespaces() == ["full"]

@@ -529,6 +529,13 @@ curl -X DELETE http://localhost:8080/api/dsdl/custom/type/myapp.sensors.Temperat
 Returns `200` with `{"full_name": "myapp.sensors.Temperature.1.0", "deleted": true}`.
 Returns `404` if the source file is missing, or `400` on a malformed name. Deleting also removes the type's compiled code.
 
+**Delete an empty custom namespace:**
+```bash
+curl -X DELETE http://localhost:8080/api/dsdl/custom/namespace/myapp.sensors
+```
+Returns `200` with `{"namespace": "myapp.sensors", "deleted": true}`; its empty sub-namespaces go with it.
+Returns `400` while it still has types (delete them first) or on a malformed name, and `404` if there is no such namespace.
+
 **Compile DSDL types:**
 ```bash
 # Compile custom namespaces only

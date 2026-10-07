@@ -2608,6 +2608,15 @@ class _DsdlServer:
                                           text=body["source_text"])
             self.custom_namespaces.add(body["namespace"])  # created with its first type, as the server does
             return {"full_name": name, "path": ""}, 201
+        if method == "DELETE" and path.startswith("/api/dsdl/custom/namespace/"):
+            name = path.removeprefix("/api/dsdl/custom/namespace/")
+            inside = lambda ns: ns == name or ns.startswith(f"{name}.")
+            if any(inside(t["namespace"]) for t in self.types.values()):
+                return {"error": f"Namespace '{name}' still has types: delete them first"}, 400
+            if name not in self.custom_namespaces:
+                return {"error": f"Namespace not found: {name}"}, 404
+            self.custom_namespaces = {ns for ns in self.custom_namespaces if not inside(ns)}
+            return {"namespace": name, "deleted": True}, 200
         if method == "DELETE" and path.startswith("/api/dsdl/custom/type/"):
             name = path.removeprefix("/api/dsdl/custom/type/")
             if self.types.pop(name, None) is None:
@@ -3319,6 +3328,22 @@ async def _(page):
         assert copy == ["myapp", "Reading", "1.2", "uint16 value\n@sealed\n"], f"The editor opens on {copy}"
         said = await dsdl_save(page)
         assert said == "Saved" and "myapp.Reading.1.2" in server.types, f"Saving the new version said {said!r}"
+    finally:
+        await dsdl_close(page, server)
+
+
+@test("DSDL: an empty custom namespace can be deleted, one with types cannot")
+async def _(page):
+    server = _DsdlServer()
+    server.custom_namespaces.add("spare")  # no types in it
+    await dsdl_open(page, server)
+    try:
+        offered = {ns: await page.locator(f'[data-delete-ns="{ns}"]').count() for ns in ("spare", "myapp")}
+        assert offered == {"spare": 1, "myapp": 0}, f"A delete button for each namespace: {offered}"
+        await page.locator('#dsdlCustomTree .dsdl-ns-row[data-ns="spare"]').hover()
+        await page.locator('[data-delete-ns="spare"]').click()
+        await page.wait_for_selector('#dsdlCustomTree .dsdl-ns-row[data-ns="spare"]', state="detached", timeout=WAIT_MS)
+        assert "spare" not in server.custom_namespaces, "The server still has it"
     finally:
         await dsdl_close(page, server)
 

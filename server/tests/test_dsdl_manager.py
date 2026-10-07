@@ -115,6 +115,32 @@ class TestRunCompilationRefreshHook:
         assert "syntax error" in result["errors"][0]
 
 
+class TestDeleteNamespace:
+    """A custom namespace with no types left in it can go, with its empty
+    sub-namespaces; one that still has types cannot."""
+
+    def test_an_empty_one_goes_with_its_empty_sub_namespaces(self, mgr: DsdlManager) -> None:
+        mgr.create_namespace("myapp.sensors")
+        assert mgr.delete_namespace("myapp") == {"namespace": "myapp", "deleted": True}
+        assert mgr.list_custom_namespaces() == []
+
+    def test_one_with_types_stays(self, mgr: DsdlManager) -> None:
+        mgr.save_type("myapp.sensors", "Reading", "1.0", "uint8 x\n@sealed\n")
+        with pytest.raises(ValueError):
+            mgr.delete_namespace("myapp")
+        assert mgr.list_custom_namespaces() == ["myapp", "myapp.sensors"]
+
+    def test_an_empty_sub_namespace_alone(self, mgr: DsdlManager) -> None:
+        mgr.save_type("myapp", "Reading", "1.0", "uint8 x\n@sealed\n")
+        mgr.create_namespace("myapp.spare")
+        mgr.delete_namespace("myapp.spare")
+        assert mgr.list_custom_namespaces() == ["myapp"]
+
+    def test_one_not_there(self, mgr: DsdlManager) -> None:
+        with pytest.raises(FileNotFoundError):
+            mgr.delete_namespace("nowhere")
+
+
 _MESSAGE = "uint8 x\n@sealed\n"
 _SERVICE = "uint8 x\n@sealed\n---\nuint8 y\n@sealed\n"
 

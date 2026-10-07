@@ -452,6 +452,9 @@ const DsdlView = (() => {
     return false;
   };
 
+  const _hasTypes = (node) => (node.types || []).length > 0
+    || Object.values(node.children || {}).some(_hasTypes);
+
   const _renderCustomNsNode = (name, fullPath, node, depth, searchTerm, dimmed = false) => {
     const filteredTypes = _filterTypes(node.types || [], searchTerm);
     let childHtml = '';
@@ -514,6 +517,9 @@ const DsdlView = (() => {
       <button class="dsdl-ns-add" data-add-type="${escapeHtml(fullPath)}" title="Add type" aria-label="Add type">
         <svg width="8" height="8" viewBox="0 0 8 8"><path d="M4 1v6M1 4h6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
         <svg width="9" height="9" viewBox="0 0 16 16"><path d="M4 2h8v12H4z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M7 6h2M7 8.5h2" stroke="currentColor" stroke-width="1" stroke-linecap="round"/></svg>
+      </button>`}
+      ${dimmed || _hasTypes(node) ? '' : `<button class="dsdl-ns-add" data-delete-ns="${escapeHtml(fullPath)}" title="Delete this empty namespace" aria-label="Delete namespace">
+        <svg width="9" height="9" viewBox="0 0 16 16"><path d="M3 4h10M6 4V2.5h4V4M4.5 4l.7 9.5h5.6l.7-9.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
       </button>`}
       ${hideBtn}
     </span>`;
@@ -1041,6 +1047,19 @@ const DsdlView = (() => {
       if (e.key === 'Enter') document.getElementById('dsdlNsOk')?.click();
       if (e.key === 'Escape') dialog.remove();
     });
+  };
+
+  // An empty custom namespace goes at once: there is nothing in it to lose.
+  const _deleteNamespace = async (namespace) => {
+    try {
+      await requestJson(`/api/dsdl/custom/namespace/${encodeURIComponent(namespace)}`, { method: 'DELETE' });
+    } catch (err) {
+      showToast(err.message, 'error');
+      return;
+    }
+    _hiddenNamespaces.delete(namespace);
+    _saveDsdlState();
+    await _reloadTree();
   };
 
   // An error said in the inline dialog it answers, on a line of its own.
@@ -1619,6 +1638,12 @@ const DsdlView = (() => {
       if (addTypeBtn) {
         e.stopPropagation();
         _openEditorNew(addTypeBtn.dataset.addType);
+        return;
+      }
+      const deleteNsBtn = e.target.closest('[data-delete-ns]');
+      if (deleteNsBtn) {
+        e.stopPropagation();
+        _deleteNamespace(deleteNsBtn.dataset.deleteNs);
         return;
       }
       const nsRow = e.target.closest('.dsdl-ns-row');

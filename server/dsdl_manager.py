@@ -282,6 +282,20 @@ class DsdlManager:
         self.invalidate_cache()
         return {"namespace": namespace, "path": str(ns_dir)}
 
+    def delete_namespace(self, namespace: str) -> dict[str, Any]:
+        """Remove a custom namespace with no types left in it, with its empty
+        sub-namespaces. Only its spelling is checked, so one made under uavcan
+        or reg before that was refused can go too."""
+        self._validate_namespace(namespace)
+        ns_dir = self.custom_dir / Path(*namespace.split("."))
+        if not ns_dir.is_dir():
+            raise FileNotFoundError(f"Namespace not found: {namespace}")
+        if any(ns_dir.rglob("*.dsdl")):
+            raise ValueError(f"Namespace '{namespace}' still has types: delete them first")
+        shutil.rmtree(ns_dir)
+        self.invalidate_cache()
+        return {"namespace": namespace, "deleted": True}
+
     def save_type(self, namespace: str, type_name: str, version: str,
                   source_text: str, fixed_port_id: Optional[int] = None,
                   overwrite: bool = False) -> dict[str, Any]:

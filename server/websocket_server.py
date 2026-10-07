@@ -311,6 +311,7 @@ class WebSocketServer:
         self.app.router.add_get('/api/dsdl/namespaces', self._dsdl_namespaces)
         self.app.router.add_get('/api/dsdl/type/{full_name:.+}', self._dsdl_type_detail)
         self.app.router.add_post('/api/dsdl/custom/namespace', self._dsdl_create_namespace)
+        self.app.router.add_delete('/api/dsdl/custom/namespace/{namespace}', self._dsdl_delete_namespace)
         self.app.router.add_post('/api/dsdl/custom/type', self._dsdl_save_type)
         self.app.router.add_delete('/api/dsdl/custom/type/{full_name:.+}', self._dsdl_delete_type)
         self.app.router.add_get('/api/dsdl/custom/namespaces', self._dsdl_list_custom_namespaces)
@@ -1821,6 +1822,17 @@ class WebSocketServer:
         except ValueError as e:
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response(data, status=201)
+
+    async def _dsdl_delete_namespace(self, request: web.Request) -> web.Response:
+        if not self.dsdl_manager:
+            return web.json_response({"error": "DSDL manager not available"}, status=503)
+        try:
+            data = await asyncio.to_thread(self.dsdl_manager.delete_namespace, request.match_info["namespace"])
+        except FileNotFoundError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        return web.json_response(data)
 
     async def _dsdl_save_type(self, request: web.Request) -> web.Response:
         if not self.dsdl_manager:
