@@ -617,15 +617,24 @@ const DsdlView = (() => {
       </div>`;
   };
 
+  // By name, then by version as numbers (1.9 before 1.10). The server lists
+  // types by file name, so with port-IDs first.
+  const _byNameAndVersion = (a, b) => {
+    const [aMajor, aMinor] = a.version.split('.').map(Number);
+    const [bMajor, bMinor] = b.version.split('.').map(Number);
+    return a.short_name.localeCompare(b.short_name) || aMajor - bMajor || aMinor - bMinor;
+  };
+
+  // The types matching a search, in the order they are listed.
   const _filterTypes = (types, term) => {
-    if (!term) return types;
-    return types.filter(t => {
+    const matching = !term ? types : types.filter(t => {
       if (t.short_name.toLowerCase().includes(term)) return true;
       if (t.full_name.toLowerCase().includes(term)) return true;
       if (t.fixed_port_id != null && String(t.fixed_port_id).includes(term)) return true;
       if (t.field_names?.some(f => f.toLowerCase().includes(term))) return true;
       return false;
     });
+    return [...matching].sort(_byNameAndVersion);
   };
 
   // ------------------------------------------------------------------

@@ -3348,6 +3348,26 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+@test("DSDL: types are listed by name, then by version")
+async def _(page):
+    server = _DsdlServer()
+    # As the server sends them: by file name, port-IDs first.
+    for name, port in (("Version.1.0", None), ("ExecuteCommand.1.10", 435), ("ExecuteCommand.1.9", 435),
+                       ("Health.1.0", None)):
+        added = _dsdl_type(f"uavcan.node.{name}", port=port)
+        server.types[added["full_name"]] = added
+    await dsdl_open(page, server)
+    try:
+        await page.locator('#dsdlTree .dsdl-ns-row[data-ns="uavcan"]').click()
+        await page.locator('#dsdlTree .dsdl-ns-row[data-ns="uavcan.node"]').click()
+        listed = await page.evaluate("""[...document.querySelectorAll(
+            '.dsdl-ns-row[data-ns="uavcan.node"] + .dsdl-ns-children > .dsdl-type-row')].map((row) => row.dataset.type)""")
+        assert [t.removeprefix("uavcan.node.") for t in listed] == [
+            "ExecuteCommand.1.9", "ExecuteCommand.1.10", "Health.1.0", "Heartbeat.1.0", "Version.1.0"], f"Listed: {listed}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
