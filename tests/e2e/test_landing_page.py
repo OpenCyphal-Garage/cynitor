@@ -3139,6 +3139,41 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+@test("DSDL: screen readers hear the editor's fields and the results, and the bus dots hold still on request")
+async def _(page):
+    server = _DsdlServer()
+    server.compile_answer = ({"ok": False, "errors": ["custom/myapp: Reading.1.0.dsdl: @sealed or @extent required"]}, 422)
+    nodes = {"node_count": 1, "nodes": {"10": _graph_node(10, "org.example.dev", [7509], [], uid_byte=1)}}
+    setup = f"""() => {{
+        state.latestNodesPayload = {json.dumps(nodes)};
+        cacheEvent({{subject_id: 7509, publisher_node_id: 10, message_type: 'Heartbeat_1_0', rate: 1,
+                    subject_rate: 1, payload_bytes: 7, attributes: [], timestamp_unix: Date.now() / 1000}});
+    }}"""
+    await dsdl_open(page, server, setup)
+    try:
+        await dsdl_new_type(page)
+        fields = await page.evaluate("""['dsdlEditorNs', 'dsdlEditorName', 'dsdlEditorVer', 'dsdlEditorPort', 'dsdlEditorSource']
+            .map((id) => [...document.getElementById(id).labels].map((label) => label.textContent.trim()).join('') || null)""")
+        status = await page.locator("#dsdlEditorStatus").get_attribute("role")
+        await page.locator("#dsdlCustomAddNs").click()
+        cancel = await page.locator("#dsdlNsCancel").get_attribute("aria-label")
+        await page.locator("#dsdlNsCancel").click()
+        await page.locator("#dsdlCustomCompileBtn").click()
+        await page.wait_for_selector(".dsdl-compile-error", timeout=WAIT_MS)
+        compile_error = await page.locator(".dsdl-compile-error").get_attribute("role")
+        tip = await page.locator(".dsdl-info-tip").get_attribute("aria-label") or ""
+        await page.emulate_media(reduced_motion="reduce")
+        pulse = await page.evaluate("getComputedStyle(document.querySelector('.dsdl-type-row .dsdl-bus-dot'), '::after').animationName")
+        await page.emulate_media(reduced_motion="no-preference")
+        assert fields == ["Namespace", "Type name", "Version", "Port ID", "Source"] and cancel \
+            and (status, compile_error) == ("status", "alert") and "compiled" in tip and pulse == "none", \
+            f"Fields named {fields}; × named {cancel!r}; roles: status {status!r}, compile error {compile_error!r}; " \
+            f"the ? says {tip!r}; with reduced motion the bus dot pulses: {pulse!r}"
+    finally:
+        await page.emulate_media(reduced_motion="no-preference")
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

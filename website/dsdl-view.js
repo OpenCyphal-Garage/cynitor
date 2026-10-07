@@ -265,6 +265,7 @@ const DsdlView = (() => {
     if (!errEl) {
       errEl = document.createElement('div');
       errEl.className = 'dsdl-compile-error';
+      errEl.setAttribute('role', 'alert');
       header.after(errEl);
     }
     errEl.textContent = msg;
@@ -978,7 +979,7 @@ const DsdlView = (() => {
       <input type="text" class="dsdl-dialog-input" id="dsdlNsInput"
              placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(prefix)}" aria-label="Namespace name" />
       <button class="dsdl-dialog-ok" id="dsdlNsOk">Create</button>
-      <button class="dsdl-dialog-cancel" id="dsdlNsCancel">&times;</button>`;
+      <button class="dsdl-dialog-cancel" id="dsdlNsCancel" aria-label="Cancel">&times;</button>`;
 
     const anchor = document.getElementById('dsdlCustomHeader');
     anchor?.after(dialog);
@@ -1179,8 +1180,8 @@ const DsdlView = (() => {
       <div class="dsdl-editor-toolbar">
         <span class="dsdl-editor-title">${titleText}</span>
         <span class="dsdl-editor-toolbar-actions">
-          <span class="dsdl-editor-status" id="dsdlEditorStatus"></span>
-          <span class="dsdl-info-tip" tabindex="0" aria-label="Save policy" data-tip="${escapeHtml(policyTip)}">?</span>
+          <span class="dsdl-editor-status" id="dsdlEditorStatus" role="status"></span>
+          <span class="dsdl-info-tip" tabindex="0" role="img" aria-label="${escapeHtml(`Save policy: ${policyTip}`)}" data-tip="${escapeHtml(policyTip)}">?</span>
           <button class="dsdl-editor-btn dsdl-editor-btn-save" id="dsdlEditorSave">${saveLabel}</button>
           <button class="dsdl-editor-close" id="dsdlEditorClose" aria-label="Close editor">&times;</button>
         </span>
@@ -1188,7 +1189,7 @@ const DsdlView = (() => {
       <div class="dsdl-editor-form">
         ${nsHint}
         <div class="dsdl-editor-row">
-          <label class="dsdl-editor-label">Namespace</label>
+          <label class="dsdl-editor-label" for="dsdlEditorNs">Namespace</label>
           <div class="dsdl-editor-ns-wrap">
             <select class="dsdl-editor-select" id="dsdlEditorNs"${lockAttr}>
               <option value="">— select —</option>
@@ -1198,21 +1199,21 @@ const DsdlView = (() => {
         </div>
         <div class="dsdl-editor-row dsdl-editor-row-inline">
           <div>
-            <label class="dsdl-editor-label">Type name</label>
+            <label class="dsdl-editor-label" for="dsdlEditorName">Type name</label>
             <input type="text" class="dsdl-editor-input" id="dsdlEditorName" placeholder="MyMessage" value="${escapeHtml(nameValue)}"${lockAttr} />
           </div>
           <div>
-            <label class="dsdl-editor-label">Version</label>
+            <label class="dsdl-editor-label" for="dsdlEditorVer">Version</label>
             <input type="text" class="dsdl-editor-input dsdl-editor-ver" id="dsdlEditorVer" placeholder="1.0" value="${escapeHtml(versionValue)}"${lockAttr} />
           </div>
           <div>
-            <label class="dsdl-editor-label">Port ID</label>
+            <label class="dsdl-editor-label" for="dsdlEditorPort">Port ID</label>
             <input type="text" class="dsdl-editor-input dsdl-editor-port" id="dsdlEditorPort" placeholder="optional" value="${escapeHtml(portValue)}"
                    title="Leave empty unless the type needs a fixed port ID: ${_FIXED_PORT_RANGES.message.join('–')} for a message, ${_FIXED_PORT_RANGES.service.join('–')} for a service" />
           </div>
         </div>
         <div class="dsdl-editor-row dsdl-editor-row-grow">
-          <label class="dsdl-editor-label">Source</label>
+          <label class="dsdl-editor-label" for="dsdlEditorSource">Source</label>
           <div class="dsdl-editor-source-wrap" id="dsdlEditorSourceWrap">
             <textarea class="dsdl-editor-source" id="dsdlEditorSource" spellcheck="false"
                       placeholder="# Write your DSDL definition here&#10;uint32 my_field&#10;float32 temperature&#10;@sealed&#10;# A service: the request, then ---, then the response, each ending in @sealed">${escapeHtml(sourceValue)}</textarea>

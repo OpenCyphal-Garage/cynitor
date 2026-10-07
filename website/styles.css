@@ -6507,6 +6507,13 @@ details.svc-history-entry[open] > summary::before {
   50% { opacity: 0.4; }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .dsdl-bus-dot,
+  .dsdl-type-row .dsdl-bus-dot::after {
+    animation: none;
+  }
+}
+
 .dsdl-bus-section {
   display: flex;
   align-items: baseline;
