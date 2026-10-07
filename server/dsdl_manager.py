@@ -202,19 +202,21 @@ class DsdlManager:
         """Add what the compiler (pydsdl) reads in a type beyond its fields: its
         comments, whether it is a union, sealed or how far it may grow, its
         size in bytes, and whether it is deprecated. Without pydsdl, or for a
-        type it cannot read, these stay empty."""
+        type it cannot read, these stay empty; for the latter, ``problem``
+        says why, and on which line, as a compile would."""
         service = detail["kind"] == "service"
         sections = detail["fields"] if service else {"": detail["fields"]}
         for field in (f for fields in sections.values() for f in fields):
             field["doc"] = ""
         for constant in detail["constants"]:
             constant["doc"] = ""
-        detail.update(doc="", deprecated=False, layout=None)
+        detail.update(doc="", deprecated=False, layout=None, problem=None)
         try:
             import pydsdl
             read = self._read_type(path, detail["namespace"].split(".")[0], detail["source"] == "custom")
         except Exception as exc:
             logger.debug("pydsdl did not read %s: %s", path, exc)
+            detail["problem"] = self._problem(exc, path)
             return
 
         parts = {"request": read.request_type, "response": read.response_type} if service else {"": read}
@@ -235,6 +237,23 @@ class DsdlManager:
                 "size_bytes": [(sizes.min + 7) // 8, (sizes.max + 7) // 8],
             }
         detail.update(doc=read.doc, deprecated=read.deprecated, layout=layouts if service else layouts[""])
+
+    @staticmethod
+    def _problem(exc: Exception, path: Path) -> Optional[dict[str, Any]]:
+        """Why the compiler refuses the type in ``path``: its message, and the
+        line of ``path`` it is on (None for the file as a whole, or when the
+        fault is in a type it uses, which the message then names). None when
+        pydsdl is missing or failed in some other way."""
+        if isinstance(exc, ImportError):
+            return None
+        import pydsdl
+        if not isinstance(exc, pydsdl.FrontendError):
+            return None
+        where = Path(exc.path) if exc.path else path
+        if where.resolve() != path.resolve():
+            line = f", line {exc.line}" if exc.line else ""
+            return {"message": f"In {where.name}{line}: {exc.text}", "line": None}
+        return {"message": exc.text, "line": exc.line}
 
     def _read_type(self, path: Path, root: str, custom: bool) -> Any:
         """The type in ``path`` as the compiler reads it, with the namespaces it

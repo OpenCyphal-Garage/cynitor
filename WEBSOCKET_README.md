@@ -494,6 +494,8 @@ What the compiler (pydsdl) reads in the type comes with it: `doc` (the type's co
 
 `size_bytes` is the serialized size, smallest and largest; `extent_bytes` how far a type that is not sealed may grow in later versions (for a sealed type, its largest size). A service has one layout each way: `{"request": {...}, "response": {...}}`. When pydsdl cannot read the type, `doc` is empty, `deprecated` false and `layout` null.
 
+`problem` is null for a type that compiles. For one that does not, it says why, as a compile would: `{"message": "Syntax error", "line": 2}`, where `line` is the line of the type's own source, or null when the fault is with the file as a whole (a missing `@sealed`) or in a type it uses, which the message then names.
+
 **Create custom namespace:**
 ```bash
 curl -X POST http://localhost:8080/api/dsdl/custom/namespace \

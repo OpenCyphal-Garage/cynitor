@@ -244,8 +244,28 @@ class TestTypeDetailFromTheCompiler:
     def test_without_pydsdl_the_detail_is_as_before(self, mgr: DsdlManager, monkeypatch) -> None:
         monkeypatch.setitem(sys.modules, "pydsdl", None)  # import fails
         detail = mgr.get_type_detail("uavcan.node.Heartbeat.1.0")
-        assert (detail["doc"], detail["deprecated"], detail["layout"]) == ("", False, None)
+        assert (detail["doc"], detail["deprecated"], detail["layout"], detail["problem"]) == ("", False, None, None)
         assert [f["name"] for f in detail["fields"]] == ["uptime", "vendor_specific_status_code"]
+
+    def test_a_type_that_compiles_has_no_problem(self, mgr: DsdlManager) -> None:
+        mgr.save_type("myapp", "Good", "1.0", "uavcan.node.Heartbeat.1.0 beat\n@sealed\n")
+        assert mgr.get_type_detail("myapp.Good.1.0")["problem"] is None
+
+    def test_why_a_type_does_not_compile_and_on_which_line(self, mgr: DsdlManager) -> None:
+        mgr.save_type("myapp", "Typo", "1.0", "uint8 a\nuint9x b\n@sealed\n")
+        mgr.save_type("myapp", "Unsealed", "1.0", "uint8 a\n")
+        typo = mgr.get_type_detail("myapp.Typo.1.0")
+        unsealed = mgr.get_type_detail("myapp.Unsealed.1.0")
+        assert typo["problem"]["line"] == 2 and typo["problem"]["message"]
+        assert unsealed["problem"]["line"] is None and "@sealed" in unsealed["problem"]["message"]
+        # What the source says is still there, as written.
+        assert [f["name"] for f in typo["fields"]] == ["a", "b"]
+
+    def test_a_problem_in_a_type_it_uses_names_that_type(self, mgr: DsdlManager) -> None:
+        mgr.save_type("myapp", "Typo", "1.0", "uint8 a\nuint9x b\n@sealed\n")
+        mgr.save_type("myapp", "User", "1.0", "myapp.Typo.1.0 t\n@sealed\n")
+        problem = mgr.get_type_detail("myapp.User.1.0")["problem"]
+        assert problem["line"] is None and "Typo.1.0.dsdl" in problem["message"]
 
 
 @pytest.fixture
