@@ -1886,6 +1886,42 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: a collapsed graph is its plot, a line of names and, at its side, its pause, window and Sync")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    shown = "(e) => e.getClientRects().length > 0"
+    plot_height = "(c) => Number(c.querySelector('.plot-overlay').getAttribute('height'))"
+    try:
+        await page.wait_for_timeout(300)
+        card = await compare_graph(page, (1100, "value"), (1700, "current"))
+        await card.locator(".compare-edit-btn").click()  # folded: the header alone above the legend
+        await page.wait_for_timeout(300)
+        tall = await card.evaluate(plot_height)
+        await card.locator('[aria-label="Collapse the graph to its plot"]').click()
+        await page.wait_for_timeout(400)
+        assert not await card.locator(".compare-card-header").evaluate(shown), "Collapsed, the graph keeps its header"
+        assert not await card.locator(".compare-card-editor").evaluate(shown), "Collapsed, the graph keeps its editing rows"
+        names = await card.evaluate("""(c) => [...c.querySelectorAll('.plot-legend-label')].map(l => Math.round(l.getBoundingClientRect().top))""")
+        assert len(names) == 2 and len(set(names)) == 1, f"Collapsed, the names are not one line: their tops are {names}"
+        values = await card.evaluate("(c) => [...c.querySelectorAll('.plot-legend-value, .plot-legend-head')].filter(e => e.getClientRects().length).length")
+        assert values == 0, f"Collapsed, the legend still shows {values} values or headings"
+        assert await card.evaluate(plot_height) > tall + 20, "Collapsed, the plot is no taller"
+        side = card.locator(".compare-side")
+        await side.locator('[aria-label="Time window"]').select_option("300")
+        await side.locator(".plot-pause-btn").click()
+        await side.locator(".compare-sync-btn").click()
+        g = await page.evaluate("(() => { const g = state.compareGraphs[0]; return [g.timeWindow, g.paused, g.sync, compareGraphConfig(g).collapsed]; })()")
+        assert g == [300, True, True, True], f"From the side: window, paused, synced, kept collapsed read {g}"
+        await side.locator('[aria-label="Expand the graph: its header and legend"]').click()
+        await page.wait_for_timeout(300)
+        assert await card.locator(".compare-card-header").evaluate(shown), "Expanded, the graph has no header"
+        back = await card.evaluate("(c) => ['.plot-pause-btn', '.compare-sync-btn'].map(s => !!c.querySelector(`.compare-time-controls ${s}`))")
+        assert back == [True, True], f"Expanded, the pause and Sync buttons are back in the header: {back}"
+        assert "active" in (await card.locator('.plot-window-btn[data-secs="300"]').get_attribute("class")), "The 5m button is not lit"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 @test("Compare: Min/Max follows the lowest and highest of the last samples, and an Add says what it is missing")
 async def _(page):
     await page.evaluate(COMPARE_START)

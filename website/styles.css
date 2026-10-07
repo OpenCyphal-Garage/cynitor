@@ -2747,12 +2747,93 @@ button:focus-visible,
   color: var(--muted);
 }
 
-/* Room to draw under a full legend (5.5rem); sized by the card alone, so a
+/* A card's plot, and the column of controls beside it when collapsed. Room to
+   draw under a full legend (5.5rem); the plot sized by the card alone, so a
    drawing never holds the card at an old size. */
-.compare-graph-card > .detail-plot-area {
+.compare-card-body {
   flex: 1;
+  display: flex;
   min-height: 11rem;
+}
+
+.compare-card-body > .detail-plot-area {
+  flex: 1;
+  min-width: 0;
   contain: size;
+}
+
+/* Collapsed, a graph is its plot: no header, no editing rows; its pause, time
+   window and Sync in a column at its right; its legend a line of names. */
+.compare-side {
+  display: none;
+}
+
+.compare-graph-card.collapsed .compare-card-header,
+.compare-graph-card.collapsed .compare-card-editor {
+  display: none;
+}
+
+.compare-graph-card.collapsed .compare-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.compare-collapse-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0 0.125rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.compare-collapse-btn:hover {
+  color: var(--text);
+}
+
+.compare-side .compare-collapse-btn {
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.compare-window-select {
+  width: 2.75rem;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  padding: 0.125rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.compare-graph-card.collapsed .plot-legend--table {
+  flex-direction: row;
+  gap: 0.75rem;
+  max-height: none;
+  overflow: hidden;
+}
+
+.compare-graph-card.collapsed .plot-legend--table .plot-legend-item {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.compare-graph-card.collapsed .plot-legend-head,
+.compare-graph-card.collapsed .plot-legend-value,
+.compare-graph-card.collapsed .plot-legend-style,
+.compare-graph-card.collapsed .plot-legend-remove,
+.compare-graph-card.collapsed .plot-legend-unit {
+  display: none;
 }
 
 /* A Compare plot is named on itself, by its graph's name: no title over it. */

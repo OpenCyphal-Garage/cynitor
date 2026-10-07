@@ -30,6 +30,7 @@ const compareGraphConfig = (g) => ({
   grid: g.grid,
   clickPauses: g.clickPauses,
   sync: g.sync,
+  collapsed: g.collapsed,
 });
 
 // A graph's settings as read from storage or a file: what is valid of them,
@@ -51,6 +52,7 @@ const sanitizeCompareGraph = (g) => {
     grid: g.grid === true,
     clickPauses: g.clickPauses === true,
     sync: g.sync === true,
+    collapsed: g.collapsed === true,
   };
 };
 
@@ -990,7 +992,62 @@ const _buildGraphCard = (graph) => {
   header.className = 'compare-card-header';
   header.append(editBtn, nameInput, timeControls, cardActions);
 
-  card.append(header, editor, plotArea);
+  // Collapsed, a graph is its plot: its header and editing rows go, its legend
+  // is a line of names, and what watching needs (pause, time window, Sync)
+  // moves to a column at the plot's side; so graphs sit close to each other.
+  const side = document.createElement('div');
+  side.className = 'compare-side';
+  const collapseBtn = document.createElement('button');
+  collapseBtn.type = 'button';
+  collapseBtn.className = 'compare-collapse-btn';
+  collapseBtn.textContent = '▴';
+  collapseBtn.setAttribute('aria-label', 'Collapse the graph to its plot');
+  collapseBtn.title = 'Show only the plot, its pause, time window and Sync at its side';
+  const expandBtn = document.createElement('button');
+  expandBtn.type = 'button';
+  expandBtn.className = 'compare-collapse-btn';
+  expandBtn.textContent = '▾';
+  expandBtn.setAttribute('aria-label', 'Expand the graph: its header and legend');
+  expandBtn.title = 'Show the graph\'s header and legend';
+  const windowSel = document.createElement('select');  // the window buttons', in short (_syncKept keeps it)
+  windowSel.className = 'compare-window-select';
+  windowSel.setAttribute('aria-label', 'Time window');
+  for (const tw of PLOT_TIME_WINDOWS) windowSel.add(new Option(tw.label, String(tw.secs)));
+  windowSel.value = String(graph.timeWindow);
+  windowSel.addEventListener('change', () => timeControls.querySelector(`.plot-window-btn[data-secs="${windowSel.value}"]`)?.click());
+  side.append(expandBtn, windowSel);
+  // The pause and Sync buttons move between the header and the column.
+  const pauseBtn = timeControls.querySelector('.plot-pause-btn');
+  const setCollapsed = (on) => {
+    graph.collapsed = on;
+    card.classList.toggle('collapsed', on);
+    collapseBtn.setAttribute('aria-expanded', String(!on));
+    expandBtn.setAttribute('aria-expanded', String(!on));
+    if (on) {
+      expandBtn.after(pauseBtn);
+      windowSel.after(syncBtn);
+    } else {
+      timeControls.prepend(pauseBtn);
+      timeControls.appendChild(syncBtn);
+    }
+  };
+  const toggleCollapsed = (on, focus) => {
+    setCollapsed(on);
+    saveSettings();
+    graph._fingerprint = '';
+    _renderOneGraph(graph);  // its plot has another size
+    focus.focus();
+  };
+  collapseBtn.addEventListener('click', () => toggleCollapsed(true, expandBtn));
+  expandBtn.addEventListener('click', () => toggleCollapsed(false, collapseBtn));
+  cardActions.prepend(collapseBtn);
+  setCollapsed(graph.collapsed);
+
+  const body = document.createElement('div');
+  body.className = 'compare-card-body';
+  body.append(plotArea, side);
+
+  card.append(header, editor, body);
   return card;
 };
 
@@ -1037,6 +1094,8 @@ const _syncKept = (graph, card) => {
   const text = kept !== null && graph.timeWindow > kept ? `kept ${_formatSpan(kept)}` : '';
   if (label.textContent !== text) label.textContent = text;
   label.classList.toggle('hidden', !text);
+  const windowSel = card.querySelector('.compare-window-select');  // a collapsed graph's window
+  if (windowSel.value !== String(graph.timeWindow)) windowSel.value = String(graph.timeWindow);
 };
 
 // A series' last, lowest and highest value in view, or null when none is.
