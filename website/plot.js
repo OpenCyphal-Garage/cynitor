@@ -118,6 +118,16 @@ const togglePlotPause = (cfg) => {
   cfg.pausedAt = cfg.paused ? (cfg._anchor ?? now) : null;
 };
 
+// A plot's pause button shows whether the plot is paused: ▶, lit and pressed
+// while it is; ⏸ while it runs.
+const syncPauseButton = (btn, cfg) => {
+  if (!btn) return;
+  const paused = Boolean(cfg.paused);
+  btn.textContent = paused ? '▶' : '⏸';
+  btn.classList.toggle('active', paused);
+  btn.setAttribute('aria-pressed', String(paused));
+};
+
 const _processSmooth = (cfg, keys) => {
   if (!cfg.smooth || cfg.smooth <= 0) return;
   if (!cfg._smoothBufs) cfg._smoothBufs = new Map();
@@ -514,14 +524,13 @@ const buildPlotControls = (opts = {}) => {
   const restart = opts.restart || (() => startPlotAnim());
 
   const pauseBtn = document.createElement('button');
-  pauseBtn.className = `plot-pause-btn${cfg.paused ? ' active' : ''}`;
+  pauseBtn.className = 'plot-pause-btn';
   pauseBtn.type = 'button';
   pauseBtn.setAttribute('aria-label', 'Pause plot');
-  pauseBtn.textContent = cfg.paused ? '▶' : '⏸';
+  syncPauseButton(pauseBtn, cfg);
   pauseBtn.addEventListener('click', () => {
     togglePlotPause(cfg);
-    pauseBtn.textContent = cfg.paused ? '▶' : '⏸';
-    pauseBtn.classList.toggle('active', cfg.paused);
+    syncPauseButton(pauseBtn, cfg);
     invalidate();
     if (!cfg.paused) restart();
   });
@@ -1793,15 +1802,6 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
     let clickTimer = null;
     const DRAG_THRESHOLD = 3;
 
-    const _syncPauseBtn = () => {
-      // A Compare graph's pause button is in its card's header, not in the plot.
-      const pb = (plotArea.closest('.compare-graph-card') || plotArea).querySelector('.plot-pause-btn');
-      if (pb) {
-        pb.textContent = cfg.paused ? '▶' : '⏸';
-        pb.classList.toggle('active', cfg.paused);
-      }
-    };
-
     let downMx = 0;
     let downShift = false;
     let drawingStroke = null;
@@ -1942,7 +1942,8 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
         clickTimer = setTimeout(() => {
           clickTimer = null;
           togglePlotPause(cfg);
-          _syncPauseBtn();
+          // A Compare graph's pause button is in its card's header, not in the plot.
+          syncPauseButton((plotArea.closest('.compare-graph-card') || plotArea).querySelector('.plot-pause-btn'), cfg);
           cfg._fingerprint = '';
           if (plotArea._zoomRestart) plotArea._zoomRestart();
         }, 250);

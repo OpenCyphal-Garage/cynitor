@@ -115,11 +115,7 @@ const initCompareView = () => {
     for (const graph of state.compareGraphs) {
       const card = cardsContainer.querySelector(`[data-graph-id="${graph.id}"]`);
       if (!card) continue;
-      const btn = card.querySelector('.plot-pause-btn');
-      if (btn) {
-        btn.textContent = graph.paused ? '▶' : '⏸';
-        btn.classList.toggle('active', graph.paused);
-      }
+      syncPauseButton(card.querySelector('.plot-pause-btn'), graph);
       _renderOneGraph(graph);  // a graph just paused keeps what it shows now
     }
   });
