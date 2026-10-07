@@ -2210,6 +2210,63 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+# A graph's Markers row: its markers as listed, its drawings' count, its hint.
+COMPARE_MARKS = """(c) => ({marks: [...c.querySelectorAll('.compare-mark-go')].map(b => b.textContent),
+    drawings: c.querySelector('.compare-marks-drawings')?.textContent ?? '',
+    hint: c.querySelector('.compare-marks-hint')?.textContent ?? ''})"""
+
+
+@test("Compare: a graph lists its markers and drawings, shows a marker gone off screen, and removes them")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    asked = []
+
+    async def on_dialog(dialog):
+        asked.append(dialog.message)
+        await dialog.accept()
+
+    page.on("dialog", on_dialog)
+    try:
+        await page.wait_for_timeout(300)
+        card = await compare_graph(page, (1100, "value"))
+        await page.wait_for_timeout(300)
+        row = await card.evaluate(COMPARE_MARKS)
+        assert row["marks"] == [] and "Shift+click" in row["hint"] and "Alt+drag" in row["hint"], \
+            f"With nothing marked, the Markers row reads {row}"
+        # A marker kept from ten minutes ago: off screen in a 1m window.
+        await page.evaluate("""() => { const g = state.compareGraphs[0];
+            g.markers.push({t: Date.now() / 1000 - 600, label: 'start', note: '', color: '', lineStyle: 'dashed'});
+            g._fingerprint = ''; _renderOneGraph(g); }""")
+        row = await card.evaluate(COMPARE_MARKS)
+        assert len(row["marks"]) == 1 and row["marks"][0].endswith("start"), f"The Markers row lists {row['marks']}"
+        await card.locator(".compare-mark-go").click()
+        await page.wait_for_timeout(300)
+        assert await page.evaluate("state.compareGraphs[0].paused"), "Shown from the list, the graph does not hold still"
+        where = await card.evaluate("""(c) => Number(c.querySelector('.plot-marker line')?.getAttribute('x1'))
+            / Number(c.querySelector('.plot-overlay').getAttribute('width'))""")
+        assert 0.4 < where < 0.6, f"Shown from the list, the marker is at {where:.2f} of the plot's width, not its middle"
+        await card.locator(".compare-mark-delete").click()
+        assert await page.evaluate("state.compareGraphs[0].markers.length") == 0, "× leaves the marker in the graph"
+        # A drawing made on the plot is counted, and cleared from the row once asked.
+        box = await card.locator(".plot-overlay").bounding_box()
+        x, y = box["x"] + box["width"] * 0.5, box["y"] + box["height"] / 2
+        await page.keyboard.down("Alt")
+        await page.mouse.move(x, y)
+        await page.mouse.down()
+        await page.mouse.move(x + 60, y + 20, steps=4)
+        await page.mouse.up()
+        await page.keyboard.up("Alt")
+        await page.wait_for_timeout(300)
+        row = await card.evaluate(COMPARE_MARKS)
+        assert row["drawings"] == "1 drawing", f"After a drawing, the Markers row reads {row}"
+        await card.locator(".compare-marks-clear").click()
+        assert asked and "1 drawing" in asked[-1], f"Clear asks {asked}"
+        assert await page.evaluate("state.compareGraphs[0].drawings.length") == 0, "Clear leaves the drawing"
+    finally:
+        page.remove_listener("dialog", on_dialog)
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

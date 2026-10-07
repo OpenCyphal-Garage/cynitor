@@ -209,7 +209,7 @@ The legend uses three-zone `<div>` pills: left swatch (click to pick color via n
 
 **Zoom/pan** is implemented in `bindPlotTooltip`: Ctrl+wheel zoom scales `cfg._zoom` centered on cursor (the wheel alone scrolls the page), drag translates `cfg._panOffset`. `computePlotScales` applies zoom and pan to the base X domain. With the graph's `clickPauses` on (off by default), a click toggles pause (with 250ms delay to distinguish from double-click); double-click resets zoom and pan.
 
-**Timeline markers** (`cfg.markers[]`) are placed with Shift+click and rendered as vertical dashed lines with labels by `_renderMarkers`. Each marker has a timestamp, label, optional note, color, and line style. Clicking near an existing marker opens an inline edit form (`_openMarkerForm`) with save/delete.
+**Timeline markers** (`cfg.markers[]`) are placed with Shift+click and rendered as vertical dashed lines with labels by `_renderMarkers`. Each marker has a timestamp, label, optional note, color, and line style. Clicking near an existing marker opens an inline edit form (`_openMarkerForm`) with save/delete. The graph's Markers row (`refreshMarks` in `buildComparePanel`) lists the markers by time and counts the drawings; `_syncMarks` refreshes it whenever either changes, and `_showMarker` pauses the graph with a marker in the middle of its window (`pausedAt` = the marker's time + 40% of the window).
 
 **Freehand drawings** (`cfg.drawings[]`) are captured with Alt+drag. Points are stored as `{t, y}` (timestamp + normalized 0–1 panel height) so they scroll with the timeline. Drawing color, width, and dash style are configurable per-graph via toolbar controls. Alt+double-click clears all drawings.
 

@@ -457,7 +457,7 @@ const _comparableSeries = () => {
     || (a.nodeId ?? Infinity) - (b.nodeId ?? Infinity) || 0);
 };
 
-// A graph's editing rows: its series, derived series and thresholds, a row each.
+// A graph's editing rows: its series, derived series, thresholds and markers, a row each.
 const buildComparePanel = (graph, onUpdate) => {
   const panel = document.createElement('div');
   panel.className = 'plot-compare-panel';
@@ -681,7 +681,75 @@ const buildComparePanel = (graph, onUpdate) => {
   thSection.appendChild(thPicker);
   panel.appendChild(thSection);
 
+  // Its markers, by time, and its drawings: found here once off screen, and
+  // removed. While there are none, the row says how to add them.
+  const marksSection = document.createElement('div');
+  marksSection.className = 'compare-marks';
+  const marksHdr = document.createElement('span');
+  marksHdr.className = 'plot-threshold-hdr';
+  marksHdr.textContent = 'Markers';
+  const marksList = document.createElement('div');
+  marksList.className = 'compare-marks-list';
+  marksSection.append(marksHdr, marksList);
+  panel.appendChild(marksSection);
+
+  const drawingsCount = () => `${graph.drawings.length} drawing${graph.drawings.length === 1 ? '' : 's'}`;
+  const refreshMarks = () => {
+    const markers = graph.markers.map((m, i) => ({ m, i })).sort((a, b) => a.m.t - b.m.t);
+    const hints = [!markers.length && 'Shift+click the plot to mark a moment', !graph.drawings.length && 'Alt+drag on it to draw'];
+    const fresh = document.createElement('div');
+    fresh.innerHTML = markers.map(({ m, i }) => {
+      const label = escapeHtml(m.label || '');
+      const about = `${new Date(m.t * 1000).toLocaleString()}${m.note ? ` · ${m.note}` : ''}`;
+      return `<span class="compare-mark"><button type="button" class="compare-mark-go" data-i="${i}" title="Show it: ${escapeHtml(about)}">`
+        + `${formatPlotTime(m.t)} ${label}</button><button type="button" class="compare-mark-delete" data-i="${i}"`
+        + ` aria-label="Delete marker ${label}">×</button></span>`;
+    }).join('')
+      + (graph.drawings.length ? `<span class="compare-marks-drawings">${drawingsCount()}</span>`
+        + '<button type="button" class="plot-compare-add compare-marks-clear">Clear</button>' : '')
+      + (hints.some(Boolean) ? `<span class="compare-marks-hint">${hints.filter(Boolean).join(' · ')}</span>` : '');
+    patchChildren(marksList, fresh);
+  };
+  marksList.addEventListener('click', (e) => {
+    const show = e.target.closest('.compare-mark-go');
+    const remove = e.target.closest('.compare-mark-delete');
+    if (show) {
+      _showMarker(graph, graph.markers[Number(show.dataset.i)]);
+    } else if (remove) {
+      graph.markers.splice(Number(remove.dataset.i), 1);
+      onUpdate();
+    } else if (e.target.closest('.compare-marks-clear') && window.confirm(`Clear this graph's ${drawingsCount()}?`)) {
+      graph.drawings = [];
+      onUpdate();
+    }
+  });
+  panel._refreshMarks = refreshMarks;
+  refreshMarks();
+
   return panel;
+};
+
+// A marker shown from its graph's list: the graph pauses with the marker in
+// the middle of its window, whose right edge runs 20% past where it is held
+// (computePlotScales). An "All" window shows it where the history reaches.
+const _showMarker = (graph, marker) => {
+  if (!marker) return;
+  if (!graph.paused) togglePlotPause(graph);
+  if (graph.timeWindow > 0) graph.pausedAt = marker.t + graph.timeWindow * 0.4;
+  graph._zoom = 1;
+  graph._panOffset = 0;
+  graph._fingerprint = '';
+  syncPauseButton(el('compareContainer').querySelector(`[data-graph-id="${graph.id}"] .plot-pause-btn`), graph);
+  _renderOneGraph(graph);
+};
+
+// The Markers row follows markers and drawings however they change: on the
+// plot (Shift+click, the marker form, Alt+drag), or from the row itself.
+const _syncMarks = (graph, card) => {
+  const key = JSON.stringify([graph.markers, graph.drawings.length]);
+  if (graph._marksKey === key) return;
+  graph._marksKey = key;
+  card.querySelector('.plot-compare-panel')?._refreshMarks?.();
 };
 
 const _buildGraphCard = (graph) => {
@@ -1163,7 +1231,10 @@ const _renderCompareGraphNow = (graph, plotArea) => {
 
   const visibleSeries = compareSeries.filter(s => !graph._hidden.has(s.name));
   const card = plotArea.closest('.compare-graph-card');
-  if (card) _syncKept(graph, card);
+  if (card) {
+    _syncKept(graph, card);
+    _syncMarks(graph, card);
+  }
 
   if (!legendSeries.length) {
     plotArea.innerHTML = '<div class="plot-empty">Add subjects and attributes to compare</div>';
