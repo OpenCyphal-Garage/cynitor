@@ -3127,8 +3127,8 @@ async def _(page):
     focused = "document.activeElement.dataset.ns ?? document.activeElement.getAttribute('aria-label')"
     await dsdl_open(page, server)
     try:
-        await page.locator("#dsdlSearch").focus()
-        await page.keyboard.press("Shift+Tab")  # the custom tree's stop: its namespace
+        await page.locator("#dsdlCustomAddNs").focus()  # the Custom header's last button
+        await page.keyboard.press("Tab")  # the custom tree's stop: its namespace
         stops = [await page.evaluate(focused)]
         for _ in range(2):
             await page.keyboard.press("Tab")  # on through the namespace's own buttons
@@ -3137,7 +3137,7 @@ async def _(page):
         await page.wait_for_timeout(300)
         editor = await page.locator("#dsdlEditorName").count()
         assert stops == ["myapp", "Add sub-namespace", "Add type"] and editor, \
-            f"Shift+Tab, Tab, Tab from the search box: {stops}; Enter opened an editor: {bool(editor)}"
+            f"Tab, Tab, Tab from the Custom header: {stops}; Enter opened an editor: {bool(editor)}"
         await page.locator("#dsdlEditorClose").click()
         await page.locator('#dsdlCustomTree .dsdl-ns-row[data-ns="myapp"]').click()
         await page.locator('.dsdl-type-row[data-type="myapp.Pair.1.0"]').click()
@@ -3364,6 +3364,33 @@ async def _(page):
             '.dsdl-ns-row[data-ns="uavcan.node"] + .dsdl-ns-children > .dsdl-type-row')].map((row) => row.dataset.type)""")
         assert [t.removeprefix("uavcan.node.") for t in listed] == [
             "ExecuteCommand.1.9", "ExecuteCommand.1.10", "Health.1.0", "Heartbeat.1.0", "Version.1.0"], f"Listed: {listed}"
+    finally:
+        await dsdl_close(page, server)
+
+
+async def dsdl_search(page, term):
+    """Searched, and what the count under the search box says."""
+    await page.locator("#dsdlSearch").fill(term)
+    await page.wait_for_timeout(400)  # the search's debounce
+    count = page.locator("#dsdlSearchCount")
+    return await count.inner_text() if await count.count() else None
+
+
+@test("DSDL: the search sits above the trees and says how many types match")
+async def _(page):
+    server = _DsdlServer()
+    await dsdl_open(page, server)
+    try:
+        above = await page.evaluate("""document.getElementById('dsdlSearch').getBoundingClientRect().bottom
+            <= document.querySelector('#dsdlTreePanel .dsdl-tree-scroll').getBoundingClientRect().top""")
+        said = {term: await dsdl_search(page, term) for term in ("Scalar", "Heartbeat", "zzz", "")}
+        await page.locator('#dsdlCustomTree .dsdl-ns-row[data-ns="myapp"]').hover()
+        await page.locator('[data-hide-ns="myapp"]').click()
+        said["Reading, its namespace hidden"] = await dsdl_search(page, "Reading")
+        assert above and said == {
+            "Scalar": "2 types match", "Heartbeat": "1 type matches", "zzz": "No type matches", "": "",
+            "Reading, its namespace hidden": "No type matches, 1 more in hidden namespaces",
+        }, f"Search above the trees: {above}; the count says {said}"
     finally:
         await dsdl_close(page, server)
 

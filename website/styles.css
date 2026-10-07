@@ -6046,7 +6046,18 @@ details.svc-history-entry[open] > summary::before {
 
 .dsdl-search-wrap {
   padding: 0.5rem 0.625rem;
-  border-top: 0.0625rem solid var(--border);
+  border-bottom: 0.0625rem solid var(--border);
+}
+
+/* How many types the search finds, under it while there is one. */
+.dsdl-search-count {
+  margin-top: 0.3125rem;
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
+.dsdl-search-count:empty {
+  display: none;
 }
 
 .dsdl-search {

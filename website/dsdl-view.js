@@ -55,6 +55,11 @@ const DsdlView = (() => {
     <div class="dsdl-view">
       <div class="dsdl-split">
         <div class="dsdl-tree-panel" id="dsdlTreePanel">
+          <div class="dsdl-search-wrap">
+            <input type="search" class="dsdl-search" id="dsdlSearch"
+                   placeholder="Search types or fields…" aria-label="Search DSDL types" />
+            <div class="dsdl-search-count" id="dsdlSearchCount" role="status"></div>
+          </div>
           <div class="dsdl-tree-scroll">
             <div class="dsdl-tree-section">
               <div class="dsdl-section-header" id="dsdlPublicHeader"></div>
@@ -65,10 +70,6 @@ const DsdlView = (() => {
               <div class="dsdl-section-header" id="dsdlCustomHeader"></div>
               <div class="dsdl-tree" id="dsdlCustomTree" role="tree" aria-label="Custom types"></div>
             </div>
-          </div>
-          <div class="dsdl-search-wrap">
-            <input type="text" class="dsdl-search" id="dsdlSearch"
-                   placeholder="Search types or fields…" aria-label="Search DSDL types" />
           </div>
         </div>
         <div class="dsdl-split-handle" id="dsdlSplitHandle"></div>
@@ -369,7 +370,7 @@ const DsdlView = (() => {
     _updateBusDots();
   };
 
-  const _renderCustomTree = () => {
+  const _drawCustomTree = () => {
     const container = document.getElementById('dsdlCustomTree');
     if (!container || !_namespacesData) return;
 
@@ -436,6 +437,34 @@ const DsdlView = (() => {
     });
 
     _updateBusDots();
+  };
+
+  // The custom tree is drawn after the public one, wherever both are: the
+  // search's count, of both, follows it.
+  const _renderCustomTree = () => {
+    _drawCustomTree();
+    _updateSearchCount();
+  };
+
+  const _countMatches = (node, term) => _filterTypes(node.types || [], term).length
+    + Object.values(node.children || {}).reduce((n, child) => n + _countMatches(child, term), 0);
+
+  // How many types a search finds; those in hidden namespaces, not shown,
+  // are counted apart.
+  const _updateSearchCount = () => {
+    const count = document.getElementById('dsdlSearchCount');
+    const term = _searchTerm.toLowerCase().trim();
+    if (!count) return;
+    if (!term || !_namespacesData) {
+      count.textContent = '';
+      return;
+    }
+    const shown = document.querySelectorAll('#dsdlTreePanel .dsdl-type-row').length;
+    const custom = _customNamespacesFromTree();
+    const hidden = _showHidden ? 0 : Object.keys(custom).filter((ns) => _hiddenNamespaces.has(ns))
+      .reduce((n, ns) => n + _countMatches(custom[ns], term), 0);
+    const found = shown === 0 ? 'No type matches' : shown === 1 ? '1 type matches' : `${shown} types match`;
+    count.textContent = hidden ? `${found}, ${hidden} more in hidden namespaces` : found;
   };
 
   const _hasUncompiledTypes = (node) => {
