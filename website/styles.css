@@ -1697,9 +1697,11 @@ button:focus-visible,
   color: var(--accent);
 }
 
-/* A card's Edit toggle in Compare looks like the time-window buttons beside it. */
+/* A card's Edit toggle in Compare, and a plot's Compare button, look like
+   the time-window buttons beside them. */
 .plot-window-btn,
-.compare-edit-btn {
+.compare-edit-btn,
+.plot-to-compare {
   font-family: var(--mono);
   font-size: 0.625rem;
   font-weight: 500;
@@ -1713,7 +1715,8 @@ button:focus-visible,
 }
 
 .plot-window-btn:hover,
-.compare-edit-btn:hover {
+.compare-edit-btn:hover,
+.plot-to-compare:hover {
   background: var(--surface-2);
   color: var(--text);
 }

@@ -1025,6 +1025,29 @@ async def _(page):
         await card.locator('[aria-label="Remove graph"]').click()
 
 
+@test("Plots: Compare opens what a node's plot shows in a new Compare graph")
+async def _(page):
+    await page.locator("#viewTabNodes").click()
+    await page.evaluate("setSelectedNode(20)")
+    await page.locator('#selectedNodeContent .subject-card[data-subject="1200"]').click()
+    try:
+        await page.wait_for_function(f"{PLOT_PANELS}.join() === 'velocity[0],velocity[1],velocity[2]'", timeout=3000)
+        button = page.locator("#selectedNodeContent .plot-to-compare")
+        assert await button.count() == 1, "The plot has no Compare button"
+        await button.click()
+        assert await page.evaluate("state.activeView") == "compare", "Compare did not open the Compare tab"
+        keys = await page.evaluate("state.compareGraphs.at(-1).series.map(compareSeriesKey)")
+        assert keys == ["1200:velocity[0]@20", "1200:velocity[1]@20", "1200:velocity[2]@20"], f"The new graph holds {keys}"
+        card = page.locator(".compare-graph-card").last
+        await page.wait_for_function(
+            "document.querySelectorAll('.compare-graph-card:last-child .plot-legend-item').length === 3", timeout=3000)
+        assert await card.locator(".compare-graph-name").input_value() == "S1200", "The new graph is not named for its subject"
+    finally:
+        await page.evaluate("""() => { const g = state.compareGraphs.at(-1);
+            if (g) document.querySelector(`[data-graph-id="${g.id}"] .compare-graph-delete`)?.click();
+            switchView('nodes'); clearSelectedNode(); }""")
+
+
 @test("Tables: Subjects say how long ago they were heard, and how many bytes a second")
 async def _(page):
     await page.locator("#viewTabSubjects").click()

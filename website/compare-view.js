@@ -73,7 +73,9 @@ const initCompareView = () => {
   if (container.querySelector('.compare-toolbar')) {
     for (const graph of state.compareGraphs) {
       const card = container.querySelector(`[data-graph-id="${graph.id}"]`);
-      card?.querySelector('.plot-compare-panel')?._refreshSeriesList?.();
+      if (card) card.querySelector('.plot-compare-panel')?._refreshSeriesList?.();
+      // A graph made elsewhere (from a Nodes or Subjects plot) gets its card.
+      else container.querySelector('.compare-cards').appendChild(_buildGraphCard(graph));
     }
     startCompareAnim();
     return;

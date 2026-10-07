@@ -349,24 +349,43 @@ const collectPlotSeries = (sid, cfg = null, publisher = null) => {
   }
   if (cfg) _processSmooth(cfg, keys);
   const allSeries = [];
-  const add = (name, field, buf) => {
+  // `nodeId`: the series' publisher, when one node makes it (see openPlotInCompare).
+  const add = (name, field, buf, nid) => {
     if (!buf || buf.length < 2) return;
     _tagGaps(buf);
-    allSeries.push({ name, field, data: buf });
+    allSeries.push({ name, field, data: buf, nodeId: Number.isInteger(nid) ? nid : null });
   };
   for (const key of keys) {
     const field = key.slice(key.indexOf(':') + 1);
     const groups = _byPublisher(state.subjectHistory.get(key));
     if (publisher != null) {
-      add(field, field, groups.get(publisher));
+      add(field, field, groups.get(publisher), publisher);
     } else if (groups.size <= 1) {
-      add(field, field, cfg ? _getSmoothBuf(cfg, key) : state.subjectHistory.get(key));
+      add(field, field, cfg ? _getSmoothBuf(cfg, key) : state.subjectHistory.get(key), groups.keys().next().value);
     } else {
       const nids = [...groups.keys()].sort((a, b) => (a ?? Infinity) - (b ?? Infinity));
-      for (const nid of nids) add(`${field} · ${_publisherLabel(nid)}`, field, groups.get(nid));
+      for (const nid of nids) add(`${field} · ${_publisherLabel(nid)}`, field, groups.get(nid), nid);
     }
   }
   return allSeries;
+};
+
+// A Nodes or Subjects plot's series, as shown, in a new Compare graph, opened
+// there: from a subject found in a table to comparing it with others.
+const openPlotInCompare = (plotArea) => {
+  const sid = state.selectedPlotSubject;
+  const shown = plotArea._plotCtx?.visible || [];
+  if (sid == null || !shown.length) return;
+  const graph = newCompareGraph({
+    name: `S${sid}`,
+    series: shown.map((s) => (s.nodeId == null
+      ? { subjectId: sid, attribute: s.field }
+      : { subjectId: sid, attribute: s.field, nodeId: s.nodeId })),
+  });
+  state.compareGraphs.push(graph);
+  saveSettings();
+  switchView('compare');
+  el('compareContainer').querySelector(`[data-graph-id="${graph.id}"]`)?.scrollIntoView({ block: 'nearest' });
 };
 
 const computePlotScales = (visible, w, totalPanelsH, compareSeries = [], cfg = null) => {
@@ -955,6 +974,17 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
   header.appendChild(titleNode);
   if (!opts.noControls) {
     const controls = buildPlotControls(opts);
+    if (!opts.cfg) {  // a Nodes or Subjects plot: its series can go to Compare
+      const sep = document.createElement('span');
+      sep.className = 'plot-controls-sep';
+      const toCompare = document.createElement('button');
+      toCompare.type = 'button';
+      toCompare.className = 'plot-to-compare';
+      toCompare.textContent = 'Compare';
+      toCompare.title = 'Open the series shown here in a new Compare graph';
+      toCompare.addEventListener('click', () => openPlotInCompare(plotArea));
+      controls.append(sep, toCompare);
+    }
     if (controls.childElementCount) header.appendChild(controls);
   }
   const legendNode = document.createElement('div');
