@@ -460,6 +460,7 @@ Response:
 ```json
 {
     "paths": [{"path": "...", "label": "Public regulated types", "source": "regulated"}],
+    "public_compilable": true,
     "compiled": true,
     "last_compiled": 1773832423.0,
     "last_public_compiled": 1773832423.0,
@@ -469,14 +470,14 @@ Response:
 }
 ```
 
-`last_public_compiled` covers the `uavcan/` and `reg/` namespaces only; `last_custom_compiled` covers every other top-level namespace under `python_compiled_messages/` (i.e. user-created custom types). `last_compiled` is the max of both, kept for backward compatibility.
+`last_public_compiled` covers the public `uavcan/` and `reg/` namespaces, compiled into `python_compiled_messages/`; `last_custom_compiled` covers the custom types, compiled into the data folder (`dsdl/compiled`). `last_compiled` is the max of both, kept for backward compatibility.
 
 **DSDL namespace tree:**
 ```bash
 curl http://localhost:8080/api/dsdl/namespaces
 ```
 
-Returns a nested tree of namespaces with type entries. Each type includes `short_name`, `full_name`, `version`, `kind` (`"message"` or `"service"`), `fixed_port_id`, `source` (`"regulated"` or `"custom"`), and `compiled` (`true` if a corresponding `.py` exists in `python_compiled_messages/`).
+Returns a nested tree of namespaces with type entries. Each type includes `short_name`, `full_name`, `version`, `kind` (`"message"` or `"service"`), `fixed_port_id`, `source` (`"regulated"` or `"custom"`), `field_names` (for search), and `compiled` (`true` once its Python code exists: in `python_compiled_messages/` for a public type, in the data folder's `dsdl/compiled` for a custom one). Custom namespaces, empty ones included, carry `"_source": "custom"`.
 
 **DSDL type detail:**
 ```bash
