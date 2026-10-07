@@ -847,6 +847,7 @@ const DsdlView = (() => {
     const actionsHtml = data.source === 'custom' ? `
       <div class="dsdl-doc-actions">
         ${data.compiled ? '' : '<button class="dsdl-editor-btn dsdl-editor-btn-save" id="dsdlEditBtn" aria-label="Edit type">Edit</button>'}
+        <button class="dsdl-editor-btn dsdl-editor-btn-save" id="dsdlNewVersionBtn" title="Write its next version, starting from a copy">New version</button>
         <button class="dsdl-editor-btn dsdl-editor-btn-danger" id="dsdlDeleteBtn" aria-label="Delete type">Delete</button>
         ${data.compiled ? `<span class="dsdl-doc-note">${escapeHtml(_compiledNote)}</span>` : ''}
       </div>` : '';
@@ -886,6 +887,7 @@ const DsdlView = (() => {
     });
 
     document.getElementById('dsdlEditBtn')?.addEventListener('click', () => _openEditorEdit(data));
+    document.getElementById('dsdlNewVersionBtn')?.addEventListener('click', () => _openEditorNewVersion(data));
     document.getElementById('dsdlDeleteBtn')?.addEventListener('click', () => _confirmDeleteType(data.full_name, data.compiled));
 
     _updateBusDetail();
@@ -1061,7 +1063,9 @@ const DsdlView = (() => {
   const _mayDropDraft = () => !_editorOpen || !_editorDirty
     || window.confirm('Discard the unsaved changes in the editor?');
 
-  const _openEditorNew = async (prefilledNs) => {
+  // A new type, its editor empty or opened on `draft` ({type_name, version,
+  // source_text, fixed_port_id}).
+  const _openEditorNew = async (prefilledNs, draft = null) => {
     if (!_mayDropDraft()) return;
     _editorOpen = true;
     _editorMode = 'new';
@@ -1070,7 +1074,22 @@ const DsdlView = (() => {
       const resp = await requestJson('/api/dsdl/custom/namespaces');
       _customNamespaces = resp.namespaces || [];
     } catch { _customNamespaces = []; }
-    _renderEditorSplit(prefilledNs);
+    _renderEditorSplit(prefilledNs, draft);
+  };
+
+  // A type changed once compiled becomes a new version, Cyphal's way: the
+  // editor opens on a copy, at the next minor version not taken.
+  const _openEditorNewVersion = (typeData) => {
+    const [major, minor] = typeData.version.split('.').map(Number);
+    const taken = _getTypeIndex();
+    let next = minor + 1;
+    while (taken[`${typeData.namespace}.${typeData.short_name}.${major}.${next}`]) next += 1;
+    return _openEditorNew(typeData.namespace, {
+      type_name: typeData.short_name,
+      version: `${major}.${next}`,
+      source_text: typeData.source_text || '',
+      fixed_port_id: typeData.fixed_port_id,
+    });
   };
 
   const _confirmDeleteType = (fullName, compiled) => {
@@ -1152,7 +1171,7 @@ const DsdlView = (() => {
     if (detail) detail.style.flex = '';
   };
 
-  const _renderEditorSplit = (prefilledNs) => {
+  const _renderEditorSplit = (prefilledNs, draft = null) => {
     const area = document.getElementById('dsdlDetailArea');
     if (!area) return;
 
@@ -1185,11 +1204,11 @@ const DsdlView = (() => {
     }
 
     const isEdit = _editorMode === 'edit';
-    const prefill = _editPrefill || {};
-    const nameValue = isEdit ? (prefill.type_name || '') : '';
-    const versionValue = isEdit ? (prefill.version || '1.0') : '1.0';
-    const portValue = isEdit && prefill.fixed_port_id != null ? String(prefill.fixed_port_id) : '';
-    const sourceValue = isEdit ? (prefill.source_text || '') : '';
+    const fill = (isEdit ? _editPrefill : draft) || {};
+    const nameValue = fill.type_name || '';
+    const versionValue = fill.version || '1.0';
+    const portValue = fill.fixed_port_id != null ? String(fill.fixed_port_id) : '';
+    const sourceValue = fill.source_text || '';
     const lockAttr = isEdit ? ' disabled' : '';
     const titleText = isEdit ? 'Edit DSDL Type' : 'New DSDL Type';
     const saveLabel = isEdit ? 'Save changes' : 'Save';
@@ -1251,7 +1270,7 @@ const DsdlView = (() => {
         </div>
       </div>`;
 
-    if (isEdit && sourceValue) _updatePreview(sourceValue);
+    if (sourceValue) _updatePreview(sourceValue);
 
     // Anything typed or picked is a draft until it is saved.
     _editorDirty = false;

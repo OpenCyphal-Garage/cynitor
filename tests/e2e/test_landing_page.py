@@ -3300,6 +3300,29 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+@test("DSDL: 'New version' opens a copy of a custom type at the next version not taken")
+async def _(page):
+    server = _DsdlServer()
+    taken = _dsdl_type("myapp.Reading.1.1", source="custom", text="uint16 value\nuint8 more\n@sealed\n")
+    server.types[taken["full_name"]] = taken
+    await dsdl_open(page, server)
+    try:
+        await page.locator('#dsdlCustomTree .dsdl-ns-row[data-ns="myapp"]').click()
+        await page.locator('.dsdl-type-row[data-type="myapp.Reading.1.0"]').click()  # compiled
+        await page.wait_for_selector('.dsdl-doc-title:has-text("Reading")', timeout=WAIT_MS)
+        new_version = page.get_by_role("button", name="New version")
+        assert await new_version.count() == 1, "A compiled custom type offers no 'New version'"
+        await new_version.click()
+        await page.wait_for_selector("#dsdlEditorName", timeout=WAIT_MS)
+        copy = await page.evaluate("""['dsdlEditorNs', 'dsdlEditorName', 'dsdlEditorVer', 'dsdlEditorSource']
+            .map((id) => document.getElementById(id).value)""")
+        assert copy == ["myapp", "Reading", "1.2", "uint16 value\n@sealed\n"], f"The editor opens on {copy}"
+        said = await dsdl_save(page)
+        assert said == "Saved" and "myapp.Reading.1.2" in server.types, f"Saving the new version said {said!r}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
