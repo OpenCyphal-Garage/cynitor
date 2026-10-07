@@ -17,7 +17,6 @@ const DsdlView = (() => {
   let _editorDirty = false;  // the editor holds changes not saved yet
   let _editorMode = 'new';
   let _editPrefill = null;
-  let _editorSplitRatio = 0.5;
   let _previewRatio = 0.5;
   let _customNamespaces = [];
   let _hiddenNamespaces = new Set();
@@ -516,7 +515,7 @@ const DsdlView = (() => {
       typesHtml += `
         <div class="dsdl-type-row${selected}${lockedCls}" data-type="${escapeHtml(t.full_name)}"${lockTitle}
              role="treeitem" tabindex="-1" aria-selected="${Boolean(selected)}"
-             style="padding-left: ${(depth + 1) * 1.125 + 1}rem">
+             style="--depth: ${depth + 1}">
           <span class="dsdl-kind ${kindCls}">${kindLabel}</span>
           <span class="dsdl-type-name">${escapeHtml(t.short_name)}</span>
           <span class="dsdl-type-ver">${escapeHtml(t.version)}</span>
@@ -561,13 +560,13 @@ const DsdlView = (() => {
         <div class="dsdl-ns${dimCls}">
           <div class="dsdl-ns-row dsdl-ns-custom${uncompiledCls}" data-ns="${escapeHtml(fullPath)}"
                role="treeitem" tabindex="-1" aria-expanded="${Boolean(expanded)}"
-               style="padding-left: ${depth * 1.125 + 0.5}rem">
+               style="--depth: ${depth}">
             ${chevron}
             <span class="dsdl-ns-label">${escapeHtml(name)}</span>
             ${addBtns}
           </div>
           <div class="dsdl-ns-children ${expanded ? '' : 'hidden'}" role="group">
-            <div class="dsdl-custom-empty" style="padding-left: ${(depth + 1) * 1.125 + 1}rem">Empty</div>
+            <div class="dsdl-custom-empty" style="--depth: ${depth + 1}">Empty</div>
           </div>
         </div>`;
     }
@@ -577,7 +576,7 @@ const DsdlView = (() => {
       <div class="dsdl-ns${dimCls}">
         <div class="dsdl-ns-row dsdl-ns-custom${uncompiledCls}" data-ns="${escapeHtml(fullPath)}"
              role="treeitem" tabindex="-1" aria-expanded="${Boolean(expanded)}"
-             style="padding-left: ${depth * 1.125 + 0.5}rem">
+             style="--depth: ${depth}">
           ${chevron}
           <span class="dsdl-ns-label">${escapeHtml(name)}</span>
           ${addBtns}
@@ -619,7 +618,7 @@ const DsdlView = (() => {
       typesHtml += `
         <div class="dsdl-type-row${selected}" data-type="${escapeHtml(t.full_name)}"
              role="treeitem" tabindex="-1" aria-selected="${Boolean(selected)}"
-             style="padding-left: ${(depth + 1) * 1.125 + 1}rem">
+             style="--depth: ${depth + 1}">
           <span class="dsdl-kind ${kindCls}">${kindLabel}</span>
           <span class="dsdl-type-name">${escapeHtml(t.short_name)}</span>
           <span class="dsdl-type-ver">${escapeHtml(t.version)}</span>
@@ -635,7 +634,7 @@ const DsdlView = (() => {
       <div class="dsdl-ns">
         <div class="dsdl-ns-row" data-ns="${escapeHtml(fullPath)}"
              role="treeitem" tabindex="-1" aria-expanded="${Boolean(expanded)}"
-             style="padding-left: ${depth * 1.125 + 0.5}rem">
+             style="--depth: ${depth}">
           ${chevron}
           <span class="dsdl-ns-label">${escapeHtml(name)}</span>
         </div>
@@ -940,14 +939,8 @@ const DsdlView = (() => {
 
     _updateBusDetail();
 
-    if (_editorOpen) {
-      const editorHandle = document.getElementById('dsdlEditorHandle');
-      if (editorHandle) editorHandle.style.display = '';
-      const editorPanel = document.getElementById('dsdlEditorPanel');
-      const detail = document.getElementById('dsdlDetail');
-      if (editorPanel) editorPanel.style.flex = `0 0 ${_editorSplitRatio * 100}%`;
-      if (detail) detail.style.flex = '1';
-    }
+    // An editor open alone now has a type to share the area with.
+    document.getElementById('dsdlDetailArea')?.classList.remove('dsdl-editor-alone');
   };
 
   // "7 bytes · extent 12 bytes", "1–259 bytes · sealed": what a type takes
@@ -1227,9 +1220,7 @@ const DsdlView = (() => {
     const editorHandle = document.getElementById('dsdlEditorHandle');
     if (editorPanel) editorPanel.remove();
     if (editorHandle) editorHandle.remove();
-
-    const detail = document.getElementById('dsdlDetail');
-    if (detail) detail.style.flex = '';
+    area.classList.remove('dsdl-editor-alone');
   };
 
   const _renderEditorSplit = (prefilledNs, draft = null) => {
@@ -1251,18 +1242,9 @@ const DsdlView = (() => {
       _initEditorDrag();
     }
 
-    const detail = document.getElementById('dsdlDetail');
-    const hasDetail = _selectedType && _lastDetailData;
-    const editorHandle = document.getElementById('dsdlEditorHandle');
-    if (hasDetail) {
-      editorPanel.style.flex = `0 0 ${_editorSplitRatio * 100}%`;
-      if (detail) detail.style.flex = '1';
-      if (editorHandle) editorHandle.style.display = '';
-    } else {
-      editorPanel.style.flex = '1';
-      if (detail) detail.style.flex = '0 0 0';
-      if (editorHandle) editorHandle.style.display = 'none';
-    }
+    // Beside the type shown, its share of the area dragged at the handle
+    // (--dsdl-editor-share); with no type shown, all of it.
+    area.classList.toggle('dsdl-editor-alone', !(_selectedType && _lastDetailData));
 
     const isEdit = _editorMode === 'edit';
     const fill = (isEdit ? _editPrefill : draft) || {};
@@ -1453,13 +1435,10 @@ const DsdlView = (() => {
     </tbody></table>`;
   };
 
+  // The source's share of its column, the preview having the rest: a
+  // variable on the column, which each editor redraws, so set again then.
   const _applyPreviewRatio = () => {
-    const wrap = document.getElementById('dsdlEditorSourceWrap');
-    const source = document.getElementById('dsdlEditorSource');
-    const preview = document.getElementById('dsdlEditorPreview');
-    if (!wrap || !source || !preview) return;
-    source.style.flex = `${_previewRatio}`;
-    preview.style.flex = `${1 - _previewRatio}`;
+    document.getElementById('dsdlEditorSourceWrap')?.style.setProperty('--dsdl-source-share', _previewRatio);
   };
 
   const _initPreviewDrag = () => {
@@ -1473,8 +1452,7 @@ const DsdlView = (() => {
       e.preventDefault();
       dragging = true;
       handle.classList.add('dragging');
-      document.body.style.cursor = 'row-resize';
-      document.body.style.userSelect = 'none';
+      document.body.classList.add('dsdl-resizing-row');
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
     });
@@ -1492,8 +1470,7 @@ const DsdlView = (() => {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
       handle.classList.remove('dragging');
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
+      document.body.classList.remove('dsdl-resizing-row');
     };
   };
 
@@ -1625,22 +1602,17 @@ const DsdlView = (() => {
       e.preventDefault();
       dragging = true;
       handle.classList.add('dragging');
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
+      document.body.classList.add('dsdl-resizing-col');
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
     });
 
+    // The editor's share of the area, kept on it for the next editor too.
     const onMove = (e) => {
       if (!dragging) return;
       const rect = area.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const ratio = Math.max(0.15, Math.min(0.85, x / rect.width));
-      _editorSplitRatio = ratio;
-      const editor = document.getElementById('dsdlEditorPanel');
-      const detail = document.getElementById('dsdlDetail');
-      if (editor) editor.style.flex = `0 0 ${ratio * 100}%`;
-      if (detail) detail.style.flex = '1';
+      const share = Math.max(0.15, Math.min(0.85, (e.clientX - rect.left) / rect.width));
+      area.style.setProperty('--dsdl-editor-share', share);
     };
 
     const onUp = () => {
@@ -1648,8 +1620,7 @@ const DsdlView = (() => {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
       handle.classList.remove('dragging');
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
+      document.body.classList.remove('dsdl-resizing-col');
     };
   };
 
@@ -1739,15 +1710,20 @@ const DsdlView = (() => {
   // Split drag handle
   // ------------------------------------------------------------------
 
+  const _remPx = () => parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+
+  // The tree's width, dragged at the split: in rem, 11.25 to 37.5.
+  const _setTreeWidth = (rem) => {
+    _treeWidth = Math.max(11.25, Math.min(37.5, rem));
+    document.getElementById('dsdlTreePanel')?.style.setProperty('--dsdl-tree-width', `${_treeWidth}rem`);
+  };
+
   const _initSplitDrag = () => {
     const handle = document.getElementById('dsdlSplitHandle');
     const panel = document.getElementById('dsdlTreePanel');
     if (!handle || !panel) return;
 
-    const saved = _loadDsdlState();
-    if (saved.treeWidth) {
-      panel.style.width = saved.treeWidth + 'px';
-    }
+    if (_treeWidth) _setTreeWidth(_treeWidth);
 
     let startX, startW;
 
@@ -1756,25 +1732,18 @@ const DsdlView = (() => {
       startX = e.clientX;
       startW = panel.getBoundingClientRect().width;
       handle.classList.add('dragging');
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
+      document.body.classList.add('dsdl-resizing-col');
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
     });
 
-    const onMove = (e) => {
-      const dx = e.clientX - startX;
-      const newW = Math.max(180, Math.min(600, startW + dx));
-      panel.style.width = newW + 'px';
-    };
+    const onMove = (e) => _setTreeWidth((startW + e.clientX - startX) / _remPx());
 
     const onUp = () => {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
       handle.classList.remove('dragging');
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      _treeWidth = panel.getBoundingClientRect().width;
+      document.body.classList.remove('dsdl-resizing-col');
       _saveDsdlState();
     };
   };
@@ -1789,7 +1758,7 @@ const DsdlView = (() => {
         expandedNodes: [..._expandedNodes],
         selectedType: _selectedType,
         searchTerm: _searchTerm,
-        treeWidth: _treeWidth,
+        treeWidthRem: _treeWidth,
         hiddenNamespaces: [..._hiddenNamespaces],
       };
       localStorage.setItem('cynitor.dsdl.state', JSON.stringify(data));
@@ -1813,8 +1782,9 @@ const DsdlView = (() => {
     if (saved.searchTerm) {
       _searchTerm = saved.searchTerm;
     }
-    if (saved.treeWidth) {
-      _treeWidth = saved.treeWidth;
+    // In rem; earlier versions saved it in px, as treeWidth.
+    if (saved.treeWidthRem || saved.treeWidth) {
+      _treeWidth = saved.treeWidthRem || saved.treeWidth / _remPx();
     }
     if (Array.isArray(saved.hiddenNamespaces)) {
       _hiddenNamespaces = new Set(saved.hiddenNamespaces);

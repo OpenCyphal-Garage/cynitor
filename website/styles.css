@@ -5842,8 +5842,9 @@ details.svc-history-entry[open] > summary::before {
 
 /* ── Tree panel ── */
 
+/* Its width dragged at the split (--dsdl-tree-width, set by dsdl-view.js). */
 .dsdl-tree-panel {
-  width: 22rem;
+  width: var(--dsdl-tree-width, 22rem);
   min-width: 11rem;
   flex-shrink: 0;
   display: flex;
@@ -5964,6 +5965,11 @@ details.svc-history-entry[open] > summary::before {
   font-size: 0.6875rem;
   color: var(--muted);
   font-style: italic;
+}
+
+/* "Empty", where an empty namespace's types would be. */
+.dsdl-ns-children > .dsdl-custom-empty {
+  padding-left: calc(var(--depth, 0) * 1.125rem + 1rem);
 }
 
 .dsdl-ns-custom {
@@ -6093,11 +6099,13 @@ details.svc-history-entry[open] > summary::before {
 
 /* ── Tree nodes ── */
 
+/* Rows step in 1.125rem a level: the markup gives each its --depth. */
 .dsdl-ns-row {
   display: flex;
   align-items: center;
   gap: 0.375rem;
   padding: 0.375rem 0.625rem;
+  padding-left: calc(var(--depth, 0) * 1.125rem + 0.5rem);
   cursor: pointer;
   user-select: none;
   border-radius: var(--radius);
@@ -6135,6 +6143,7 @@ details.svc-history-entry[open] > summary::before {
   align-items: center;
   gap: 0.375rem;
   padding: 0.3125rem 0.625rem;
+  padding-left: calc(var(--depth, 0) * 1.125rem + 1rem);
   margin: 0.0625rem 0.375rem;
   border-radius: var(--radius);
   cursor: pointer;
@@ -6666,12 +6675,38 @@ details.svc-history-entry[open] > summary::before {
 
 /* ── Editor panel ── */
 
+/* Beside the type shown: its share of the area dragged at its handle
+   (--dsdl-editor-share). With no type shown it has the area to itself. */
 .dsdl-editor-panel {
+  flex: 0 0 calc(var(--dsdl-editor-share, 0.5) * 100%);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   background: var(--surface-2);
   min-width: 12.5rem;
+}
+
+.dsdl-detail-area.dsdl-editor-alone .dsdl-editor-panel {
+  flex: 1;
+}
+
+.dsdl-detail-area.dsdl-editor-alone .dsdl-detail-panel {
+  flex: 0 0 0;
+}
+
+.dsdl-detail-area.dsdl-editor-alone .dsdl-editor-handle {
+  display: none;
+}
+
+/* While a split is dragged: its cursor wherever the pointer goes, and no text selected. */
+body.dsdl-resizing-col {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.dsdl-resizing-row {
+  cursor: row-resize;
+  user-select: none;
 }
 
 .dsdl-editor-handle {
@@ -6799,8 +6834,10 @@ details.svc-history-entry[open] > summary::before {
   overflow: hidden;
 }
 
+/* The source and its preview share their column: the source's share
+   dragged at the handle between them (--dsdl-source-share). */
 .dsdl-editor-source {
-  flex: 1;
+  flex: var(--dsdl-source-share, 0.5);
   min-height: 4rem;
   padding: 0.5rem;
   border: 0.0625rem solid var(--border);
@@ -6833,7 +6870,7 @@ details.svc-history-entry[open] > summary::before {
 }
 
 .dsdl-editor-preview {
-  flex: 1;
+  flex: calc(1 - var(--dsdl-source-share, 0.5));
   min-height: 2rem;
   display: flex;
   flex-direction: column;

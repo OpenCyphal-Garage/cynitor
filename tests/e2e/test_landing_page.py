@@ -3553,6 +3553,83 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+# Inline styling in the DSDL tab and on the page's body: any property but a
+# CSS variable, and any value in px.
+INLINE_STYLING = """() => [...document.querySelectorAll('#dsdlContainer [style]'), document.body]
+    .flatMap((el) => [...el.style].filter((prop) => !prop.startsWith('--') || el.style.getPropertyValue(prop).includes('px'))
+    .map((prop) => `${el.id || el.tagName.toLowerCase()} ${prop}: ${el.style.getPropertyValue(prop)}`))"""
+
+
+async def drag_by(page, selector, dx=0, dy=0):
+    """Pressed on `selector` and moved by dx, dy; the caller lets go."""
+    box = await page.locator(selector).bounding_box()
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    await page.mouse.move(x + dx, y + dy, steps=4)
+
+
+@test("DSDL: the tab is styled by its CSS, in rem, its splits still dragged and its rows indented as before")
+async def _(page):
+    server = _DsdlServer()
+    width = "(id) => Math.round(document.getElementById(id).getBoundingClientRect().width)"
+    height = "(id) => Math.round(document.getElementById(id).getBoundingClientRect().height)"
+    await dsdl_open(page, server)
+    try:
+        await dsdl_show(page, "uavcan.si.unit.temperature.Scalar.1.0")
+        # Each depth a step of 1.125rem: a namespace's row at 0.5rem past it, a type's at 1rem.
+        indents = await page.evaluate("""[
+            getComputedStyle(document.querySelector('.dsdl-ns-row[data-ns="uavcan.si.unit.temperature"]')).paddingLeft,
+            getComputedStyle(document.querySelector('.dsdl-type-row[data-type="uavcan.si.unit.temperature.Scalar.1.0"]')).paddingLeft]""")
+        await dsdl_new_type(page)
+        # Each split dragged, and what it moved measured before the next.
+        moved, while_dragging = [], None
+        for handle, measure, part, dx, dy in (("#dsdlEditorHandle", width, "dsdlEditorPanel", 60, 0),
+                                              ("#dsdlPreviewHandle", height, "dsdlEditorSource", 0, 40),
+                                              ("#dsdlSplitHandle", width, "dsdlTreePanel", 50, 0)):
+            before = await page.evaluate(measure, part)
+            await drag_by(page, handle, dx, dy)
+            if handle == "#dsdlSplitHandle":
+                while_dragging = await page.evaluate(INLINE_STYLING)
+            await page.mouse.up()
+            moved.append(await page.evaluate(measure, part) - before)
+        styled = await page.evaluate(INLINE_STYLING)
+        # As before: a split follows the pointer, so these are not quite 60 and 40.
+        assert indents == ["62px", "88px"] and all(abs(m - e) <= 2 for m, e in zip(moved, (62, 46, 50))), \
+            f"Indents {indents} (62px, 88px before); dragged by 60, 40 and 50 px, the editor, source and tree " \
+            f"moved {moved} (62, 46 and 50 before)"
+        assert not styled and not while_dragging, f"Styled inline: {styled}; while a split is dragged: {while_dragging}"
+    finally:
+        await dsdl_close(page, server)
+
+
+@test("DSDL: the tree keeps its width across reloads, saved in rem, a px one from earlier versions too")
+async def _(page):
+    server = _DsdlServer()
+    width = "() => Math.round(document.getElementById('dsdlTreePanel').getBoundingClientRect().width)"
+
+    async def reopen(dsdl_state=None):
+        await page.evaluate(f"""() => {{ switchView('nodes'); state.dashboardConnected = false; _writeSettingsNow();
+            {f"localStorage.setItem('cynitor.dsdl.state', {json.dumps(json.dumps(dsdl_state))});" if dsdl_state else ""} }}""")
+        await page.reload(wait_until="load")
+        await page.evaluate("state.dashboardConnected = true; switchView('dsdl')")
+        await page.wait_for_selector("#dsdlTree .dsdl-ns-row", timeout=5000)
+
+    await page.route("**/api/dsdl/**", server.handle)
+    try:
+        await reopen({"treeWidth": 402})  # as an earlier version saved it, in px
+        legacy = await page.evaluate(width)
+        await drag_by(page, "#dsdlSplitHandle", dx=-40)
+        await page.mouse.up()
+        saved = await page.evaluate("JSON.parse(localStorage.getItem('cynitor.dsdl.state'))")
+        await reopen()
+        kept = await page.evaluate(width)
+        assert (legacy, round(saved.get("treeWidthRem") or 0, 3), kept) == (402, 22.625, 362), \
+            f"A px width saved earlier gives {legacy} px; dragged to 362 px it is saved as {saved}, and reopens at {kept} px"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
