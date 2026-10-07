@@ -2077,7 +2077,7 @@ button:focus-visible,
   display: inline-flex;
   align-items: stretch;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 999rem;
   background: transparent;
   font-family: var(--mono);
   font-size: 0.6875rem;
@@ -2184,7 +2184,7 @@ button:focus-visible,
   content: '';
   display: block;
   width: 0.75rem;
-  border-top: 2px solid currentColor;
+  border-top: 0.125rem solid currentColor;
 }
 
 .plot-legend-style:hover {
@@ -2202,14 +2202,14 @@ button:focus-visible,
 
 .plot-legend-style[data-style="dashdot"]::after {
   border-top: none;
-  height: 2px;
-  background: repeating-linear-gradient(90deg, currentColor 0 4px, transparent 4px 6px, currentColor 6px 8px, transparent 8px 10px);
+  height: 0.125rem;
+  background: repeating-linear-gradient(90deg, currentColor 0 0.25rem, transparent 0.25rem 0.375rem, currentColor 0.375rem 0.5rem, transparent 0.5rem 0.625rem);
 }
 
 .plot-legend-style[data-style="longdash"]::after {
   border-top-style: dashed;
-  border-top-width: 2px;
-  border-image: repeating-linear-gradient(90deg, currentColor 0 8px, transparent 8px 11px) 1;
+  border-top-width: 0.125rem;
+  border-image: repeating-linear-gradient(90deg, currentColor 0 0.5rem, transparent 0.5rem 0.6875rem) 1;
 }
 
 .plot-legend-style[data-style="circle"]::after {
@@ -2438,7 +2438,7 @@ button:focus-visible,
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.15);
   z-index: 20;
   overflow: hidden;
 }
@@ -2787,11 +2787,6 @@ button:focus-visible,
   min-width: 6rem;
 }
 
-
-.plot-compare-picker select:disabled {
-  opacity: 0.5;
-}
-
 .plot-compare-add {
   font-family: var(--mono);
   font-size: 0.625rem;
@@ -2804,15 +2799,9 @@ button:focus-visible,
   transition: background 0.12s;
 }
 
-.plot-compare-add:hover:not(:disabled) {
+.plot-compare-add:hover {
   background: var(--surface-2);
 }
-
-.plot-compare-add:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 
 .plot-derived-section {
   display: flex;
@@ -2822,27 +2811,6 @@ button:focus-visible,
   gap: 0.375rem;
   padding: 0.25rem 0.5rem;
   border-top: 1px solid var(--border-subtle);
-}
-
-.plot-derived-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-}
-
-.plot-derived-tag {
-  font-family: var(--mono);
-  font-size: 0.5625rem;
-  font-weight: 600;
-  color: var(--accent);
-  background: var(--accent-muted);
-  padding: 0.0625rem 0.25rem;
-  border-radius: var(--radius);
-  flex-shrink: 0;
-}
-
-.plot-derived-item {
-  border-left: 2px solid var(--accent);
 }
 
 .plot-threshold-section {

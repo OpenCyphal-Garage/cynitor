@@ -520,8 +520,8 @@ const buildPlotControls = (opts = {}) => {
   if (!cfg) return wrap;
 
   const invalidate = opts.invalidate || _plotInvalidate;
-  const rerender = opts.rerender || (() => renderPlot(el('selectedNodeContent')));
-  const restart = opts.restart || (() => startPlotAnim());
+  const rerender = opts.rerender || _plotRerender;
+  const restart = opts.restart || _plotRestart;
 
   const pauseBtn = document.createElement('button');
   pauseBtn.className = 'plot-pause-btn';
@@ -1030,21 +1030,11 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
         if (th) {
           th.color = newColor;
         } else if (opts.cfg && opts.cfg.series) {
-          const idx = opts.cfg.series.findIndex(s =>
-            compareSeriesName(s) === seriesName
-          );
-          if (idx >= 0) {
-            opts.cfg.series[idx].color = newColor;
-          } else if (opts.cfg.derivedSeries) {
-            const di = opts.cfg.derivedSeries.findIndex(d => {
-              if (d.type === 'min_max') {
-                const [minL, maxL] = _derivedMinMaxLabels(d);
-                return seriesName === minL || seriesName === maxL;
-              }
-              return _derivedLabel(d) === seriesName;
-            });
-            if (di >= 0) opts.cfg.derivedSeries[di].color = newColor;
-          }
+          // A derived series found by its id, as its style and × buttons find it.
+          const s = btn.dataset.derivedId
+            ? opts.cfg.derivedSeries?.find((d) => d.id === btn.dataset.derivedId)
+            : opts.cfg.series.find((c) => compareSeriesName(c) === seriesName);
+          if (s) s.color = newColor;
         } else {
           const sid = state.selectedPlotSubject;
           if (sid != null) state.plotColorOverrides[`${sid}:${seriesName}`] = newColor;
@@ -1486,7 +1476,7 @@ const _pointsToDraw = (data, xScale) => {
   return out;
 };
 
-const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount, cfg = null) => {
+const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, cfg) => {
   let overlay = g.select('.plot-compare-overlay');
 
   if (!compareSeries.length) {
@@ -1497,9 +1487,6 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
   if (overlay.empty()) {
     overlay = g.insert('g', '.plot-x-axis').attr('class', 'plot-compare-overlay');
   }
-
-  const yOffset = primaryCount * (panelH + PLOT_PANEL_GAP);
-  overlay.attr('transform', `translate(0, ${yOffset})`);
 
   // The y-axis fits what is in view, thresholds included: a spike that has
   // left the window, or a zoom, does not flatten what is shown. With nothing
@@ -1563,7 +1550,7 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
     .attr('fill', 'none')
     .attr('clip-path', `url(#${clipId})`)
     .merge(lines)
-    .attr('stroke', (d, i) => d.color || PLOT_COLORS[(primaryCount + i) % PLOT_COLORS.length])
+    .attr('stroke', (d, i) => d.color || PLOT_COLORS[i % PLOT_COLORS.length])
     .attr('stroke-width', strokeW)
     .attr('stroke-dasharray', (d) => {
       const st = d._lineStyle || 'solid';
@@ -1577,7 +1564,7 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount
   const markerR = Math.max(2, strokeW);
   const maxMarkers = 200;
   compareSeries.forEach((s, i) => {
-    const color = s.color || PLOT_COLORS[(primaryCount + i) % PLOT_COLORS.length];
+    const color = s.color || PLOT_COLORS[i % PLOT_COLORS.length];
     const safeN = _safeId(s.name);
     const shape = MARKER_SHAPES[s._lineStyle];
     const needMarkers = showLine && shape;

@@ -2161,6 +2161,30 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: a series' and a derived series' colours are picked from the legend")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    # Picks a colour in a legend row's colour box, as the browser's picker would.
+    pick = "(i, hex) => { i.value = hex; i.dispatchEvent(new Event('change')); }"
+    strokes = "(c) => [...c.querySelectorAll('.compare-line')].map(l => l.getAttribute('stroke'))"
+    try:
+        await page.wait_for_timeout(300)
+        card = await compare_graph(page, (1100, "value"))
+        await card.locator(".plot-derived-type").select_option("rate")
+        await card.locator('[aria-label="Source A"]').select_option("1100:value@10")
+        await card.locator('[aria-label="Add derived series"]').click()
+        await page.wait_for_timeout(1200)  # two points of the rate at least
+        for row, hex in (('[data-derived-id]', '#123456'), (':not([data-derived-id])', '#654321')):
+            await card.locator(f".plot-legend-item{row} .plot-legend-swatch").click()
+            await card.locator(f".plot-legend-item{row} .plot-legend-swatch input").evaluate(pick, hex)
+        await page.wait_for_timeout(300)
+        colours = await page.evaluate("[state.compareGraphs[0].series[0].color, state.compareGraphs[0].derivedSeries[0].color]")
+        assert colours == ["#654321", "#123456"], f"The series and derived series are coloured {colours}"
+        assert sorted(await card.evaluate(strokes)) == ["#123456", "#654321"], f"The lines are {await card.evaluate(strokes)}"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

@@ -629,7 +629,6 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   let gNode = plotArea.querySelector('.plot-root');
   if (!gNode || !gNode.querySelector('.plot-panels') || !plotArea.querySelector('.plot-header')) {
     gNode = setupPlotSvg(plotArea, PLOT_MARGIN, opts);
-    plotArea.dataset.plotView = 'compare';
   }
 
   const w = rect.width - PLOT_MARGIN.left - PLOT_MARGIN.right;
@@ -650,7 +649,7 @@ const _renderCompareGraphNow = (graph, plotArea) => {
 
   const g = d3.select(gNode);
   g.select('.plot-panels').selectAll('*').remove();
-  _renderCompareOverlay(g, visibleSeries, xScale, panelH, w, 0, graph);
+  _renderCompareOverlay(g, visibleSeries, xScale, panelH, w, graph);
 
   const xAxis = d3.axisBottom(xScale).ticks(5).tickFormat(formatPlotTime);
   g.select('.plot-x-axis').attr('transform', `translate(0, ${totalPanelsH})`).call(xAxis);
