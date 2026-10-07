@@ -1146,6 +1146,9 @@ const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, cfg) => {
   _renderThresholds(overlay, thresholds, yScale, w);
   _renderMarkers(overlay, cfg?.markers, xScale, panelH);
   _renderDrawings(overlay, cfg?.drawings, xScale, panelH);
+  // Markers and drawings keep to the plot, as its lines do: scrolled past the
+  // y-axis with time, they are cut there, not drawn over it.
+  overlay.selectAll('.plot-markers, .plot-drawings').attr('clip-path', `url(#${clipId})`);
 
   const strokeW = cfg ? cfg.stroke : 1.5;
   const showDots = cfg ? cfg.disconnectPoints : false;

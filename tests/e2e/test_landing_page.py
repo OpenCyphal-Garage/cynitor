@@ -2248,6 +2248,39 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: drawings and markers scrolled past the y-axis are cut there, not drawn over it")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    # Are these parts of a graph clipped by its plot's own clip path?
+    clipped = """(c, sels) => sels.map(sel => {
+        const id = c.querySelector(sel)?.getAttribute('clip-path')?.match(/#([^)]+)/)?.[1];
+        const clip = id && document.getElementById(id);
+        return !!clip && c.contains(clip); })"""
+    try:
+        await page.wait_for_timeout(300)
+        card = await compare_graph(page, (1100, "value"))
+        # A drawing and a marker made 70 s ago: in a 1m window, partly past the y-axis.
+        await page.evaluate("""() => { const g = state.compareGraphs[0], now = Date.now() / 1000;
+            g.drawings.push({points: [{t: now - 70, y: 0.5}, {t: now - 20, y: 0.6}], color: '', width: 2, dash: 'solid'});
+            g.markers.push({t: now - 65, label: 'gone', note: '', color: '', lineStyle: 'dashed'});
+            g._fingerprint = ''; _renderOneGraph(g); }""")
+        cut = await card.evaluate(clipped, [".plot-drawings", ".plot-markers"])
+        assert cut == [True, True], f"Clipped to the plot, the drawings and markers: {cut}"
+        # A drawing dragged past the y-axis is cut there while it is drawn, too.
+        box = await card.locator(".plot-overlay").bounding_box()
+        y = box["y"] + box["height"] / 2
+        await page.keyboard.down("Alt")
+        await page.mouse.move(box["x"] + 60, y)
+        await page.mouse.down()
+        await page.mouse.move(box["x"] - 30, y, steps=4)
+        drawing = await card.evaluate(clipped, [".plot-drawing-temp"])
+        await page.mouse.up()
+        await page.keyboard.up("Alt")
+        assert drawing == [True], "A drawing dragged past the y-axis is drawn over it"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 @test("Compare: a series' and a derived series' colours are picked from the legend")
 async def _(page):
     await page.evaluate(COMPARE_START)

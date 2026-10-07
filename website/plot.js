@@ -1300,7 +1300,9 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
         const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${curXScale(p.t)},${p.y * drawingStroke._totalH}`).join('');
         if (tempPath.empty()) {
           const ov = g.select('.plot-compare-overlay');
+          const lines = ov.select('.compare-lines');  // their clip keeps a drawing to the plot
           (ov.empty() ? g : ov).append('path').attr('class', 'plot-drawing-temp')
+            .attr('clip-path', lines.empty() ? null : lines.attr('clip-path'))
             .attr('fill', 'none').attr('stroke', drawingStroke.color || 'var(--error)')
             .attr('stroke-width', drawingStroke.width)
             .attr('stroke-dasharray', drawingStroke._dashArray)

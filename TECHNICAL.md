@@ -211,7 +211,7 @@ The legend uses three-zone `<div>` pills: left swatch (click to pick color via n
 
 **Timeline markers** (`cfg.markers[]`) are placed with Shift+click and rendered as vertical dashed lines with labels by `_renderMarkers`. Each marker has a timestamp, label, optional note, color, and line style. Clicking near an existing marker opens an inline edit form (`_openMarkerForm`) with save/delete. The graph's Markers row (`refreshMarks` in `buildComparePanel`) lists the markers by time and counts the drawings; `_syncMarks` refreshes it whenever either changes, and `_showMarker` pauses the graph with a marker in the middle of its window (`pausedAt` = the marker's time + 40% of the window).
 
-**Freehand drawings** (`cfg.drawings[]`) are captured with Alt+drag. Points are stored as `{t, y}` (timestamp + normalized 0–1 panel height) so they scroll with the timeline. Drawing color, width, and dash style are configurable per-graph via toolbar controls. Alt+double-click clears all drawings.
+**Freehand drawings** (`cfg.drawings[]`) are captured with Alt+drag. Points are stored as `{t, y}` (timestamp + normalized 0–1 panel height) so they scroll with the timeline. Drawings and markers are clipped to the plot, as its lines are, so once scrolled past the y-axis they are cut there rather than drawn over it. Drawing color, width, and dash style are configurable per-graph via toolbar controls. Alt+double-click clears all drawings.
 
 **Crosshair sync** uses custom DOM events (`crosshair-sync`, `crosshair-hide`) dispatched on the `.compare-cards` container. Each plot stores both `_cursorMx` (local pixel) and `_syncedT` (received timestamp) and re-evaluates on every render tick.
 
