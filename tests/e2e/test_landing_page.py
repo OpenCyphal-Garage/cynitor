@@ -1911,6 +1911,29 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: a synced graph above another synced graph leaves its time labels to it, and draws taller")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    labels = "(c) => [...c.querySelectorAll('.plot-x-axis .tick text')].filter(t => t.textContent).length"
+    height = "(c) => Number(c.querySelector('.plot-overlay').getAttribute('height'))"
+    try:
+        await page.wait_for_timeout(300)
+        a, b, c = [await compare_graph(page, (1100, "value")) for _ in range(3)]
+        for card in (a, b, c):
+            await card.locator(".compare-edit-btn").click()  # all alike: header, legend, plot
+        for card in (a, b):
+            await card.locator(".compare-sync-btn").click()
+        await page.wait_for_timeout(400)
+        assert await a.evaluate(labels) == 0, "A synced graph above another synced graph keeps its time labels"
+        assert await b.evaluate(labels) > 0 and await c.evaluate(labels) > 0, "The last synced graph, or one not synced, has none"
+        assert await a.evaluate(height) > await b.evaluate(height) + 8, "Without its labels, the graph above draws no taller"
+        await b.locator(".compare-sync-btn").click()  # B leaves: nothing synced below A now
+        await page.wait_for_timeout(300)
+        assert await a.evaluate(labels) > 0, "With no synced graph below, a synced graph has no time labels"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 @test("Compare: a collapsed graph is its plot, a line of names and, at its side, its pause, window and Sync")
 async def _(page):
     await page.evaluate(COMPARE_START)

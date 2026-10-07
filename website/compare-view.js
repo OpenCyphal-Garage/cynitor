@@ -921,7 +921,7 @@ const _buildGraphCard = (graph) => {
     saveSettings();
     _cardWatcher.unobserve(card);
     card.remove();
-    if (graph.sync) _redrawSynced();  // its markers go from the others
+    _redrawSynced();  // its markers go from them; ones it parted may now share a time axis
   });
   cardActions.appendChild(deleteBtn);
 
@@ -1440,7 +1440,11 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   const mkKey = _markersShown(graph).map(m => `${m.t}:${m.label}:${m.color || ''}:${m.lineStyle || ''}`).join(';');
   const dwKey = (graph.drawings || []).length;
   const styleKey = compareSeries.map(s => s._lineStyle || '').join(',');
-  const fp = `cg:${graph.id}:${compareSeries.length}:${lastPts.join(',')}:w${graph.timeWindow}:p${graph.paused ? graph.pausedAt : 0}:s${graph.smooth}:d${graph.disconnectPoints}:k${graph.stroke}:g${graph.grid}:t${thKey}:m${mkKey}:dw${dwKey}:h${hiddenKey}:ls${styleKey}:z${graph._zoom || 1}:pan${graph._panOffset || 0}:l${liveKey}:n${graph.name}`;
+  // A synced graph right above another synced graph leaves its time labels to
+  // it, as they show the same time; the room goes to its plot.
+  const below = state.compareGraphs[state.compareGraphs.indexOf(graph) + 1];
+  const timeLabels = !(graph.sync && below?.sync);
+  const fp = `cg:${graph.id}:${compareSeries.length}:${lastPts.join(',')}:w${graph.timeWindow}:p${graph.paused ? graph.pausedAt : 0}:s${graph.smooth}:d${graph.disconnectPoints}:k${graph.stroke}:g${graph.grid}:t${thKey}:m${mkKey}:dw${dwKey}:h${hiddenKey}:ls${styleKey}:z${graph._zoom || 1}:pan${graph._panOffset || 0}:l${liveKey}:n${graph.name}:x${timeLabels}`;
   const rect = plotArea.getBoundingClientRect();
   const sizeKey = `${Math.round(rect.width)}x${Math.round(rect.height)}`;
   const fullFp = `${fp}:${sizeKey}`;
@@ -1463,7 +1467,8 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   const w = rect.width - PLOT_MARGIN.left - PLOT_MARGIN.right;
   const headerEl = plotArea.querySelector('.plot-header');
   const HEADER_H = headerEl ? Math.max(28, Math.ceil(headerEl.getBoundingClientRect().height)) : 28;
-  const totalPanelsH = rect.height - PLOT_MARGIN.top - PLOT_MARGIN.bottom - HEADER_H;
+  const marginBottom = timeLabels ? PLOT_MARGIN.bottom : PLOT_MARGIN.top;  // room for the axis' ticks alone
+  const totalPanelsH = rect.height - PLOT_MARGIN.top - marginBottom - HEADER_H;
   if (w < 40 || totalPanelsH < 40) return;
 
   const svgEl = plotArea.querySelector('svg');
@@ -1480,7 +1485,7 @@ const _renderCompareGraphNow = (graph, plotArea) => {
   g.select('.plot-panels').selectAll('*').remove();
   _renderCompareOverlay(g, visibleSeries, xScale, panelH, w, graph);
 
-  const xAxis = d3.axisBottom(xScale).ticks(5).tickFormat(formatPlotTime);
+  const xAxis = d3.axisBottom(xScale).ticks(5).tickFormat(timeLabels ? formatPlotTime : () => '');
   g.select('.plot-x-axis').attr('transform', `translate(0, ${totalPanelsH})`).call(xAxis);
   g.select('.plot-overlay').attr('width', w).attr('height', totalPanelsH);
   g.select('.plot-crosshair').attr('y1', 0).attr('y2', totalPanelsH);
