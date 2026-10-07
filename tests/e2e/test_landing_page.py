@@ -1234,6 +1234,23 @@ async def _(page):
         await page.evaluate(COMPARE_STOP)
 
 
+@test("Compare: a graph paused by a click on its plot says so on its own pause button")
+async def _(page):
+    await page.evaluate(COMPARE_START)
+    try:
+        await page.wait_for_timeout(300)
+        card = await compare_graph(page, (1100, "value"))
+        button = card.locator(".plot-pause-btn")
+        await card.locator(".detail-plot-area svg").click(position={"x": 300, "y": 40})
+        await page.wait_for_timeout(400)  # past the 250 ms that tells a click from a double-click
+        assert await page.evaluate("state.compareGraphs[0].paused"), "A click on the plot did not pause it"
+        says = await button.inner_text()
+        lit = await button.evaluate("(b) => b.classList.contains('active')")
+        assert says == "▶" and lit, f"Paused, the graph's own button reads {says!r}{'' if lit else ', unlit'}"
+    finally:
+        await page.evaluate(COMPARE_STOP)
+
+
 # Points of a graph's first line that fall inside its plot.
 COMPARE_POINTS_SHOWN = """(c) => { const d = c.querySelector('.compare-line')?.getAttribute('d') || '';
     const w = Number(c.querySelector('.plot-overlay').getAttribute('width'));

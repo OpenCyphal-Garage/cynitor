@@ -1783,7 +1783,8 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
     const DRAG_THRESHOLD = 3;
 
     const _syncPauseBtn = () => {
-      const pb = plotArea.querySelector('.plot-pause-btn');
+      // A Compare graph's pause button is in its card's header, not in the plot.
+      const pb = (plotArea.closest('.compare-graph-card') || plotArea).querySelector('.plot-pause-btn');
       if (pb) {
         pb.textContent = cfg.paused ? '▶' : '⏸';
         pb.classList.toggle('active', cfg.paused);
