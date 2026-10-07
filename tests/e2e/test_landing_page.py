@@ -2888,6 +2888,41 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+async def dsdl_show(page, full_name):
+    """A public type's detail, opened from the tree."""
+    parts = full_name.split(".")
+    for depth in range(1, len(parts) - 2):
+        row = page.locator(f'#dsdlTree .dsdl-ns-row[data-ns="{".".join(parts[:depth])}"]')
+        if await row.get_attribute("aria-expanded") != "true" and not await row.locator(".dsdl-chev.open").count():
+            await row.click()
+    await page.locator(f'.dsdl-type-row[data-type="{full_name}"]').click()
+    await page.wait_for_selector(f'.dsdl-doc-title:has-text("{parts[-3]}")', timeout=WAIT_MS)
+
+
+@test("DSDL: when the server goes away the tab says so, and comes back with it")
+async def _(page):
+    server = _DsdlServer()
+    await dsdl_open(page, server)
+    try:
+        await dsdl_show(page, "uavcan.node.Heartbeat.1.0")
+        await page.evaluate("disconnectAll({persist: false})")
+        tree = await page.locator("#dsdlTree").inner_text()
+        pane = await page.locator("#dsdlDetail").inner_text()
+        assert "Connect to server" in tree and "Not connected" in pane, \
+            f"Disconnected, the tree reads {tree!r} and the pane {pane!r}"
+        await page.locator("#dsdlSearch").fill("Heartbeat")
+        await page.wait_for_timeout(400)  # the search's debounce
+        searched = await page.locator("#dsdlTreePanel .dsdl-tree-scroll").inner_text()
+        assert "Heartbeat" not in searched, f"Searched while disconnected, the tree shows {searched!r}"
+        await page.locator("#dsdlSearch").fill("")
+        await page.wait_for_timeout(400)
+        # What connectDashboard does with the tab open.
+        await page.evaluate("state.dashboardConnected = true; DsdlView.init()")
+        await page.wait_for_selector('.dsdl-doc-title:has-text("Heartbeat")', timeout=WAIT_MS)
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

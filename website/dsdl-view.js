@@ -324,7 +324,7 @@ const DsdlView = (() => {
 
   const _renderCustomTree = () => {
     const container = document.getElementById('dsdlCustomTree');
-    if (!container) return;
+    if (!container || !_namespacesData) return;
 
     const term = _searchTerm.toLowerCase().trim();
     const customNs = _customNamespacesFromTree();
@@ -1648,6 +1648,10 @@ const DsdlView = (() => {
   // ------------------------------------------------------------------
 
   const _renderDisconnected = () => {
+    // Forgotten, so a search or a click cannot draw them again until the
+    // server is back: _loadData fetches them anew.
+    _namespacesData = null;
+    _statusData = null;
     const ph = document.getElementById('dsdlPublicHeader');
     if (ph) ph.innerHTML = '';
     const ch = document.getElementById('dsdlCustomHeader');

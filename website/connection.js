@@ -622,6 +622,9 @@ const disconnectAll = ({ persist = true } = {}) => {
   stopThroughputTimer();
   stopPlotAnim();
   if (typeof GraphView !== 'undefined') GraphView.hide();
+  // The DSDL tab shows the server's types: with no server it says so, as
+  // when opened disconnected, and connectDashboard brings them back.
+  if (state.activeView === 'dsdl') DsdlView.init();
   disconnectWs();
   updateDashboardConnectButton();
   updateCanConnectButton();
