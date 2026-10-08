@@ -4325,6 +4325,26 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: a card shows its main actions, the others in a menu that stays open as the card is drawn again")
+async def _(page):
+    server = _RecordServer([_recording(1, "boot sequence")])
+    await record_open(page, server)
+    try:
+        card = page.locator('.record-card[data-id="1"]')
+        shown = [text.strip() for text in await card.locator("button:visible, summary:visible").all_inner_texts()]
+        assert shown == ["▶ Play", "CSV", "JSONL", "⋯"], f"A stopped recording's card shows {shown}"
+        await card.locator("summary").click()
+        await page.evaluate("renderRecordList()")  # as every second while something records
+        menu = [text.strip() for text in await card.locator(".record-card-menu button:visible").all_inner_texts()]
+        assert menu == ["Record again", "Rename", "Delete"], f"Its menu, drawn again, holds {menu}"
+        await card.locator('.record-card-menu [data-action="duplicate"]').click()
+        await page.wait_for_timeout(500)
+        assert server.count("POST", "/api/recordings") == 1, "Record again started no recording"
+        assert not await page.locator(".record-card-menu:visible").count(), "The menu stays open after its action"
+    finally:
+        await record_close(page, server)
+
+
 @test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
 async def _(page):
     try:

@@ -372,6 +372,35 @@ const _autoStop = (rec) => {
   return { text: 'auto-stopped', short: false, title: 'A limit stopped it' };
 };
 
+// The card whose menu of more actions is open. It stays open as the cards
+// are drawn again (every second while something records), until it is used
+// or left.
+let _openMenuId = null;
+
+const _closeCardMenu = () => {
+  _openMenuId = null;
+  document.querySelectorAll('.record-card-more[open]').forEach((menu) => menu.removeAttribute('open'));
+};
+
+// A card's main actions, and a menu of the others. A live recording's are
+// Stop and Edit limits; a finished one's, Play and its exports.
+const _cardActionsHtml = (rec, live, legacy) => {
+  const button = (action, text, attrs = '') => `<button class="btn-mini" data-action="${action}"${attrs}>${text}</button>`;
+  const exports = button('export-csv', 'CSV', ' aria-label="Export CSV"')
+    + button('export-jsonl', 'JSONL', ' aria-label="Export JSONL"');
+  const main = live ? button('stop', 'Stop') + button('edit-limits', 'Edit limits') : _playButtonHtml(rec) + exports;
+  const more = (live ? exports : '')
+    + button('duplicate', 'Record again', ' title="A new recording, now, with the same selection and limits"')
+    + button('rename', 'Rename')
+    + '<button class="btn-mini btn-danger" data-action="delete">Delete</button>'
+    + (legacy ? '<button class="btn-mini btn-danger" data-action="purge" title="Delete it, and its events in the history buffer">Purge</button>' : '');
+  return `${main}
+    <details class="record-card-more"${_openMenuId === rec.id ? ' open' : ''}>
+      <summary class="btn-mini" aria-label="More actions for ${escapeHtml(rec.name)}">⋯</summary>
+      <div class="record-card-menu">${more}</div>
+    </details>`;
+};
+
 const _buildCard = (rec) => {
   const card = document.createElement('div');
   const live = _isLiveRecording(rec);
@@ -400,23 +429,23 @@ const _buildCard = (rec) => {
     </div>
     ${filterText ? `<div class="record-card-filter">${escapeHtml(filterText)}</div>` : '<div class="record-card-filter muted">no filter (recording everything)</div>'}
     ${rec.notes ? `<div class="record-card-notes">${escapeHtml(rec.notes)}</div>` : ''}
-    <div class="record-card-actions">
-      ${live ? '<button class="btn-mini" data-action="stop">Stop</button>' : ''}
-      ${live ? '<button class="btn-mini" data-action="edit-limits" aria-label="Edit limits">Edit limits</button>' : ''}
-      ${!live ? _playButtonHtml(rec) : ''}
-      <button class="btn-mini" data-action="duplicate" aria-label="Start new recording with same configuration" title="Start a new recording with the same filter and limits">New like this</button>
-      <button class="btn-mini" data-action="export-csv" aria-label="Export CSV">CSV</button>
-      <button class="btn-mini" data-action="export-jsonl" aria-label="Export JSONL">JSONL</button>
-      <button class="btn-mini" data-action="rename" aria-label="Rename">Rename</button>
-      <button class="btn-mini" data-action="delete" aria-label="Delete">Delete</button>
-      ${legacy ? '<button class="btn-mini btn-danger" data-action="purge" aria-label="Delete + purge events from global buffer" title="Delete recording AND its events from the global buffer">Purge</button>' : ''}
-    </div>
+    <div class="record-card-actions">${_cardActionsHtml(rec, live, legacy)}</div>
   `;
 
   card.addEventListener('click', (e) => {
+    // ⋯ opens or closes the card's menu, the only one open. Remembered now,
+    // as the browser toggles it just after, so that a redraw keeps it so.
+    const summary = e.target.closest('.record-card-more > summary');
+    if (summary) {
+      const menu = summary.parentElement;
+      document.querySelectorAll('.record-card-more[open]').forEach((other) => { if (other !== menu) other.removeAttribute('open'); });
+      _openMenuId = menu.open ? null : Number(card.dataset.id);
+      return;
+    }
     const btn = e.target.closest('button[data-action]');
     if (!btn) return;
     if (btn.disabled) return;
+    if (btn.closest('.record-card-menu')) _closeCardMenu();
     // The card may outlive this render (see renderRecordList): act on the latest data.
     const rec = state.recordings.find((r) => r.id === Number(card.dataset.id));
     if (!rec) return;
@@ -1090,6 +1119,16 @@ const initRecordView = () => {
   });
   _initPickers();
   _bindBuilderInputs();
+  // A card's menu closes on a click elsewhere, or on Escape (its ⋯ then has the focus).
+  document.addEventListener('click', (e) => {
+    if (_openMenuId != null && !e.target.closest('.record-card-more')) _closeCardMenu();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || _openMenuId == null) return;
+    const summary = document.querySelector('.record-card-more[open] > summary');
+    _closeCardMenu();
+    summary?.focus();
+  });
 };
 
 const setRecordViewActive = (active) => {
