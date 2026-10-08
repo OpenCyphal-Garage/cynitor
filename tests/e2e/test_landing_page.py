@@ -4218,6 +4218,29 @@ async def _(page):
         await record_close(page, server)
 
 
+# Node 10 serves register access (384), node 11 calls it, and 384 is selected.
+RECORD_SERVICE = """() => {
+    state.latestNodesPayload = {node_count: 2, nodes: {
+        '10': {node_id: 10, name: 'org.example.imu', publishers: [], subscribers: [], servers: [384], clients: []},
+        '11': {node_id: 11, name: 'org.example.esc', publishers: [], subscribers: [], servers: [], clients: [384]}}};
+    state.recordFilterDraft.service_ids = [384];
+}"""
+
+
+@test("Record: a service says it records only the calls made from Cynitor")
+async def _(page):
+    server = _RecordServer()
+    await record_open(page, server, setup=RECORD_SERVICE)
+    try:
+        picked = await page.evaluate("_subjectsPicker.getRow('service-384').getData().label")
+        selected = await page.evaluate("_selectionPicker.getRow('service-384').getData().label")
+        assert "from Cynitor" in picked and "from Cynitor" in selected, \
+            f"Service 384 reads {picked!r} in the picker, {selected!r} in the selection"
+    finally:
+        await page.evaluate("state.recordFilterDraft.service_ids = []; saveSettings();")
+        await record_close(page, server)
+
+
 @test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
 async def _(page):
     try:
