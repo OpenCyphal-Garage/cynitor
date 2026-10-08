@@ -4046,6 +4046,24 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: a subject several nodes publish lists them all, at its total rate, and lights up for each")
+async def _(page):
+    server = _RecordServer()
+    await record_open(page, server, setup=RECORD_RATES)  # node 11's Heartbeat comes last
+    try:
+        await page.wait_for_timeout(2300)  # a picker refresh
+        heartbeat = await page.evaluate("_subjectsPicker.getRow('subject-7509').getData()")
+        assert (heartbeat["owner"], heartbeat["rate"]) == ("2 nodes", 2), \
+            f"Subject 7509, from nodes 10 and 11 at 1 Hz each, reads owner {heartbeat['owner']!r}, rate {heartbeat['rate']!r}"
+        await page.locator("#recNodesPicker .tabulator-row", has_text="org.example.imu").click()
+        lit = await page.evaluate("""[...document.querySelectorAll('#recSubjectsPicker .tabulator-row.rec-row-highlighted')]
+            .map((row) => row.querySelector('.tabulator-cell').textContent)""")
+        assert sorted(lit) == ["100", "7509"], f"Node 10 lights up subjects {lit}"
+    finally:
+        await page.evaluate("clearInterval(window.e2eRateFeed)")
+        await record_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

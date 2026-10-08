@@ -58,42 +58,47 @@ const _formatRetention = (seconds) => {
 
 // ── Picker data builders ────────────────────────────────────────────
 
+// Port-ID → IDs of the nodes whose port lists named in `lists` hold it.
+const _portNodes = (lists) => {
+  const nodesByPort = new Map();
+  for (const node of Object.values(state.latestNodesPayload?.nodes || {})) {
+    if (!Number.isInteger(node?.node_id)) continue;
+    for (const list of lists) {
+      for (const id of (node[list] || [])) {
+        if (!nodesByPort.has(id)) nodesByPort.set(id, new Set());
+        nodesByPort.get(id).add(node.node_id);
+      }
+    }
+  }
+  return nodesByPort;
+};
+
+const _ownerLabel = (ids) => (ids.length === 1 ? ids[0] : ids.length ? `${ids.length} nodes` : '—');
+
 const _subjectsPickerData = () => {
-  // Build subject rows. Map publisher → owner for highlight matching.
+  // A subject's owners are all its publishers, not whichever sent the latest
+  // message, and its rate their total; a service's, every node that calls or
+  // serves it. A node click highlights every row it owns.
+  const publishers = _portNodes(['publishers']);
   const subjects = Array.from(state.latestBySubject.entries()).map(([sid, ev]) => {
-    const pub = Number.isInteger(ev?.publisher_node_id) ? ev.publisher_node_id : null;
+    const ownerIds = publishers.has(sid) ? [...publishers.get(sid)]
+      : Number.isInteger(ev?.publisher_node_id) ? [ev.publisher_node_id] : [];
     return {
       key: `subject-${sid}`,
       kind: 'subject',
       id: sid,
       label: ev?.message_type || '—',
-      owner: pub ?? '—',
-      ownerIds: pub != null ? [pub] : [],
-      rate: ev?.rate ?? '',
+      owner: _ownerLabel(ownerIds),
+      ownerIds,
+      rate: getSubjectRate(ev) || '',
     };
   });
-  // Build service rows. Service IDs are unioned across all nodes that
-  // either call or serve them; ownerIds collects the full set so a node
-  // click can highlight every service it touches.
-  const services = new Map();
-  const nodes = state.latestNodesPayload?.nodes || {};
-  for (const node of Object.values(nodes)) {
-    if (!Number.isInteger(node?.node_id)) continue;
-    for (const sid of (node.clients || [])) {
-      if (!services.has(sid)) services.set(sid, new Set());
-      services.get(sid).add(node.node_id);
-    }
-    for (const sid of (node.servers || [])) {
-      if (!services.has(sid)) services.set(sid, new Set());
-      services.get(sid).add(node.node_id);
-    }
-  }
-  const serviceRows = Array.from(services.entries()).map(([sid, owners]) => ({
+  const serviceRows = Array.from(_portNodes(['clients', 'servers']).entries()).map(([sid, owners]) => ({
     key: `service-${sid}`,
     kind: 'service',
     id: sid,
     label: 'service',
-    owner: owners.size === 1 ? [...owners][0] : `${owners.size} nodes`,
+    owner: _ownerLabel([...owners]),
     ownerIds: [...owners],
     rate: '',
   }));
