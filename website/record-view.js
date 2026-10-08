@@ -531,7 +531,16 @@ const deleteRecording = async (id, purge) => {
   }
 };
 
-const exportRecording = (id, fmt) => {
+// The browser downloads the file itself, so an error page would replace the
+// dashboard: make sure the recording is still there first.
+const exportRecording = async (id, fmt) => {
+  try {
+    await requestJson(`/api/recordings/${id}`);
+  } catch (e) {
+    showToast(`Export failed: ${e.message}`, 'error');
+    fetchRecordings();
+    return;
+  }
   window.location.href = withTokenParam(`${apiBase()}/api/recordings/${id}/export?format=${fmt}`);
 };
 

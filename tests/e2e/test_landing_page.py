@@ -3745,6 +3745,119 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+# ── Record tab ──
+#
+# /api/recordings* and /api/rawlogs are answered by _RecordServer from
+# recordings shaped as the backend sends them; starting, stopping, renaming
+# and deleting change them as the backend would. Each test opens the tab on a
+# freshly loaded page.
+
+def _recording(rid, name, live=False, start=None, **fields):
+    start = start or time.time() - 3600 + rid
+    return {"id": rid, "name": name, "start_unix": start, "end_unix": None if live else start + 60,
+            "filter": {}, "notes": None, "created_at": start, "max_length_seconds": 3600.0,
+            "max_events": 100000, "stop_on_limit": True, "auto_stopped": False, "event_count": 120,
+            "events_source": "dedicated", "subjects": [100], "duration_seconds": 60.0, **fields}
+
+
+class _RecordServer:
+    """The backend's /api/recordings* and /api/rawlogs routes, over a few recordings."""
+
+    def __init__(self, recordings=()):
+        self.recordings = {r["id"]: r for r in recordings}
+        self.requests = []          # (method, path, JSON body)
+        self.gates = {}             # (method, path) -> an asyncio.Event its answer waits for
+
+    def _answer(self, method, path, body):
+        recs = self.recordings
+        if path == "/api/rawlogs":
+            return {"active": None, "logs": []}, 200
+        if path == "/api/recordings/buffer":
+            return {"buffer": {"retention_seconds": 86400, "max_events": 5000000, "event_count": 0,
+                               "oldest_event_unix": None, "newest_event_unix": None, "db_size_bytes": 4096}}, 200
+        if path == "/api/recordings":
+            if method == "GET":
+                return {"recordings": sorted(recs.values(), key=lambda r: -r["start_unix"])}, 200
+            rid = max(recs, default=0) + 1
+            recs[rid] = _recording(rid, body["name"], live=True, start=time.time(), event_count=0,
+                                   filter=body.get("filter") or {}, max_length_seconds=body.get("max_length_seconds"),
+                                   max_events=body.get("max_events"), stop_on_limit=bool(body.get("stop_on_limit")))
+            return {"recording": recs[rid]}, 201
+        match = re.fullmatch(r"/api/recordings/(\d+)(/stop|/export)?", path)
+        rec = recs.get(int(match[1])) if match else None
+        if rec is None:
+            return {"error": "Recording not found"}, 404
+        if match[2] == "/stop":
+            rec["end_unix"] = time.time()
+        elif method == "PATCH":  # absent or null fields keep their value, as on the backend
+            rec.update({key: value for key, value in body.items() if value is not None})
+        elif method == "DELETE":
+            del recs[rec["id"]]
+            return {"deleted": True, "purged": False}, 200
+        return {"recording": rec}, 200
+
+    async def handle(self, route):
+        request = route.request
+        path = unquote(urlparse(request.url).path)
+        body = request.post_data_json if request.post_data else None
+        self.requests.append((request.method, path, body))
+        if (request.method, path) in self.gates:
+            await self.gates[(request.method, path)].wait()
+        answer, status = self._answer(request.method, path, body)
+        cors = {"Access-Control-Allow-Origin": "*"}
+        if path.endswith("/export") and status == 200:
+            name = re.sub(r"[^A-Za-z0-9_.-]", "_", answer["recording"]["name"])
+            await route.fulfill(body="recording_id,timestamp_unix\n", status=200, headers={
+                **cors, "Content-Type": "text/csv", "Content-Disposition": f'attachment; filename="{name}.csv"'})
+        else:
+            await route.fulfill(json=answer, status=status, headers=cors)
+
+    def count(self, method, path):
+        return sum(1 for m, p, _ in self.requests if (m, p) == (method, path))
+
+
+async def record_open(page, server, setup=None, can=True):
+    """The Record tab on a freshly loaded page, served by `server`, with CAN
+    connected or not. `setup` runs in the page before the tab opens."""
+    await page.evaluate("() => { state.dashboardConnected = false; _writeSettingsNow(); }")
+    await page.reload(wait_until="load")
+    await page.route("**/api/recordings**", server.handle)
+    await page.route("**/api/rawlogs**", server.handle)
+    await page.evaluate(f"state.dashboardConnected = true; state.canConnected = {json.dumps(can)};")
+    if setup:
+        await page.evaluate(setup)
+    await page.evaluate("switchView('record')")
+    await page.wait_for_selector("#recordList .record-card, #recordList .record-empty", timeout=5000)
+
+
+async def record_close(page, server):
+    if not page.url.startswith(BASE_URL):  # a download that went wrong took the page away
+        await page.goto(BASE_URL, wait_until="load")
+    await page.evaluate("""() => { switchView('nodes'); state.dashboardConnected = false; state.canConnected = false;
+        state.latestNodesPayload = null; state.latestBySubject.clear(); state.latestByNode.clear(); }""")
+    await page.unroute("**/api/recordings**", server.handle)
+    await page.unroute("**/api/rawlogs**", server.handle)
+
+
+@test("Record: an export downloads the file, and one that fails keeps the dashboard and says why")
+async def _(page):
+    server = _RecordServer([_recording(1, "boot sequence")])
+    await record_open(page, server)
+    try:
+        csv = page.locator('.record-card [data-action="export-csv"]')
+        async with page.expect_download() as download:
+            await csv.click()
+        assert (await download.value).suggested_filename == "boot_sequence.csv"
+        del server.recordings[1]  # deleted from another dashboard since the list was drawn
+        await csv.click()
+        await page.wait_for_timeout(1000)
+        assert page.url.startswith(BASE_URL), f"The export replaced the dashboard with {page.url}"
+        toasts = await page.locator("#toastContainer .toast").all_inner_texts()
+        assert any("Recording not found" in t for t in toasts), f"Toasts shown: {toasts}"
+    finally:
+        await record_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
