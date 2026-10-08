@@ -1431,12 +1431,16 @@ class WebSocketServer:
 
     async def _handle_capture_message(self, ws: web.WebSocketResponse, enabled: bool) -> None:
         """Enable/disable raw frame forwarding for this client. Enabling also
-        starts transport-level capture if it is not already active (sticky)."""
+        starts transport-level capture if it is not already active (sticky).
+
+        Each reply says both: ``capturing`` (the transport capture, on until
+        CAN disconnects) and ``forwarding`` (frames sent to this client).
+        ``active`` stays for dashboards from before those two."""
         mgr = self.session.frame_capture
         if enabled:
             if mgr is None:
-                await ws.send_json({"type": "capture_status", "active": False,
-                                    "error": "CAN not connected"})
+                await ws.send_json({"type": "capture_status", "active": False, "capturing": False,
+                                    "forwarding": False, "error": "CAN not connected"})
                 return
             mgr.start()
             earlier = []
@@ -1445,8 +1449,8 @@ class WebSocketServer:
                 # Taken in the same step as subscribing: frames are captured on
                 # this event loop, so none falls between the two or comes twice.
                 earlier = mgr.snapshot(self._CAPTURE_EARLIER)
-            await ws.send_json({"type": "capture_status", "active": mgr.active,
-                                "stats": mgr.stats(), "frames": earlier})
+            await ws.send_json({"type": "capture_status", "active": mgr.active, "capturing": mgr.active,
+                                "forwarding": True, "stats": mgr.stats(), "frames": earlier})
         else:
             q = self.capture_clients.pop(ws, None)
             if q is not None and mgr is not None:
@@ -1454,7 +1458,7 @@ class WebSocketServer:
             # Note: transport capture itself cannot be stopped without a CAN
             # disconnect; we only stop forwarding to this client.
             await ws.send_json({"type": "capture_status", "active": False,
-                                "forwarding": False})
+                                "capturing": mgr is not None and mgr.active, "forwarding": False})
 
     async def _receive_client_messages(self, ws: web.WebSocketResponse) -> None:
         async for msg in ws:

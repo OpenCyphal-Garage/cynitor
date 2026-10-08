@@ -270,11 +270,15 @@ Pong (sent in response to a client `ping` message):
 
 Capture status (sent in response to a client `capture` message):
 ```json
-{ "type": "capture_status", "active": true, "stats": { "captured": 0, "rx": 0, "tx": 0, "cyphal": 0, "foreign": 0, "dropped": 0 }, "frames": [] }
+{ "type": "capture_status", "active": true, "capturing": true, "forwarding": true, "stats": { "captured": 0, "rx": 0, "tx": 0, "cyphal": 0, "foreign": 0, "dropped": 0 }, "frames": [] }
 ```
-`active` reflects whether transport-level capture is running. When enabling
-fails because no CAN session exists, the message carries `"active": false` and an
-`"error"` field. A disable reply carries `"active": false, "forwarding": false`.
+`capturing` says whether transport-level capture runs: once started, by any
+connection, it stays on until CAN disconnects. `forwarding` says whether this
+connection is sent the frames; a disable reply ends only that, so it carries
+`"forwarding": false` with `capturing` still `true`. When enabling fails because
+no CAN session exists, both are `false` and an `"error"` field says why. `active`
+is kept for dashboards from before these two: `capturing` in an enable reply,
+`false` in the others.
 
 An enable reply's `frames` holds up to the 500 most recent frames captured
 before this connection subscribed (oldest first, shaped as in `can_frame`), taken

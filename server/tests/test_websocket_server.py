@@ -950,6 +950,21 @@ class TestFrameCaptureAPI:
             await forward
         assert [len(message["frames"]) for message in sent] == [1000]
 
+    @pytest.mark.asyncio
+    async def test_capture_replies_say_what_captures_and_what_is_forwarded(self, server, session):
+        # Capture stays on for the bus until CAN disconnects; a connection's
+        # stop ends only the frames sent to it. Each reply says both.
+        session.frame_capture = FrameCaptureManager(_CaptureScanner())
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        replies = []
+        for frame_capture, enabled in ((session.frame_capture, True), (session.frame_capture, False), (None, True)):
+            session.frame_capture = frame_capture
+            await server._handle_capture_message(ws, enabled=enabled)
+            replies.append(ws.send_json.await_args.args[0])
+        said = [(reply.get("capturing"), reply.get("forwarding")) for reply in replies]
+        assert said == [(True, True), (True, False), (False, False)]  # started, stopped, no CAN
+
 
 class TestAdapterListing:
     """available_adapters in /api/status and GET /api/can/adapters."""

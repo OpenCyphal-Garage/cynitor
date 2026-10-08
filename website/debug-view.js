@@ -387,8 +387,9 @@ const DebugView = (() => {
       updateEmpty();
       return;
     }
-    captureOn = !!event.active;
-    if (captureOn) busCapturing = true;  // and on until CAN disconnects
+    // `active` is how backends from before `forwarding` and `capturing` said it.
+    captureOn = Boolean(event.forwarding ?? event.active);
+    busCapturing = event.capturing ?? (busCapturing || captureOn);  // on until CAN disconnects
     if (event.stats) { captureStats = event.stats; renderCounters(); }
     setStatus('');
     setToggleLabel();

@@ -4676,16 +4676,19 @@ class _DebugServer:
             return
         if not msg.get("enabled"):
             self.queued = None
-            ws.send(json.dumps({"type": "capture_status", "active": False, "forwarding": False}))
+            ws.send(json.dumps({"type": "capture_status", "active": False, "capturing": self.capturing,
+                                "forwarding": False}))
             return
         if not self.can:
-            ws.send(json.dumps({"type": "capture_status", "active": False, "error": "CAN not connected"}))
+            ws.send(json.dumps({"type": "capture_status", "active": False, "capturing": False,
+                                "forwarding": False, "error": "CAN not connected"}))
             return
         earlier = self.ring[-500:] if self.queued is None else []
         if self.queued is None:
             self.queued = []
         self.capturing = True
-        ws.send(json.dumps({"type": "capture_status", "active": True, "stats": self._stats(), "frames": earlier}))
+        ws.send(json.dumps({"type": "capture_status", "active": True, "capturing": True, "forwarding": True,
+                            "stats": self._stats(), "frames": earlier}))
         self.capture(self.right_after)
 
     def polls(self, since):
