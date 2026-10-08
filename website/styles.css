@@ -7845,6 +7845,11 @@ body.dsdl-resizing-row {
   border-style: solid;
 }
 
+/* Not connected: the placeholder the other tabs show, across the grid. */
+.debug-body > .svc-state {
+  grid-column: 1 / -1;
+}
+
 .debug-card {
   border: 1px solid var(--border);
   border-radius: var(--radius);

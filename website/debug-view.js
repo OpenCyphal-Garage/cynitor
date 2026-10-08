@@ -167,8 +167,26 @@ const DebugView = (() => {
     if (target) target.innerHTML = `<div class="debug-error">${escapeHtml(message || 'Failed to load transport diagnostics')}</div>`;
   };
 
+  // Why the transport cannot be read, in the other tabs' words. Drawn only
+  // when it changes: a redraw on every poll would restart its spinner.
+  let shownProblem = null;
+  const renderProblem = (html) => {
+    const target = body();
+    if (target && html !== shownProblem) target.innerHTML = html;
+    shownProblem = html;
+  };
+
   const poll = async () => {
     if (state.activeView !== 'debug') return;
+    // Not connected: nothing to ask. The backend may be down, or want a
+    // token, and every refused poll would open the token prompt again.
+    const problem = connectionPlaceholder('inspect the CAN transport');
+    if (problem) {
+      prevStats = null;
+      renderProblem(problem);
+      return;
+    }
+    shownProblem = null;
     try {
       const data = await requestJson('/api/can/transport');
       if (state.activeView === 'debug') renderDiagnostics(data);
@@ -359,6 +377,7 @@ const DebugView = (() => {
     renderSkeleton();
     wireControls();
     prevStats = null;
+    shownProblem = null;
     captureOn = false;
     paused = false;
     filterText = '';

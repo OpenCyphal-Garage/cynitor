@@ -4186,6 +4186,27 @@ async def _(page):
         await debug_close(page, server)
 
 
+@test("Debug: disconnected, the tab asks the backend nothing and says why, so a token can be typed in peace")
+async def _(page):
+    server = _DebugServer()
+    for path in ("/api/status", "/api/nodes", "/api/can/transport"):  # a backend that wants a token
+        server.answers[path] = ({"error": "Missing or invalid token"}, 401)
+    await debug_open(page, server, connected=False)
+    try:
+        await page.wait_for_timeout(2500)
+        asked, said = server.polls(0), await page.locator("#debugBody").inner_text()
+        await page.evaluate("connectDashboard()")  # Connect, which the token prompt answers
+        await page.locator("#authModalInput").fill("pasted-token")
+        await page.wait_for_timeout(2000)  # reaching for "Save and retry"
+        kept = await page.locator("#authModalInput").input_value()
+        assert asked == 0 and "Not connected to backend" in said and kept == "pasted-token", \
+            f"Disconnected, the tab asked for the diagnostics {asked} times and said {said!r}; " \
+            f"2 s after pasting, the token field holds {kept!r}"
+    finally:
+        await page.evaluate("hideAuthModal()")
+        await debug_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
