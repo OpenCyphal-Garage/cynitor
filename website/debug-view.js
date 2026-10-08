@@ -237,6 +237,14 @@ const DebugView = (() => {
     </tr>`;
   };
 
+  // Why Start cannot work now, or '' when it can (in the Record tab's words).
+  const startBlockedBy = () => {
+    if (!state.dashboardConnected) return 'Connect to the backend to capture frames.';
+    if (!state.canConnected) return 'Connect a CAN interface to capture frames.';
+    if (state.ws?.readyState !== WebSocket.OPEN) return 'Waiting for the live connection to the backend…';
+    return '';
+  };
+
   const updateEmpty = () => {
     const empty = el('fmEmpty');
     const tbody = el('fmRows');
@@ -244,9 +252,10 @@ const DebugView = (() => {
     const hasRows = tbody.children.length > 0;
     empty.classList.toggle('hidden', hasRows);
     if (!hasRows) {
-      empty.textContent = rows.length ? 'No frames match the filter.'
+      const text = rows.length ? 'No frames match the filter.'
         : captureOn ? 'Waiting for frames…'
-          : 'Capture is off — click "Start capture" to inspect raw frames.';
+          : startBlockedBy() || 'Capture is off — click "Start capture" to inspect raw frames.';
+      if (empty.textContent !== text) empty.textContent = text;  // runs every second
     }
   };
 
@@ -265,11 +274,21 @@ const DebugView = (() => {
     if (node) node.textContent = msg || '';
   };
 
+  // Start is off, saying why, while there is no bus to capture from.
   const setToggleLabel = () => {
     const btn = el('fmToggle');
     if (!btn) return;
+    const why = captureOn ? '' : startBlockedBy();
     btn.textContent = captureOn ? 'Stop forwarding' : 'Start capture';
     btn.classList.toggle('active', captureOn);
+    btn.disabled = Boolean(why);
+    btn.title = why;
+  };
+
+  // On every connection change (updateSemaphores), as the Record tab's Start.
+  const renderControls = () => {
+    setToggleLabel();
+    updateEmpty();
   };
 
   // Full rebuild from the rows array — used on filter change / clear / backfill.
@@ -316,14 +335,12 @@ const DebugView = (() => {
   };
 
   const toggleCapture = () => {
-    if (captureOn) {
-      sendWs({ type: 'capture', enabled: false });
-      // captureOn flips on the capture_status reply.
-    } else if (!sendWs({ type: 'capture', enabled: true })) {
-      setStatus('Dashboard not connected — connect first.');
-    } else {
-      setStatus('');
+    // captureOn flips on the capture_status reply.
+    if (!sendWs({ type: 'capture', enabled: !captureOn })) {
+      renderControls();  // the socket has just gone: Start says why it is off
+      return;
     }
+    setStatus('');
   };
 
   const onCaptureStatus = (event) => {
@@ -421,5 +438,5 @@ const DebugView = (() => {
     prevStats = null;
   };
 
-  return { init, hide, onFrames, onCaptureStatus, onSocketClosed };
+  return { init, hide, onFrames, onCaptureStatus, onSocketClosed, renderControls };
 })();

@@ -4610,6 +4610,7 @@ class _DebugServer:
         self.ring = []              # frames captured, oldest first
         self.queued = None          # captured since the dashboard subscribed, not sent yet (None: not subscribed)
         self.right_after = []       # frames the bus carries the moment the dashboard subscribes
+        self.can = True             # a CAN session is up
 
     def _transport(self):
         frames_in = 1000 + int(100 * (time.monotonic() - self.started))
@@ -4624,12 +4625,14 @@ class _DebugServer:
         if path in self.answers:
             return self.answers[path]
         if path == "/api/status":
-            return {"status": "running", "can_interface": "vcan0", "can_bitrate": None, "can_data_bitrate": None,
-                    "can_fd": False, "available_interfaces": ["vcan0"], "available_adapters": [
+            return {"status": "running" if self.can else "idle", "can_interface": "vcan0" if self.can else None,
+                    "can_bitrate": None, "can_data_bitrate": None, "can_fd": False,
+                    "available_interfaces": ["vcan0"], "available_adapters": [
                         {"interface": "vcan0", "label": "vcan0 (SocketCAN)", "needs_bitrate": False}],
-                    "bus_utilization": 12.0, "dropped": None, "last_error": None, "cyphal_v11": None}, 200
+                    "bus_utilization": 12.0 if self.can else None, "dropped": None, "last_error": None,
+                    "cyphal_v11": None}, 200
         if path == "/api/can/transport":
-            return self._transport(), 200
+            return (self._transport() if self.can else {"connected": False}), 200
         if path == "/api/can/capture":
             return {"active": True, "stats": self._stats(), "frames": self.ring[-500:]}, 200
         quiet = {"/api/nodes": {"node_count": 0, "nodes": {}}, "/api/replay/status": {"active": False},
@@ -4669,6 +4672,9 @@ class _DebugServer:
         if not msg.get("enabled"):
             self.queued = None
             ws.send(json.dumps({"type": "capture_status", "active": False, "forwarding": False}))
+            return
+        if not self.can:
+            ws.send(json.dumps({"type": "capture_status", "active": False, "error": "CAN not connected"}))
             return
         earlier = self.ring[-500:] if self.queued is None else []
         if self.queued is None:
@@ -4892,6 +4898,26 @@ async def _(page):
             await debug_frames_come(page, server, range(first, first + 5))
         said = await page.evaluate("e2eSaid")
         assert not said, f"In 5 batches of frames, live regions changed {len(said)} times: {sorted(set(said))}"
+    finally:
+        await debug_close(page, server)
+
+
+@test("Debug: Start capture is off, saying why, until there is a bus to capture from")
+async def _(page):
+    server = _DebugServer()
+    server.can = False
+    await debug_open(page, server)
+    start, empty = page.locator("#fmToggle"), page.locator("#fmEmpty")
+    try:
+        can_idle = (await start.is_disabled(), await empty.inner_text())
+        server.can = True
+        await page.evaluate("state.canConnected = true; updateSemaphores();")
+        can_up = await start.is_disabled()
+        await page.evaluate("disconnectWs(); updateSemaphores();")  # as in the 5 s before the socket opens
+        no_socket = (await start.is_disabled(), await start.get_attribute("title") or "")
+        assert can_idle == (True, "Connect a CAN interface to capture frames.") and not can_up \
+            and no_socket[0] and "connection" in no_socket[1], \
+            f"Start disabled, and why: with CAN idle {can_idle}; with CAN up {can_up}; with no socket yet {no_socket}"
     finally:
         await debug_close(page, server)
 

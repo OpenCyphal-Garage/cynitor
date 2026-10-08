@@ -141,6 +141,7 @@ const updateSemaphores = () => {
   el('canBitrateSelect').disabled = state.canConnecting;
   el('canBitrateCustom').disabled = state.canConnecting;
   renderRecordStart();  // the Record tab's Start needs both connections
+  DebugView.renderControls();  // so does the Debug tab's Start capture, and its socket
 
   if (serverInfo) {
     if (state.dashboardConnected && state.wsThroughput > 0) {
