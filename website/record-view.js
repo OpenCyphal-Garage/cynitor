@@ -109,7 +109,8 @@ const _subjectsPickerData = () => {
     key: `service-${sid}`,
     kind: 'service',
     id: sid,
-    label: `service: ${SERVICE_RECORDED}`,
+    label: 'service',  // the heading above says what it records, as its hint does
+    hint: `A service records the ${SERVICE_RECORDED}`,
     owner: _ownerLabel([...owners]),
     ownerIds: [...owners],
     rate: '',
@@ -830,10 +831,11 @@ const applyEditLimits = async () => {
 
 // ── View init ───────────────────────────────────────────────────────
 
-// A type or a name its column may be too narrow for: whole on hover.
+// A type or a name its column may be too narrow for: whole on hover, or
+// what the row's hint says of it.
 const _wholeOnHover = (cell) => {
   const text = String(cell.getValue() ?? '');
-  cell.getElement().title = text;
+  cell.getElement().title = cell.getRow().getData().hint || text;
   return escapeHtml(text);
 };
 

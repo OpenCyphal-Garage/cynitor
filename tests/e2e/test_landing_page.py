@@ -4233,10 +4233,10 @@ async def _(page):
     server = _RecordServer()
     await record_open(page, server, setup=RECORD_SERVICE)
     try:
-        picked = await page.evaluate("_subjectsPicker.getRow('service-384').getData().label")
+        picked = await page.evaluate("_subjectsPicker.getRow('service-384').getCell('label').getElement().title")
         selected = await page.evaluate("_selectionPicker.getRow('service-384').getData().label")
         assert "from Cynitor" in picked and "from Cynitor" in selected, \
-            f"Service 384 reads {picked!r} in the picker, {selected!r} in the selection"
+            f"Service 384 reads {picked!r} hovered in the picker, {selected!r} in the selection"
     finally:
         await page.evaluate("state.recordFilterDraft.service_ids = []; saveSettings();")
         await record_close(page, server)
@@ -4467,6 +4467,20 @@ async def _(page):
         hover = await page.evaluate("_subjectsPicker.getRow('subject-7509').getCell('label').getElement().title")
         assert hover == "Heartbeat_1_0", f"Heartbeat's type, hovered, reads {hover!r}"
     finally:
+        await page.set_viewport_size({"width": 1280, "height": 800})
+        await record_close(page, server)
+
+
+@test("Record: a service's row in the picker is not cut short")
+async def _(page):
+    server = _RecordServer()
+    await page.set_viewport_size({"width": 1440, "height": 900})
+    try:
+        await record_open(page, server, setup=RECORD_SERVICE)
+        cut = await page.evaluate(CUT_SHORT, "recSubjectsPicker")
+        assert not cut, f"Cut short: {cut}"
+    finally:
+        await page.evaluate("state.recordFilterDraft.service_ids = []; saveSettings();")
         await page.set_viewport_size({"width": 1280, "height": 800})
         await record_close(page, server)
 
