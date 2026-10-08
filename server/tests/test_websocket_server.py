@@ -929,6 +929,27 @@ class TestFrameCaptureAPI:
         assert [f["id"] for f in reply.get("frames", [])] == ["0x00000001", "0x00000002"]
         assert streamed == ["0x00000003"]
 
+    @pytest.mark.asyncio
+    async def test_capture_loop_sends_a_backlog_at_once(self, server, session):
+        # A busy bus queues frames faster than 250 a window: each message takes
+        # all that is queued, so the stream keeps up instead of dropping frames.
+        session.frame_capture = None
+        queue = asyncio.Queue()
+        for n in range(1000):
+            queue.put_nowait({"id": n})
+        ws = MagicMock()
+        ws.closed = False
+        sent = []
+        ws.send_json = AsyncMock(side_effect=sent.append)
+        server._running = True
+        server.capture_clients[ws] = queue
+        forward = asyncio.create_task(server._capture_loop(ws))
+        await asyncio.sleep(server._CAPTURE_BATCH_WINDOW + 0.1)
+        forward.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await forward
+        assert [len(message["frames"]) for message in sent] == [1000]
+
 
 class TestAdapterListing:
     """available_adapters in /api/status and GET /api/can/adapters."""

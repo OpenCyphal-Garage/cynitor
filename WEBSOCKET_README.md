@@ -283,7 +283,8 @@ frames after them, none repeated and none skipped. It is empty when the
 connection was subscribed already.
 
 Raw frame batch (sent only to clients that opted into capture; batched ~every
-120 ms to bound message rate):
+120 ms to bound message rate, each with every frame queued since the last, up
+to 2000):
 ```json
 {
     "type": "can_frame",

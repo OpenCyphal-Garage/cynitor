@@ -1387,9 +1387,12 @@ class WebSocketServer:
             logger.debug(f"Metrics loop ended: {e}")
 
     # Batch window for the raw frame stream. Captured frames are coalesced into
-    # one message per window to bound message rate under heavy bus load.
+    # one message per window to bound message rate under heavy bus load. A
+    # message takes all that is queued, up to about 16,000 frames a second,
+    # more than a 1 Mbit/s bus carries: with less, a busy bus outran the
+    # stream, which fell behind and dropped frames.
     _CAPTURE_BATCH_WINDOW = 0.12
-    _CAPTURE_BATCH_MAX = 250
+    _CAPTURE_BATCH_MAX = 2000
     # Frames caught before a client subscribed, sent with the reply.
     _CAPTURE_EARLIER = 500
 
