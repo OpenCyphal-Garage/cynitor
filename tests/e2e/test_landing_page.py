@@ -4138,6 +4138,21 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: Start is at the top of the tab, above the recordings however many they are")
+async def _(page):
+    server = _RecordServer([_recording(rid, f"run {rid}") for rid in range(1, 21)])
+    await record_open(page, server)
+    try:
+        start = await page.locator("#recStart").bounding_box()
+        recordings = await page.locator("#recordList").bounding_box()
+        assert start["y"] + start["height"] <= 800 and start["y"] < recordings["y"], \
+            f"In a window 800 px high, Start recording is at {start['y']:.0f} px, the recordings at {recordings['y']:.0f} px"
+        hint = await page.locator(".record-header").inner_text()
+        assert "on the right" not in hint, f"The tab's hint reads {hint!r}"
+    finally:
+        await record_close(page, server)
+
+
 @test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
 async def _(page):
     try:

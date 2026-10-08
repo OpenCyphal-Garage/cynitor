@@ -7587,11 +7587,41 @@ body.dsdl-resizing-row {
   border-radius: 0.25rem;
 }
 
-.record-limits {
-  background: var(--surface-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: 0.25rem;
-  padding: 0.625rem 0.75rem;
+/* The record bar: what starts a recording, at the top of the tab. */
+.record-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.625rem 0.875rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+}
+
+.record-bar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem 0.75rem;
+}
+
+.record-bar-name {
+  flex: 1 1 14rem;
+}
+
+.record-bar .record-stop-toggle {
+  display: flex;
+  min-height: 2rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.record-bar .record-stop-toggle input[type="checkbox"] {
+  width: auto;  /* not the full width inputs take */
+}
+
+.record-bar .btn-primary {
+  min-height: 2rem;
 }
 
 .record-limit-row {
@@ -7612,7 +7642,8 @@ body.dsdl-resizing-row {
   font-weight: 600;
 }
 
-.record-limit-row select {
+.record-limit-row select,
+.record-field select {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 0.25rem;
@@ -7622,7 +7653,8 @@ body.dsdl-resizing-row {
   padding: 0.3125rem 0.5rem;
 }
 
-.record-limit-row select:focus {
+.record-limit-row select:focus,
+.record-field select:focus {
   outline: none;
   border-color: var(--accent);
 }
@@ -7640,7 +7672,6 @@ body.dsdl-resizing-row {
 }
 
 .record-disk-hint {
-  margin-top: 0.5rem;
   font-size: 0.75rem;
   color: var(--muted);
   font-family: var(--mono, ui-monospace, monospace);
@@ -7681,15 +7712,6 @@ body.dsdl-resizing-row {
 .record-field textarea:focus {
   outline: none;
   border-color: var(--accent);
-}
-
-.record-actions {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.record-view .record-actions .btn-primary {
-  flex: 1;
 }
 
 .record-start-why {

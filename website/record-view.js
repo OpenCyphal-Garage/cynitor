@@ -431,7 +431,7 @@ const renderRecordList = () => {
     fresh.innerHTML = `<div class="record-list-error" role="alert">Cannot load the recordings: ${escapeHtml(_recordListError)}.`
       + `${state.recordings.length ? ' These are as last loaded.' : ''}</div>`;
   } else if (!state.recordings.length) {
-    list.innerHTML = '<div class="record-empty">No recordings yet. Build a selection on the right, set limits, then press Start.</div>';
+    list.innerHTML = '<div class="record-empty">No recordings yet. Start recording, above, keeps what the bus sends from then on.</div>';
     return;
   }
   // Patched, not rebuilt: live cards refresh every second, and a rebuilt
@@ -833,10 +833,33 @@ const _renderViewShell = (container) => {
       <header class="record-header">
         <div class="record-header-text">
           <h2>Recordings</h2>
-          <span class="record-hint">Pick subjects, services, and nodes on the right. Set limits. Press Start. Live recordings are stored independently and survive the global buffer.</span>
+          <span class="record-hint">The bus's decoded messages, kept to replay or export. A selection below narrows what is recorded; with none, everything is.</span>
         </div>
         <span class="record-buffer-chip" id="recBufferChip"></span>
       </header>
+      <section class="record-bar" aria-label="New recording">
+        <div class="record-bar-row">
+          <label class="record-field record-bar-name">
+            <span>Name</span>
+            <input type="text" id="recName" placeholder="e.g. boot sequence" autocomplete="off" />
+          </label>
+          <label class="record-field">
+            <span>Length</span>
+            <select id="recLength">${_buildOptionsHtml(LENGTH_OPTIONS, draft.max_length_seconds)}</select>
+          </label>
+          <label class="record-field">
+            <span>Max events</span>
+            <select id="recMaxEvents">${_buildOptionsHtml(EVENTS_OPTIONS, draft.max_events)}</select>
+          </label>
+          <label class="record-stop-toggle">
+            <input type="checkbox" id="recStopOnLimit"${draft.stop_on_limit ? ' checked' : ''} />
+            <span>Stop when limit hit</span>
+          </label>
+          <button id="recStart" class="btn-primary">Start recording</button>
+        </div>
+        <div class="record-disk-hint" id="recDiskHint"></div>
+        <p class="record-start-why" id="recStartWhy" role="status"></p>
+      </section>
       <section class="rawlog-panel" id="rawLogPanel" aria-label="Raw CAN log"></section>
       <div class="record-layout">
         <section class="record-list-pane">
@@ -857,36 +880,11 @@ const _renderViewShell = (container) => {
             <h3 class="record-builder-h">Selection <span class="record-builder-sub">click to remove</span></h3>
             <div id="recSelectionPicker" class="record-picker"></div>
           </div>
-          <div class="record-builder-block record-limits">
-            <div class="record-limit-row">
-              <label>
-                <span>Length</span>
-                <select id="recLength">${_buildOptionsHtml(LENGTH_OPTIONS, draft.max_length_seconds)}</select>
-              </label>
-              <label>
-                <span>Max events</span>
-                <select id="recMaxEvents">${_buildOptionsHtml(EVENTS_OPTIONS, draft.max_events)}</select>
-              </label>
-              <label class="record-stop-toggle">
-                <input type="checkbox" id="recStopOnLimit"${draft.stop_on_limit ? ' checked' : ''} />
-                <span>Stop when limit hit</span>
-              </label>
-            </div>
-            <div class="record-disk-hint" id="recDiskHint"></div>
-          </div>
           <div class="record-builder-block">
             <label class="record-field">
-              <span>Name</span>
-              <input type="text" id="recName" placeholder="e.g. boot sequence" autocomplete="off" />
-            </label>
-            <label class="record-field">
               <span>Notes</span>
-              <textarea id="recNotes" rows="2" placeholder="Optional" autocomplete="off"></textarea>
+              <textarea id="recNotes" rows="2" placeholder="Optional, kept with the recording" autocomplete="off"></textarea>
             </label>
-            <div class="record-actions">
-              <button id="recStart" class="btn-primary">Start recording</button>
-            </div>
-            <p class="record-start-why" id="recStartWhy" role="status"></p>
           </div>
         </section>
       </div>
