@@ -161,8 +161,16 @@ const _removeFromSelection = (row) => {
   _refreshSelection();
 };
 
+// Tabulator throws on data given before it has built ("verticalFillMode"), so
+// a picker takes fresh data only once built; it is built with its data anyway.
+const _builtPickers = new Set();
+
+const _refreshPicker = (picker, data) => {
+  if (_builtPickers.has(picker)) picker.replaceData(data);
+};
+
 const _refreshSelection = () => {
-  if (_selectionPicker) _selectionPicker.replaceData(_selectionData());
+  _refreshPicker(_selectionPicker, _selectionData());
   _updateDiskHint();
 };
 
@@ -189,8 +197,8 @@ const _setHighlightedNode = (nodeId) => {
 };
 
 const _refreshPickerTables = () => {
-  if (_subjectsPicker) _subjectsPicker.replaceData(_subjectsPickerData());
-  if (_nodesPicker) _nodesPicker.replaceData(_nodesPickerData());
+  _refreshPicker(_subjectsPicker, _subjectsPickerData());
+  _refreshPicker(_nodesPicker, _nodesPickerData());
 };
 
 // ── Buffer chip + disk hint ─────────────────────────────────────────
@@ -727,6 +735,9 @@ const _initPickers = () => {
   });
   // Click anywhere on a selection row also removes it (in addition to the × button).
   _selectionPicker.on('rowClick', (e, row) => _removeFromSelection(row.getData()));
+  for (const picker of [_subjectsPicker, _nodesPicker, _selectionPicker]) {
+    picker.on('tableBuilt', () => _builtPickers.add(picker));
+  }
 };
 
 const _buildOptionsHtml = (opts, current) =>

@@ -3858,6 +3858,24 @@ async def _(page):
         await record_close(page, server)
 
 
+# Errors thrown, or promises rejected and not handled, from here on.
+COLLECT_ERRORS = """() => { window.e2eErrors = [];
+    window.addEventListener('error', (e) => e2eErrors.push(String(e.message)));
+    window.addEventListener('unhandledrejection', (e) => e2eErrors.push(String(e.reason))); }"""
+
+
+@test("Record: the tab opens without errors")
+async def _(page):
+    server = _RecordServer([_recording(1, "boot sequence")])
+    await record_open(page, server, setup=COLLECT_ERRORS)
+    try:
+        await page.wait_for_timeout(500)
+        errors = await page.evaluate("e2eErrors")
+        assert not errors, f"Opening the tab threw: {errors}"
+    finally:
+        await record_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
