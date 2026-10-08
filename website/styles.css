@@ -7382,6 +7382,14 @@ body.dsdl-resizing-row {
   background: var(--muted);
 }
 
+/* After the rules it overrides. */
+@media (prefers-reduced-motion: reduce) {
+  .view-graph-btn.recording-active::after,
+  .record-dot.rec {
+    animation: none;
+  }
+}
+
 .record-name {
   font-weight: 600;
   color: var(--text-bright);

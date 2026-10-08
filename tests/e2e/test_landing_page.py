@@ -4124,6 +4124,20 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: the recording dots hold still on request")
+async def _(page):
+    server = _RecordServer([_recording(1, "field test", live=True)])
+    await page.emulate_media(reduced_motion="reduce")
+    try:
+        await record_open(page, server)
+        moving = await page.evaluate("""[getComputedStyle(document.querySelector('.record-card .record-dot.rec')).animationName,
+            getComputedStyle(el('viewTabRecord'), '::after').animationName]""")
+        assert moving == ["none", "none"], f"With reduced motion asked for, the card's and the tab's dots run {moving}"
+    finally:
+        await page.emulate_media(reduced_motion="no-preference")
+        await record_close(page, server)
+
+
 @test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
 async def _(page):
     try:
