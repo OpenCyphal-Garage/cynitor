@@ -7216,10 +7216,11 @@ body.dsdl-resizing-row {
   display: none;  /* the history not known yet */
 }
 
-/* Two-pane layout: cards on left, builder on right. */
+/* Two-pane layout: cards on left, builder on right. The builder, with its
+   two pickers side by side, takes two thirds. */
 .record-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
   gap: 1rem;
   align-items: start;
 }
@@ -7655,6 +7656,13 @@ body.dsdl-resizing-row {
   width: 100%;
   background: var(--surface-2);
   border-radius: 0.25rem;
+}
+
+/* Denser than the main tables: two pickers share the pane, and a type
+   should show whole beside its ID, owner and rate. */
+.record-picker.tabulator .tabulator-row .tabulator-cell {
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
 }
 
 /* The record bar: what starts a recording, at the top of the tab. */

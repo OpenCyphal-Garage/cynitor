@@ -4442,6 +4442,35 @@ async def _(page):
         await record_close(page, server)
 
 
+RECORD_TYPES = """() => {
+    state.latestNodesPayload = {node_count: 2, nodes: {
+        '10': {node_id: 10, name: 'org.example.imu', publishers: [100, 7509], subscribers: [], servers: [], clients: []},
+        '11': {node_id: 11, name: 'org.example.esc', publishers: [7509], subscribers: [], servers: [], clients: []}}};
+    const ev = (subject_id, publisher_node_id, message_type) => ({subject_id, publisher_node_id, message_type,
+        rate: 100.5, subject_rate: 100.5, attributes: [], timestamp_unix: Date.now() / 1000});
+    cacheEvent(ev(100, 10, 'Real64_1_0')); cacheEvent(ev(7509, 10, 'Heartbeat_1_0')); cacheEvent(ev(7509, 11, 'Heartbeat_1_0'));
+}"""
+
+# The headers and cells of a table whose text is cut short.
+CUT_SHORT = """(id) => [...el(id).querySelectorAll('.tabulator-col-title, .tabulator-cell')]
+    .filter((part) => part.scrollWidth > part.clientWidth).map((part) => part.textContent.trim())"""
+
+
+@test("Record: the pickers show types and node names whole, the columns of numbers as wide as theirs")
+async def _(page):
+    server = _RecordServer()
+    await page.set_viewport_size({"width": 1440, "height": 900})  # two pickers side by side, beside the recordings
+    try:
+        await record_open(page, server, setup=RECORD_TYPES)
+        cut = {picker: await page.evaluate(CUT_SHORT, picker) for picker in ("recSubjectsPicker", "recNodesPicker")}
+        assert cut == {"recSubjectsPicker": [], "recNodesPicker": []}, f"Cut short: {cut}"
+        hover = await page.evaluate("_subjectsPicker.getRow('subject-7509').getCell('label').getElement().title")
+        assert hover == "Heartbeat_1_0", f"Heartbeat's type, hovered, reads {hover!r}"
+    finally:
+        await page.set_viewport_size({"width": 1280, "height": 800})
+        await record_close(page, server)
+
+
 @test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
 async def _(page):
     try:

@@ -830,10 +830,21 @@ const applyEditLimits = async () => {
 
 // ── View init ───────────────────────────────────────────────────────
 
+// A type or a name its column may be too narrow for: whole on hover.
+const _wholeOnHover = (cell) => {
+  const text = String(cell.getValue() ?? '');
+  cell.getElement().title = text;
+  return escapeHtml(text);
+};
+
 const _initPickers = () => {
   const subjectsEl = el('recSubjectsPicker');
   const nodesEl = el('recNodesPicker');
   const selectionEl = el('recSelectionPicker');
+  // Columns of numbers as wide as theirs ("7509", "12 nodes", "100.5"), in
+  // rem as the text is; a type, a name or a label takes the rest.
+  const rem = (n) => n * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16);
+  const rest = { minWidth: rem(4.5), formatter: _wholeOnHover };  // its header whole
   const commonOpts = {
     layout: 'fitColumns',
     height: '14rem',
@@ -856,10 +867,10 @@ const _initPickers = () => {
       row.getElement().classList.toggle('rec-row-highlighted', hit);
     },
     columns: [
-      { title: 'ID', field: 'id', width: 80, sorter: 'number' },
-      { title: 'Type', field: 'label' },
-      { title: 'Owner', field: 'owner', width: 110 },
-      { title: 'Rate', field: 'rate', width: 70 },
+      { title: 'ID', field: 'id', width: rem(3.5), sorter: 'number' },
+      { title: 'Type', field: 'label', ...rest },
+      { title: 'Owner', field: 'owner', width: rem(5.25) },
+      { title: 'Rate', field: 'rate', width: rem(4.25) },
     ],
   });
   _subjectsPicker.on('rowClick', (e, row) => {
@@ -875,10 +886,10 @@ const _initPickers = () => {
       row.getElement().classList.toggle('selected-row', isSel);
     },
     columns: [
-      { title: 'ID', field: 'id', width: 80, sorter: 'number' },
-      { title: 'Name', field: 'name' },
-      { title: 'Pubs', field: 'publishers', width: 70, sorter: 'number' },
-      { title: 'Srvs', field: 'servers', width: 70, sorter: 'number' },
+      { title: 'ID', field: 'id', width: rem(3.5), sorter: 'number' },
+      { title: 'Name', field: 'name', ...rest },
+      { title: 'Pubs', field: 'publishers', width: rem(4.25), sorter: 'number' },
+      { title: 'Srvs', field: 'servers', width: rem(4.25), sorter: 'number' },
     ],
   });
   _nodesPicker.on('rowClick', (e, row) => {
@@ -893,11 +904,11 @@ const _initPickers = () => {
     placeholder: 'Empty = record everything. Build a selection on the pickers above.',
     data: _selectionData(),
     columns: [
-      { title: 'Kind', field: 'kind', width: 90 },
-      { title: 'ID', field: 'id', width: 80, sorter: 'number' },
-      { title: 'Label', field: 'label' },
+      { title: 'Kind', field: 'kind', width: rem(5) },
+      { title: 'ID', field: 'id', width: rem(3.5), sorter: 'number' },
+      { title: 'Label', field: 'label', ...rest },
       {
-        title: '', width: 50, hozAlign: 'center',
+        title: '', width: rem(3), hozAlign: 'center', headerSort: false,
         formatter: () => '<button class="btn-mini" aria-label="Remove from selection">×</button>',
         cellClick: (e, cell) => _removeFromSelection(cell.getRow().getData()),
       },
