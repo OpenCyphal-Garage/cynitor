@@ -7382,6 +7382,12 @@ body.dsdl-resizing-row {
   background: var(--muted);
 }
 
+/* Running, but waiting for CAN: hollow and still. */
+.record-dot.waiting {
+  border: 1px solid var(--error);
+  box-sizing: border-box;
+}
+
 /* After the rules it overrides. */
 @media (prefers-reduced-motion: reduce) {
   .view-graph-btn.recording-active::after,

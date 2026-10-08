@@ -4278,6 +4278,23 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: a recording running while CAN is down says it waits for CAN")
+async def _(page):
+    server = _RecordServer([_recording(1, "overnight", live=True)])
+    await record_open(page, server, can=False)
+    try:
+        card = page.locator('.record-card[data-id="1"]')
+        badges = await card.locator(".record-badge").all_text_contents()
+        dot = (await card.locator(".record-dot").get_attribute("class")).split()
+        assert "waiting for CAN" in badges and "rec" not in dot, f"With CAN down: badges {badges}, dot {dot}"
+        await page.evaluate("state.canConnected = true; renderRecordList();")
+        badges = await card.locator(".record-badge").all_text_contents()
+        dot = (await card.locator(".record-dot").get_attribute("class")).split()
+        assert "waiting for CAN" not in badges and "rec" in dot, f"With CAN up: badges {badges}, dot {dot}"
+    finally:
+        await record_close(page, server)
+
+
 @test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
 async def _(page):
     try:

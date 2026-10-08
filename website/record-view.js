@@ -375,6 +375,7 @@ const _autoStop = (rec) => {
 const _buildCard = (rec) => {
   const card = document.createElement('div');
   const live = _isLiveRecording(rec);
+  const waiting = live && !state.canConnected;  // nothing can come until CAN is connected
   const stop = _autoStop(rec);
   card.className = `record-card${live ? ' live' : ''}${stop?.short ? ' auto-stopped' : ''}`;
   card.dataset.id = String(rec.id);
@@ -384,8 +385,9 @@ const _buildCard = (rec) => {
 
   card.innerHTML = `
     <div class="record-card-head">
-      <span class="record-dot ${live ? 'rec' : 'done'}" aria-hidden="true"></span>
+      <span class="record-dot ${waiting ? 'waiting' : live ? 'rec' : 'done'}" aria-hidden="true"></span>
       <span class="record-name">${escapeHtml(rec.name)}</span>
+      ${waiting ? '<span class="record-badge" title="It goes on recording once CAN is connected">waiting for CAN</span>' : ''}
       ${legacy ? '<span class="record-badge" title="Legacy bookmark (Phase 1); reads from the shared events buffer">bookmark</span>' : ''}
       ${stop ? `<span class="record-badge${stop.short ? ' record-badge-warn' : ''}" title="${stop.title}">${escapeHtml(stop.text)}</span>` : ''}
       <span class="record-meta">${escapeHtml(_formatCardMeta(rec))}</span>
