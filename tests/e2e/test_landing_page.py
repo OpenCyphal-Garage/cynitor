@@ -4094,6 +4094,27 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: a row keeps the keyboard focus when its table is drawn again")
+async def _(page):
+    server = _RecordServer()
+    await record_open(page, server, setup="() => { _addToSelection({kind: 'subject', id: 100}); }")
+    try:
+        await page.locator("#recSelectionPicker .tabulator-tableholder").focus()
+        await page.keyboard.press("ArrowDown")
+        await page.wait_for_timeout(200)
+        await page.evaluate("_selectionPicker.redraw()")  # as a resize does
+        await page.wait_for_timeout(200)
+        focused = await page.evaluate("document.activeElement.className")
+        assert "tabulator-row" in focused, f"After a redraw the focus is on {focused!r}, not the row"
+        await page.keyboard.press("Delete")
+        await page.wait_for_timeout(300)
+        left = await page.evaluate("state.recordFilterDraft.subject_ids")
+        assert left == [], f"Delete after the redraw left the selection at {left}"
+    finally:
+        await page.evaluate("state.recordFilterDraft.subject_ids = []; saveSettings();")
+        await record_close(page, server)
+
+
 @test("Record: Edit limits takes the focus, keeps Tab inside, and gives the focus back")
 async def _(page):
     server = _RecordServer([_recording(1, "field test", live=True)])

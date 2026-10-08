@@ -409,6 +409,18 @@ const bindRowKeys = (tabulator, activate, keys = {}) => {
     if (row.getElement().isConnected) row.getElement().focus();
     tabulator.scrollToRow(row, 'nearest', false).then(() => row.getElement().focus());
   };
+  // Drawing the table again (on a resize, say) takes its rows out of the
+  // page and puts them back, which loses the focus: the row that had it when
+  // the drawing began gets it back.
+  let focused = null;
+  tabulator.on('renderStarted', () => {
+    const active = document.activeElement;
+    focused = active.classList.contains('tabulator-row') && tabulator.element.contains(active) ? active : null;
+  });
+  tabulator.on('renderComplete', () => {
+    if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
+    focused = null;
+  });
   tabulator.element.addEventListener('keydown', (e) => {
     const onRow = e.target.classList.contains('tabulator-row');
     if (!onRow && !e.target.classList.contains('tabulator-tableholder')) return;  // a filter, an input
