@@ -7823,6 +7823,9 @@ body.dsdl-resizing-row {
   padding: 1rem;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  /* As tall as the cards: they clip their corners (overflow: hidden), so
+     auto rows would squeeze them into the panel instead of scrolling it. */
+  grid-auto-rows: max-content;
   gap: 1rem;
   align-content: start;
 }

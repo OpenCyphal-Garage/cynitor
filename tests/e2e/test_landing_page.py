@@ -4207,6 +4207,23 @@ async def _(page):
         await debug_close(page, server)
 
 
+@test("Debug: the diagnostics cards show every row, and scroll when the window is short")
+async def _(page):
+    server = _DebugServer()
+    await page.set_viewport_size({"width": 1024, "height": 800})
+    await debug_open(page, server)
+    try:
+        await page.wait_for_selector("#debugBody .debug-card", timeout=WAIT_MS)
+        cut = await page.evaluate("""[...document.querySelectorAll('#debugBody .debug-card')]
+            .map(card => card.scrollHeight - card.clientHeight)""")
+        panel = await page.evaluate("[el('debugBody').scrollHeight, el('debugBody').clientHeight]")
+        assert cut and max(cut) <= 1 and panel[0] > panel[1], \
+            f"At 1024×800, rows cut off the bottom of each card (px): {cut}; the panel's scroll and visible height: {panel}"
+    finally:
+        await page.set_viewport_size({"width": 1280, "height": 800})
+        await debug_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
