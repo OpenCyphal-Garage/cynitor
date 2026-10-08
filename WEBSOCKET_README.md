@@ -1038,7 +1038,7 @@ GET    /api/recordings/{rec_id}              → { recording: { ...stats } }
 GET    /api/recordings/buffer                → { buffer: { ...global buffer stats } }
 POST   /api/recordings                       body: { name, filter?, notes?, max_length_seconds?, max_events?, stop_on_limit? } → 201 { recording }
 POST   /api/recordings/{rec_id}/stop         → { recording }
-PATCH  /api/recordings/{rec_id}              body: { name?, notes? } → { recording }
+PATCH  /api/recordings/{rec_id}              body: { name?, notes?, max_length_seconds?, max_events?, stop_on_limit? } → { recording }
 DELETE /api/recordings/{rec_id}[?purge=true] → { deleted, purged }
 ```
 
@@ -1049,6 +1049,8 @@ A recording row contains: `id`, `name`, `start_unix`, `end_unix`, `filter`, `not
 #### Limits and auto-stop
 
 `max_length_seconds` and `max_events` are optional caps. With `stop_on_limit: true` (default off — opt in per recording), the recording auto-stops on the first limit breach: `end_unix` is set, `auto_stopped` becomes `true`, and the recording disappears from the active-routing registry. With `stop_on_limit: false`, the limits are soft targets — the recording keeps capturing past 100%, useful for showing progress bars in the UI without enforcing a cap.
+
+PATCH changes only the fields it is sent (`null` counts as not sent), so a limit cannot be removed once set. A running recording takes new limits at once: one lowered below what it has reached stops it (with `stop_on_limit`) on its next event, or within 5 seconds.
 
 Auto-stop is checked both on each matching event (during ingest) and via a 5-second background sweep (catches time-based limits when the bus is silent).
 
@@ -1247,7 +1249,7 @@ Events are automatically logged to `telemetry_events.db`. The `events` table has
 
 **Retention.** The global `events` table is pruned by **time-based retention** (default 24 hours). A hard event-count cap (`max_events`, default 5,000,000) acts as a safety net only — it bounds disk if rate × retention would otherwise blow past it. Events are written in transactions of up to 500 (about 20,000 events/s on an SSD). Pruning runs every 1000 writes; configure both via `EventLogger(retention_seconds=..., max_events=...)`.
 
-Per-recording event stores (`recording_events`) are **not** subject to retention — they only grow until the recording is deleted (with `?purge=true`) or stopped. Recording rows survive global retention by definition.
+Per-recording event stores (`recording_events`) are **not** subject to retention: a recording keeps its events until it is deleted, which deletes them too. `?purge=true` also deletes a legacy bookmark's time range from the global `events` table (a bookmark keeps no events of its own). Recording rows survive global retention by definition.
 
 **Query logged events programmatically:**
 ```python
