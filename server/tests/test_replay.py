@@ -248,6 +248,25 @@ class TestControl:
             await mgr.stop()
 
     @pytest.mark.asyncio
+    async def test_seek_while_playing_goes_to_the_new_position_at_once(self, replay_db):
+        # 10.0 .. 10.4, then nothing until 30.0: the seek comes while the engine
+        # waits for 30.0, as a dragged seek bar usually lands between events.
+        for ts in (10.0, 10.1, 10.2, 10.3, 10.4, 30.0):
+            _insert_event(replay_db, 1, t_unix=ts)
+        mgr = ReplayManager(replay_db, 1, speed=1.0)
+        sub = mgr.subscribe()
+        try:
+            await mgr.start()
+            for _ in range(5):
+                await asyncio.wait_for(sub.get(), 2.0)
+            mgr.seek(0.2)
+            ev = await asyncio.wait_for(sub.get(), 1.0)
+            assert ev["timestamp_unix"] == 10.2
+            assert mgr.status()["events_emitted"] == 3  # 10.0 and 10.1 come before it
+        finally:
+            await mgr.stop()
+
+    @pytest.mark.asyncio
     async def test_speed_is_clamped(self, replay_db):
         _insert_event(replay_db, 1, 10.0)
         mgr = ReplayManager(replay_db, 1, speed=999.0)

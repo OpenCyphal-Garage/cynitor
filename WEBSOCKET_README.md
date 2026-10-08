@@ -1166,7 +1166,7 @@ curl -X POST http://localhost:8080/api/replay/seek \
   -H 'Content-Type: application/json' \
   -d '{"position_s": 12.5}'
 ```
-`position_s` is clamped to `[0, duration_s]`. Returns 404 if no replay is running.
+`position_s` is clamped to `[0, duration_s]`. Playback moves there at once, also between two events, and `events_emitted` then counts the events before that position. Returns 404 if no replay is running.
 
 **Change speed without re-seeking:**
 ```bash
