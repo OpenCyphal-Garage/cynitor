@@ -7224,6 +7224,7 @@ body.dsdl-resizing-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 0.875rem;
+  align-items: end;  /* the tables line up when a heading takes two lines */
 }
 
 .record-view .tabulator-row.rec-row-highlighted {

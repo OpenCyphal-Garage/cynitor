@@ -4312,6 +4312,19 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: the two pickers line up, however many lines their headings take")
+async def _(page):
+    server = _RecordServer()
+    await page.set_viewport_size({"width": 1440, "height": 900})  # side by side, headings of different lengths
+    try:
+        await record_open(page, server)
+        tops = await page.evaluate("['recSubjectsPicker', 'recNodesPicker'].map((id) => Math.round(el(id).getBoundingClientRect().top))")
+        assert tops[0] == tops[1], f"The subjects and nodes pickers start at {tops}"
+    finally:
+        await page.set_viewport_size({"width": 1280, "height": 800})
+        await record_close(page, server)
+
+
 @test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
 async def _(page):
     try:
