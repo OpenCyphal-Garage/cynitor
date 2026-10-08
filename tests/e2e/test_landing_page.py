@@ -4109,6 +4109,21 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: a recording's progress bars say what they measure, and how far it got")
+async def _(page):
+    server = _RecordServer([_recording(1, "boot sequence")])  # 60 s of a 1 h limit, 120 of 100,000 events
+    await record_open(page, server)
+    try:
+        card = page.locator('.record-card[data-id="1"]')
+        read = {}
+        for name in ("Time", "Events"):
+            bar = card.get_by_role("progressbar", name=name)
+            read[name] = await bar.get_attribute("aria-valuetext") if await bar.count() == 1 else None
+        assert read == {"Time": "1m 0s / 1h 0m", "Events": "120 / 100,000"}, f"Progress bars by name: {read}"
+    finally:
+        await record_close(page, server)
+
+
 @test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
 async def _(page):
     try:

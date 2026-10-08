@@ -306,7 +306,8 @@ const _progressBarHtml = (label, pct, rightLabel, noLimit = false) => {
   return `
     <div class="rec-bar${mod}">
       <span class="rec-bar-label">${label}</span>
-      <div class="rec-bar-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${clamped.toFixed(0)}">
+      <div class="rec-bar-track" role="progressbar" aria-label="${label}" aria-valuetext="${escapeHtml(rightLabel)}"
+           aria-valuemin="0" aria-valuemax="100" aria-valuenow="${clamped.toFixed(0)}">
         <div class="rec-bar-fill" style="width:${clamped}%"></div>
       </div>
       <span class="rec-bar-right">${rightLabel}</span>
