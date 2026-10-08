@@ -4153,6 +4153,27 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: a recording needs no name, taking its start time, and the next one starts with an empty name")
+async def _(page):
+    server = _RecordServer()
+    await record_open(page, server)
+    try:
+        await page.locator("#recName").fill("")
+        await page.locator("#recStart").click()
+        await page.wait_for_selector(".record-card.live", timeout=WAIT_MS)
+        await page.locator("#recName").fill("bench run")
+        await page.locator("#recNotes").fill("PWM at 50 %")
+        await page.locator("#recStart").click()
+        await page.wait_for_timeout(800)
+        names = [body["name"] for method, path, body in server.requests if (method, path) == ("POST", "/api/recordings")]
+        assert len(names) == 2 and re.fullmatch(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d", names[0]) and names[1] == "bench run", \
+            f"Recordings started: {names}"
+        left = [await page.locator(f).input_value() for f in ("#recName", "#recNotes")]
+        assert left == ["", ""], f"After a start the name and notes read {left}"
+    finally:
+        await record_close(page, server)
+
+
 @test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
 async def _(page):
     try:

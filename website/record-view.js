@@ -504,19 +504,33 @@ const renderRecordStart = () => {
   el('recStartWhy').textContent = why;
 };
 
+// A recording given no name is named after the time it starts: 2026-10-08 14:05:12.
+const _timeName = (d = new Date()) => {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+    + ` ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+};
+
+// The name and notes are one recording's: the next starts without them.
+const _clearNameAndNotes = () => {
+  const draft = state.recordFilterDraft;
+  draft.name = '';
+  draft.notes = '';
+  el('recName').value = '';
+  el('recNotes').value = '';
+  saveSettings();
+};
+
 const startRecording = async () => {
   const draft = state.recordFilterDraft;
-  if (!draft.name.trim()) {
-    showToast('Recording name is required', 'warn');
-    return;
-  }
+  const name = draft.name.trim() || _timeName();
   _starting = true;
   renderRecordStart();
   try {
     await requestJson('/api/recordings', {
       method: 'POST',
       body: JSON.stringify({
-        name: draft.name.trim(),
+        name,
         filter: _draftFilter(),
         notes: draft.notes || undefined,
         max_length_seconds: draft.max_length_seconds,
@@ -524,7 +538,8 @@ const startRecording = async () => {
         stop_on_limit: !!draft.stop_on_limit,
       }),
     });
-    showToast('Recording started', 'success');
+    showToast(`Recording "${name}"`, 'success');
+    _clearNameAndNotes();
     await fetchRecordings();
   } catch (e) {
     showToast(`Start failed: ${e.message}`, 'error');
@@ -841,7 +856,7 @@ const _renderViewShell = (container) => {
         <div class="record-bar-row">
           <label class="record-field record-bar-name">
             <span>Name</span>
-            <input type="text" id="recName" placeholder="e.g. boot sequence" autocomplete="off" />
+            <input type="text" id="recName" placeholder="Optional: named after the time it starts" autocomplete="off" />
           </label>
           <label class="record-field">
             <span>Length</span>
