@@ -270,11 +270,17 @@ Pong (sent in response to a client `ping` message):
 
 Capture status (sent in response to a client `capture` message):
 ```json
-{ "type": "capture_status", "active": true, "stats": { "captured": 0, "rx": 0, "tx": 0, "cyphal": 0, "foreign": 0, "dropped": 0 } }
+{ "type": "capture_status", "active": true, "stats": { "captured": 0, "rx": 0, "tx": 0, "cyphal": 0, "foreign": 0, "dropped": 0 }, "frames": [] }
 ```
 `active` reflects whether transport-level capture is running. When enabling
 fails because no CAN session exists, the message carries `"active": false` and an
 `"error"` field. A disable reply carries `"active": false, "forwarding": false`.
+
+An enable reply's `frames` holds up to the 500 most recent frames captured
+before this connection subscribed (oldest first, shaped as in `can_frame`), taken
+in the same step as subscribing: the `can_frame` stream that follows carries the
+frames after them, none repeated and none skipped. It is empty when the
+connection was subscribed already.
 
 Raw frame batch (sent only to clients that opted into capture; batched ~every
 120 ms to bound message rate):
@@ -433,14 +439,15 @@ counts instead: `bitrate`, `dbitrate` (the CAN FD data bitrate, or `null`),
 `adapter_error_frames` (error frames, if the adapter's driver reports them).
 The Debugging view polls this endpoint at ~1 Hz while active.
 
-**Raw frame-capture snapshot (Debugging view frame monitor):**
+**Raw frame-capture snapshot:**
 ```bash
 curl 'http://localhost:8080/api/can/capture?limit=500'
 ```
 
-Returns the recent-frame ring buffer plus capture counters — used to backfill
-the frame monitor on open / after reconnect. Live frames stream over the
-WebSocket `can_frame` message (see above); this endpoint does not start capture.
+Returns the recent-frame ring buffer plus capture counters, for scripts. The
+dashboard does not use it: the reply to its `capture` message carries the same
+frames without overlapping the stream (see above). Live frames stream over the
+WebSocket `can_frame` message; this endpoint does not start capture.
 
 ```json
 {

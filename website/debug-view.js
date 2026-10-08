@@ -7,9 +7,9 @@
 //   2. Frame Monitor (Phase 2) — raw frame/transfer inspection via pycyphal's
 //      capture API. OPT-IN and sticky: starting it reconfigures the bus
 //      (accept-all filter + forced loopback) and cannot be stopped without a
-//      CAN disconnect, so the user starts it explicitly. Live frames arrive on
-//      the WebSocket `can_frame` stream (batched); the ring buffer is backfilled
-//      from GET /api/can/capture.
+//      CAN disconnect, so the user starts it explicitly. The frames caught
+//      before come with the `capture_status` reply; live ones arrive on the
+//      WebSocket `can_frame` stream (batched).
 const DebugView = (() => {
   const POLL_MS = 1000;
   const MAX_ROWS = 1000; // cap rendered frame rows to bound DOM size
@@ -298,21 +298,6 @@ const DebugView = (() => {
     return false;
   };
 
-  const backfill = async () => {
-    try {
-      const data = await requestJson('/api/can/capture?limit=500');
-      if (!data) return;
-      if (data.stats) { captureStats = data.stats; renderCounters(); }
-      if (data.active && Array.isArray(data.frames) && rows.length === 0) {
-        rows = data.frames.slice().reverse();
-        renderTableFromRows();
-      }
-    } catch (err) {
-      // Non-fatal: live stream still works without the historical backfill.
-      console.warn('Frame snapshot fetch failed:', err);
-    }
-  };
-
   const toggleCapture = () => {
     if (captureOn) {
       sendWs({ type: 'capture', enabled: false });
@@ -336,7 +321,12 @@ const DebugView = (() => {
     if (event.stats) { captureStats = event.stats; renderCounters(); }
     setStatus('');
     setToggleLabel();
-    if (captureOn) backfill();
+    // The frames caught before this client subscribed come with the reply
+    // (oldest first); the live stream carries on from there.
+    if (captureOn && event.frames?.length && rows.length === 0) {
+      rows = event.frames.slice().reverse();
+      renderTableFromRows();
+    }
     updateEmpty();
   };
 

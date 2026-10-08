@@ -3,11 +3,14 @@
 import asyncio
 import time
 import pytest
+from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from aiohttp import web
 from aiohttp.test_utils import AioHTTPTestCase, TestClient, TestServer
 from websocket_server import WebSocketServer
 from dsdl_manager import DsdlManager
+from frame_capture import FrameCaptureManager
 from log_store import InMemoryLogStore
 import logging
 
@@ -830,6 +833,22 @@ class TestTransportDiagnostics:
         diagnostics.assert_called_once_with("vcan0")
 
 
+class _CaptureScanner:
+    """The ScannerNode side of FrameCaptureManager: it hands captured frames over."""
+    handler = None
+    capture_active = False
+
+    def begin_frame_capture(self, handler):
+        self.handler, self.capture_active = handler, True
+
+
+def _captured(can_id):
+    """A pycyphal CANCapture of a non-Cyphal frame with this CAN ID, duck-typed."""
+    frame = SimpleNamespace(identifier=can_id, data=b"\x00", format=SimpleNamespace(name="EXTENDED"))
+    stamp = SimpleNamespace(monotonic=Decimal(can_id), system=Decimal(can_id))
+    return SimpleNamespace(frame=frame, timestamp=stamp, own=False, parse=lambda: None)
+
+
 class TestFrameCaptureAPI:
     """GET /api/can/capture snapshot + 'capture' WS message handling."""
 
@@ -890,6 +909,25 @@ class TestFrameCaptureAPI:
         await server._handle_capture_message(ws, enabled=False)
         mgr.unsubscribe.assert_called_once_with(q)
         assert ws not in server.capture_clients
+
+    @pytest.mark.asyncio
+    async def test_capture_enable_sends_earlier_frames_once(self, server, session):
+        # The frames caught before the client subscribed come with the reply,
+        # and its queue holds only later ones: the client gets each frame once.
+        scanner = _CaptureScanner()
+        session.frame_capture = mgr = FrameCaptureManager(scanner)
+        mgr.start()
+        scanner.handler(_captured(1))
+        scanner.handler(_captured(2))
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        await server._handle_capture_message(ws, enabled=True)
+        scanner.handler(_captured(3))
+        queue = server.capture_clients[ws]
+        streamed = [queue.get_nowait()["id"] for _ in range(queue.qsize())]
+        reply = ws.send_json.await_args.args[0]
+        assert [f["id"] for f in reply.get("frames", [])] == ["0x00000001", "0x00000002"]
+        assert streamed == ["0x00000003"]
 
 
 class TestAdapterListing:

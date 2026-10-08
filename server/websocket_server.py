@@ -1390,6 +1390,8 @@ class WebSocketServer:
     # one message per window to bound message rate under heavy bus load.
     _CAPTURE_BATCH_WINDOW = 0.12
     _CAPTURE_BATCH_MAX = 250
+    # Frames caught before a client subscribed, sent with the reply.
+    _CAPTURE_EARLIER = 500
 
     async def _capture_loop(self, ws: web.WebSocketResponse) -> None:
         """Forward raw captured frames to a client that opted in via a
@@ -1434,10 +1436,14 @@ class WebSocketServer:
                                     "error": "CAN not connected"})
                 return
             mgr.start()
+            earlier = []
             if ws not in self.capture_clients:
                 self.capture_clients[ws] = mgr.subscribe()
+                # Taken in the same step as subscribing: frames are captured on
+                # this event loop, so none falls between the two or comes twice.
+                earlier = mgr.snapshot(self._CAPTURE_EARLIER)
             await ws.send_json({"type": "capture_status", "active": mgr.active,
-                                "stats": mgr.stats()})
+                                "stats": mgr.stats(), "frames": earlier})
         else:
             q = self.capture_clients.pop(ws, None)
             if q is not None and mgr is not None:

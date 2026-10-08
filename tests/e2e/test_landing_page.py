@@ -4132,6 +4132,9 @@ class _DebugServer:
         self.answers = {}           # path -> (JSON, status) given instead of the usual answer
         self.ws = None              # the server end of the dashboard's socket
         self.received = []          # what the dashboard sent on it
+        self.ring = []              # frames captured, oldest first
+        self.queued = None          # captured since the dashboard subscribed, not sent yet (None: not subscribed)
+        self.right_after = []       # frames the bus carries the moment the dashboard subscribes
 
     def _transport(self):
         frames_in = 1000 + int(100 * (time.monotonic() - self.started))
@@ -4152,10 +4155,26 @@ class _DebugServer:
                     "bus_utilization": 12.0, "dropped": None, "last_error": None, "cyphal_v11": None}, 200
         if path == "/api/can/transport":
             return self._transport(), 200
+        if path == "/api/can/capture":
+            return {"active": True, "stats": self._stats(), "frames": self.ring[-500:]}, 200
         quiet = {"/api/nodes": {"node_count": 0, "nodes": {}}, "/api/replay/status": {"active": False},
-                 "/api/recordings": {"recordings": []}, "/api/rawlogs": {"active": None, "logs": []},
-                 "/api/can/capture": {"active": False, "stats": None, "frames": []}}
+                 "/api/recordings": {"recordings": []}, "/api/rawlogs": {"active": None, "logs": []}}
         return (quiet[path], 200) if path in quiet else ({"error": "Not found"}, 404)
+
+    def _stats(self):
+        n = len(self.ring)
+        return {"active": True, "captured": n, "rx": n, "tx": 0, "cyphal": n, "foreign": 0, "dropped": 0}
+
+    def capture(self, frames):
+        """Frames the bus carried: into the ring, and queued for a subscribed dashboard."""
+        self.ring += frames
+        if self.queued is not None:
+            self.queued += frames
+
+    def flush(self):
+        """What is queued, as one can_frame batch, as _capture_loop sends it."""
+        frames, self.queued = self.queued, []
+        self.ws.send(json.dumps({"type": "can_frame", "frames": frames, "stats": self._stats()}))
 
     async def handle(self, route):
         path = unquote(urlparse(route.request.url).path)
@@ -4170,11 +4189,17 @@ class _DebugServer:
     def _on_message(self, ws, msg):
         """A `capture` message, answered as _handle_capture_message does."""
         self.received.append(msg)
-        if msg.get("type") == "capture" and msg.get("enabled"):
-            stats = {"active": True, "captured": 0, "rx": 0, "tx": 0, "cyphal": 0, "foreign": 0, "dropped": 0}
-            ws.send(json.dumps({"type": "capture_status", "active": True, "stats": stats}))
-        elif msg.get("type") == "capture":
+        if msg.get("type") != "capture":
+            return
+        if not msg.get("enabled"):
+            self.queued = None
             ws.send(json.dumps({"type": "capture_status", "active": False, "forwarding": False}))
+            return
+        earlier = self.ring[-500:] if self.queued is None else []
+        if self.queued is None:
+            self.queued = []
+        ws.send(json.dumps({"type": "capture_status", "active": True, "stats": self._stats(), "frames": earlier}))
+        self.capture(self.right_after)
 
     def polls(self, since):
         """How often the tab asked for the diagnostics since `since` (monotonic time)."""
@@ -4284,6 +4309,17 @@ async def debug_start_capture(page):
     await page.wait_for_function("el('fmToggle').textContent === 'Stop forwarding'", timeout=WAIT_MS)
 
 
+def _can_frame(n, src=42):
+    """Captured frame n, as serialize_capture makes it: a message from node src, n ms into the capture."""
+    return {"t": 1000 + n / 1000, "ts": 1.76e9 + n / 1000, "dir": "rx", "id": f"0x{0x107D5500 + n % 256:08X}",
+            "ext": True, "dlc": 8, "data": "01 02 03 04 05 06 07 E5", "cyphal": True, "priority": "NOMINAL",
+            "src": src, "dst": None, "transfer_id": n % 32, "start": True, "end": True, "kind": "msg", "port": 7509}
+
+
+# The frames the table shows, newest first, known by their time (each is a different millisecond).
+DEBUG_ROWS = "[...document.querySelectorAll('#fmRows tr')].map(row => row.querySelector('.fm-time').textContent)"
+
+
 @test("Debug: a capture whose connection closes stops, and says so")
 async def _(page):
     server = _DebugServer()
@@ -4295,6 +4331,24 @@ async def _(page):
         button, said = await page.locator("#fmToggle").inner_text(), await page.locator("#fmStatus").inner_text()
         assert button == "Start capture" and "Capture stopped" in said, \
             f"Once the socket closed, the button reads {button!r} and the status says {said!r}"
+    finally:
+        await debug_close(page, server)
+
+
+@test("Debug: Start capture shows the frames caught before it, then the live ones, each once")
+async def _(page):
+    server = _DebugServer()
+    server.capture([_can_frame(n) for n in range(10)])
+    server.right_after = [_can_frame(n) for n in range(10, 13)]
+    await debug_open(page, server)
+    try:
+        await debug_start_capture(page)
+        await page.wait_for_timeout(500)  # anything the tab asks for besides is answered
+        server.flush()                    # the first live batch
+        await page.wait_for_timeout(300)
+        shown = await page.evaluate(DEBUG_ROWS)
+        assert len(shown) == 13 and len(set(shown)) == 13, \
+            f"13 frames came, the table has {len(shown)} rows, {len(shown) - len(set(shown))} of them repeats"
     finally:
         await debug_close(page, server)
 
