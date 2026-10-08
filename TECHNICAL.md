@@ -140,7 +140,8 @@ All frontend code lives in `website/`. Plain HTML/CSS/JS. No build step. D3 for 
 | `history-panel.js` | Node lifecycle history: timeline rendering, event labels/badges, subject activity summary, time-range filtering |
 | `subjects-panel.js` | Subject browser: Tabulator-based table of all subjects and services, inline service expansion with node selector, integrated persistent history. Uses a stash/unstash pattern to protect the inline service detail DOM node from Tabulator's virtual re-renders |
 | `graph-view.js` | Network topology: D3 force-directed graph with three view modes (nodes only / node-centric / subject-centric), live link traffic, drag-to-pin with persistent positions, adjacency highlighting, info panel that follows the selected node, hide-system / hide-offline / per-node-or-subject hide with restore badge, inline device rename, gravity bias by metric |
-| `dsdl-view.js` | DSDL Inspector tab: namespace tree with bus-activity badges, field-level search, dependency navigation, custom-type editor with compile-state lock |
+| `dsdl-editor.js` | DSDL custom-type editor: new / edit / new-version form with live preview, fixed-port-ID check, unsaved-draft prompt, compile-state lock. Opened by `dsdl-view.js`, which lends it what it needs of the tab (`DsdlEditor.attach`) |
+| `dsdl-view.js` | DSDL Inspector tab: namespace tree with bus-activity badges, field-level search, dependency navigation, compile, type delete; opens the custom-type editor (`dsdl-editor.js`) |
 | `record-view.js` | Record tab: subject/service/node pickers, per-recording cards with progress bars (with "no limit" rendering for unbounded recordings), live polling, edit-limits modal, duplicate, CSV/JSON export, Play-replay button on completed recordings |
 | `replay-strip.js` | Replay playback strip above the main view: position scrub, speed selector, pause/resume/stop, MM:SS/MM:SS time display; polls `/api/replay/status` every 1 s; transitions to a "Finished" mode (Replay-again / Close) when the backend's `replay_ended` sentinel arrives with `finished: true` |
 | `log-panel.js` | Right log panel: collapsible/resizable shell, ring buffer (cap 2000, not persisted), Cyphal feed (diagnostic.Record + user-added text subjects), Server poller (`/api/logs` every 2s), severity floor across sources, per-source toggle pills with count badges, disconnect indicator on the Server pill |
@@ -283,7 +284,8 @@ cynitor/
     history-panel.js        Node lifecycle history timeline
     subjects-panel.js       Subject browser (subjects view) with inline service expansion
     graph-view.js           D3 force-directed network topology
-    dsdl-view.js            DSDL Inspector view + custom-type editor
+    dsdl-editor.js          DSDL custom-type editor (opened by dsdl-view.js)
+    dsdl-view.js            DSDL Inspector view
     record-view.js          Record tab: pickers, per-recording cards, export, replay launcher
     replay-strip.js         Replay playback strip: scrub, speed, pause/stop/finish-mode
     debug-view.js           Raw CAN frame debugging view (opt-in capture)

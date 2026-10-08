@@ -19,7 +19,8 @@ The current UI is network-centric: it emphasizes topology, live traffic, and sel
 - `history-panel.js` – node lifecycle history timeline with time-range filtering
 - `subjects-panel.js` – subject browser with inline service expansion
 - `graph-view.js` – D3 force-directed network topology with drag-to-pin
-- `dsdl-view.js` – DSDL Inspector: namespace tree, field search, dependency navigation, custom-type editor
+- `dsdl-editor.js` – DSDL custom-type editor: new, edit and new-version form with live preview and compile-state lock
+- `dsdl-view.js` – DSDL Inspector: namespace tree, field search, dependency navigation; opens the editor
 - `record-view.js` – Record tab: subject/service/node pickers, per-recording cards with progress bars, limits, edit-limits modal, duplicate, CSV/JSON export
 - `log-panel.js` – Right log panel: Cyphal + Server feeds, subject picker, severity floor, per-source toggle pills with count badges
 - `connection.js` – WebSocket lifecycle, REST polling, reconnect
