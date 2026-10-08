@@ -49,14 +49,6 @@ let _highlightedNodeId = null;
 
 const _isLiveRecording = (rec) => rec.end_unix == null;
 
-const _humanDuration = (s) => {
-  if (s == null || !Number.isFinite(s) || s < 0) return '—';
-  if (s < 60) return `${Math.round(s)}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
-  return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
-};
-
 const _formatRetention = (seconds) => {
   if (!seconds) return 'unlimited';
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
@@ -236,7 +228,7 @@ const _updateDiskHint = () => {
   const projectedEvents = Math.min(draft.max_events, Math.round(rate * draft.max_length_seconds));
   const projectedBytes = projectedEvents * BYTES_PER_EVENT_ESTIMATE;
   const limitingFactor = fillSeconds < draft.max_length_seconds ? 'events cap' : 'time limit';
-  hint.textContent = `≈ ${formatBytes(projectedBytes)} · ${_humanDuration(cappedSeconds)} before ${limitingFactor} (~${rate.toFixed(0)} msg/s observed)`;
+  hint.textContent = `≈ ${formatBytes(projectedBytes)} · ${formatUptime(cappedSeconds)} before ${limitingFactor} (~${rate.toFixed(0)} msg/s observed)`;
 };
 
 const fetchRecordBuffer = async () => {
@@ -278,8 +270,8 @@ const _eventsProgressPct = (rec) => {
 const _formatTimeRight = (rec) => {
   const end = rec.end_unix ?? Date.now() / 1000;
   const elapsed = Math.max(0, end - rec.start_unix);
-  if (!rec.max_length_seconds) return `${_humanDuration(elapsed)} · no limit`;
-  return `${_humanDuration(elapsed)} / ${_humanDuration(rec.max_length_seconds)}`;
+  if (!rec.max_length_seconds) return `${formatUptime(elapsed)} · no limit`;
+  return `${formatUptime(elapsed)} / ${formatUptime(rec.max_length_seconds)}`;
 };
 
 const _formatEventsRight = (rec) => {
@@ -330,7 +322,7 @@ const _formatCardMeta = (rec) => {
   const end = new Date(rec.end_unix * 1000);
   const sameDay = start.toDateString() === end.toDateString();
   const endLabel = sameDay ? end.toLocaleTimeString() : end.toLocaleString();
-  const duration = _humanDuration(rec.end_unix - rec.start_unix);
+  const duration = formatUptime(rec.end_unix - rec.start_unix);
   return `${start.toLocaleString()} → ${endLabel} · ran ${duration}`;
 };
 
@@ -657,7 +649,7 @@ const openEditLimitsModal = (rec) => {
   _ensureEditLimitsModal();
   _editLimitsRecId = rec.id;
   el('recEditLimitsTitle').textContent = `Edit limits — ${rec.name}`;
-  el('recEditLength').innerHTML = _limitOptionsHtml(LENGTH_OPTIONS, rec.max_length_seconds, _humanDuration);
+  el('recEditLength').innerHTML = _limitOptionsHtml(LENGTH_OPTIONS, rec.max_length_seconds, formatUptime);
   el('recEditMaxEvents').innerHTML = _limitOptionsHtml(EVENTS_OPTIONS, rec.max_events, (n) => n.toLocaleString());
   el('recEditStopOnLimit').checked = !!rec.stop_on_limit;
   _editLimitsModalEl.classList.remove('hidden');

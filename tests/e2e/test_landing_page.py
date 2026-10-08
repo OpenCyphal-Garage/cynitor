@@ -3936,6 +3936,21 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: a recording's times count whole seconds, never 60 of them")
+async def _(page):
+    now = time.time()
+    server = _RecordServer([
+        _recording(1, "two minutes less a bit", start=now - 7200, end_unix=now - 7200 + 119.6),
+        _recording(2, "an hour less a bit", start=now - 18000, end_unix=now - 18000 + 3599.7)])
+    await record_open(page, server)
+    try:
+        times = await page.locator(".record-card .rec-bar-right").all_inner_texts()
+        assert any(t.startswith("1m 59s") for t in times) and any(t.startswith("59m 59s") for t in times) \
+            and not any("60s" in t or "60m" in t for t in times), f"Times shown: {times}"
+    finally:
+        await record_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
