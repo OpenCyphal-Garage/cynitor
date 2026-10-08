@@ -3630,6 +3630,32 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+@test("DSDL: an editor open on a custom type locks itself once the type is compiled")
+async def _(page):
+    server = _DsdlServer()
+    server.types["myapp.Reading.1.0"]["compiled"] = False
+    usable = """() => [...document.getElementById('dsdlEditorPanel').querySelectorAll('input, textarea, button')]
+        .filter(control => !control.disabled).map(control => control.id)"""
+    await dsdl_open(page, server)
+    try:
+        await page.locator('#dsdlCustomTree .dsdl-ns-row[data-ns="myapp"]').click()
+        await page.locator('#dsdlCustomTree .dsdl-type-row[data-type="myapp.Reading.1.0"]').click()
+        await page.locator("#dsdlEditBtn").click()
+        await page.wait_for_selector("#dsdlEditorSource", timeout=WAIT_MS)
+        before = await page.evaluate(usable)
+        # Compiled from this tab: the tree it reloads has the type compiled.
+        server.types["myapp.Reading.1.0"]["compiled"] = True
+        await page.locator("#dsdlCustomCompileBtn").click()
+        await page.wait_for_selector("#dsdlEditorPanel .dsdl-editor-locked-banner", timeout=WAIT_MS)
+        banner = await page.locator(".dsdl-editor-locked-banner").inner_text()
+        after = await page.evaluate(usable)
+        assert (before, after) == (["dsdlEditorSave", "dsdlEditorClose", "dsdlEditorPort", "dsdlEditorSource"],
+                                   ["dsdlEditorClose"]) and "new version" in banner, \
+            f"Usable while editing: {before}; once compiled: {after}, and the editor says {banner!r}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
