@@ -7251,6 +7251,14 @@ body.dsdl-resizing-row {
   gap: 0.5rem;
 }
 
+.record-list-error {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--error);
+  background: var(--error-muted);
+  border-radius: 0.375rem;
+}
+
 .record-empty {
   padding: 1.5rem;
   text-align: center;

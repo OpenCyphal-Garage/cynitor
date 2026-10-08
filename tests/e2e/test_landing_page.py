@@ -3767,8 +3767,12 @@ class _RecordServer:
         self.recordings = {r["id"]: r for r in recordings}
         self.requests = []          # (method, path, JSON body)
         self.gates = {}             # (method, path) -> an asyncio.Event its answer waits for
+        self.failures = {}          # (method, path) -> (status, error) it answers instead
 
     def _answer(self, method, path, body):
+        if (method, path) in self.failures:
+            status, error = self.failures[(method, path)]
+            return {"error": error}, status
         recs = self.recordings
         if path == "/api/rawlogs":
             return {"active": None, "logs": []}, 200
@@ -3947,6 +3951,34 @@ async def _(page):
         times = await page.locator(".record-card .rec-bar-right").all_inner_texts()
         assert any(t.startswith("1m 59s") for t in times) and any(t.startswith("59m 59s") for t in times) \
             and not any("60s" in t or "60m" in t for t in times), f"Times shown: {times}"
+    finally:
+        await record_close(page, server)
+
+
+# Every toast shown from here on, in window.e2eToasts.
+COLLECT_TOASTS = """() => { window.e2eToasts = [];
+    new MutationObserver((changes) => changes.forEach((c) => c.addedNodes.forEach((n) => e2eToasts.push(n.textContent))))
+        .observe(el('toastContainer'), {childList: true}); }"""
+
+
+@test("Record: a list that cannot be loaded says so once, in place, and keeps what it showed")
+async def _(page):
+    server = _RecordServer([_recording(1, "boot sequence")])
+    await record_open(page, server, setup=COLLECT_TOASTS)
+    try:
+        server.failures[("GET", "/api/recordings")] = (500, "database is locked")
+        for _ in range(3):  # three polls
+            await page.evaluate("fetchRecordings()")
+            await page.wait_for_timeout(200)
+        toasts = await page.evaluate("e2eToasts")
+        note = await page.locator("#recordList .record-list-error").all_inner_texts()
+        assert not toasts and len(note) == 1 and "database is locked" in note[0], \
+            f"After three failed loads, toasts: {toasts}; a note in the list: {note}"
+        assert await page.locator(".record-card").count() == 1, "The recordings shown before are gone"
+        del server.failures[("GET", "/api/recordings")]
+        await page.evaluate("fetchRecordings()")
+        await page.wait_for_timeout(300)
+        assert not await page.locator("#recordList .record-list-error").count(), "The note stays once the list loads"
     finally:
         await record_close(page, server)
 

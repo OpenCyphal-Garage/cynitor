@@ -396,6 +396,10 @@ const _playButtonHtml = (rec) => {
     + ` title="${escapeHtml(title)}"${disabled ? ' disabled' : ''}>▶ Play</button>`;
 };
 
+// Why the list could not be loaded the last time, or null. Said once, in
+// place, above the recordings as last loaded: every poll would toast it.
+let _recordListError = null;
+
 const renderRecordList = () => {
   const list = el('recordList');
   if (!list) return;
@@ -403,14 +407,17 @@ const renderRecordList = () => {
     list.innerHTML = '<div class="record-empty">Connect to the backend to view recordings.</div>';
     return;
   }
-  if (!state.recordings.length) {
+  const fresh = document.createElement('div');
+  if (_recordListError) {
+    fresh.innerHTML = `<div class="record-list-error" role="alert">Cannot load the recordings: ${escapeHtml(_recordListError)}.`
+      + `${state.recordings.length ? ' These are as last loaded.' : ''}</div>`;
+  } else if (!state.recordings.length) {
     list.innerHTML = '<div class="record-empty">No recordings yet. Build a selection on the right, set limits, then press Start.</div>';
     return;
   }
   // Patched, not rebuilt: live cards refresh every second, and a rebuilt
   // Stop button would swallow a click in progress.
-  const fresh = document.createElement('div');
-  fresh.replaceChildren(...state.recordings.map(_buildCard));
+  fresh.append(...state.recordings.map(_buildCard));
   patchChildren(list, fresh);
 };
 
@@ -447,8 +454,9 @@ const fetchRecordings = async () => {
     const data = await requestJson('/api/recordings');
     state.recordings = Array.isArray(data.recordings) ? data.recordings : [];
     state.activeRecordingId = (state.recordings.find(_isLiveRecording) || {}).id ?? null;
+    _recordListError = null;
   } catch (e) {
-    showToast(`Failed to load recordings: ${e.message}`, 'error');
+    _recordListError = e.message;
   }
   refreshRecordTabIndicator();
   renderRecordList();
