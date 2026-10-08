@@ -385,15 +385,14 @@ const _buildCard = (rec) => {
 };
 
 const _playButtonHtml = (rec) => {
-  // Replay requires CAN disconnected and no other replay running.
-  const blockedByCan = !!state.canConnected;
-  const blockedByReplay = !!state.replayActive;
-  const disabled = blockedByCan || blockedByReplay;
-  const title = blockedByCan
-    ? 'Disconnect from CAN to replay'
-    : (blockedByReplay ? 'Another replay is already running' : 'Replay this recording');
+  // Replay plays a recording's own events, with CAN disconnected and no
+  // other replay running.
+  const why = rec.events_source === 'global' ? 'A bookmark keeps no events of its own to replay'
+    : !rec.event_count ? 'Nothing was recorded'
+    : state.canConnected ? 'Disconnect from CAN to replay'
+    : state.replayActive ? 'Another replay is already running' : '';
   return `<button class="btn-mini" data-action="play" aria-label="Replay recording"`
-    + ` title="${escapeHtml(title)}"${disabled ? ' disabled' : ''}>▶ Play</button>`;
+    + ` title="${escapeHtml(why || 'Replay this recording')}"${why ? ' disabled' : ''}>▶ Play</button>`;
 };
 
 // Why the list could not be loaded the last time, or null. Said once, in

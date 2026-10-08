@@ -3999,6 +3999,23 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: Play is off, saying why, for a recording with nothing to replay")
+async def _(page):
+    server = _RecordServer([
+        _recording(1, "old bookmark", events_source="global"),
+        _recording(2, "nothing came", event_count=0),
+        _recording(3, "boot sequence")])
+    await record_open(page, server, can=False)  # replay needs CAN disconnected
+    try:
+        plays = {}
+        for rid in (1, 2, 3):
+            play = page.locator(f'.record-card[data-id="{rid}"] [data-action="play"]')
+            plays[rid] = (await play.is_disabled(), await play.get_attribute("title"))
+        assert plays[1][0] and plays[2][0] and not plays[3][0], f"Play (disabled, title) by recording: {plays}"
+    finally:
+        await record_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
