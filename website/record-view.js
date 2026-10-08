@@ -162,8 +162,10 @@ const _removeFromSelection = (row) => {
 // a picker takes fresh data only once built; it is built with its data anyway.
 const _builtPickers = new Set();
 
+// Rows updated in place, as in the other live tables: a row keeps the
+// keyboard focus through a refresh.
 const _refreshPicker = (picker, data) => {
-  if (_builtPickers.has(picker)) picker.replaceData(data);
+  if (_builtPickers.has(picker)) resortChanged(picker, diffUpdateTable(picker, data, 'key'));
 };
 
 const _refreshSelection = () => {
@@ -727,12 +729,16 @@ const _initPickers = () => {
     selectable: false,
     movableColumns: false,
     index: 'key',
+    rowFormatter: focusableRow,
+    keybindings: false,  // its Home/End move the focus off the rows; see bindRowKeys
   };
-  const tallOpts = { ...commonOpts, height: '45vh' };
+  // Sorted, so that a row added in place by a refresh lands in order.
+  const tallOpts = { ...commonOpts, height: '45vh', initialSort: [{ column: 'id', dir: 'asc' }] };
   _subjectsPicker = new Tabulator(subjectsEl, {
     ...tallOpts,
     data: _subjectsPickerData(),
     rowFormatter: (row) => {
+      focusableRow(row);
       const ids = row.getData().ownerIds || [];
       const hit = _highlightedNodeId != null && ids.includes(_highlightedNodeId);
       row.getElement().classList.toggle('rec-row-highlighted', hit);
@@ -752,6 +758,7 @@ const _initPickers = () => {
     ...tallOpts,
     data: _nodesPickerData(),
     rowFormatter: (row) => {
+      focusableRow(row);
       const isSel = row.getData().id === _highlightedNodeId;
       row.getElement().classList.toggle('rec-row-selected', isSel);
     },
@@ -786,6 +793,15 @@ const _initPickers = () => {
   });
   // Click anywhere on a selection row also removes it (in addition to the × button).
   _selectionPicker.on('rowClick', (e, row) => _removeFromSelection(row.getData()));
+  // By keyboard as by mouse: Enter or Space adds a picker's row, and removes
+  // a selection's, as Delete does too; the focus then stays in the selection.
+  bindRowKeys(_subjectsPicker, (row) => _addToSelection(row.getData()));
+  bindRowKeys(_nodesPicker, (row) => _addToSelection(row.getData()));
+  const removeRow = (row) => {
+    _removeFromSelection(row.getData());
+    _selectionPicker.element.querySelector('.tabulator-tableholder').focus();
+  };
+  bindRowKeys(_selectionPicker, removeRow, { Delete: removeRow, Backspace: removeRow });
   for (const picker of [_subjectsPicker, _nodesPicker, _selectionPicker]) {
     picker.on('tableBuilt', () => _builtPickers.add(picker));
   }

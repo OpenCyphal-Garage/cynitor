@@ -4064,6 +4064,30 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: the pickers work by keyboard, their refreshes keeping the focus")
+async def _(page):
+    server = _RecordServer()
+    await record_open(page, server, setup=RECORD_RATES)
+    try:
+        await page.locator("#recSubjectsPicker .tabulator-tableholder").focus()
+        await page.keyboard.press("ArrowDown")  # the first row: subject 100
+        await page.wait_for_timeout(2500)  # the pickers refresh every 2 s
+        await page.keyboard.press("Enter")
+        await page.wait_for_timeout(300)
+        added = await page.evaluate("state.recordFilterDraft.subject_ids")
+        assert added == [100], f"Enter on subject 100's row, after a refresh, selected {added}"
+        await page.locator("#recSelectionPicker .tabulator-tableholder").focus()
+        await page.keyboard.press("ArrowDown")
+        await page.keyboard.press("Delete")
+        await page.wait_for_timeout(300)
+        left = await page.evaluate("state.recordFilterDraft.subject_ids")
+        kept = await page.evaluate("el('recSelectionPicker').contains(document.activeElement)")
+        assert left == [] and kept, f"Delete left the selection at {left}; the focus stayed in it: {kept}"
+    finally:
+        await page.evaluate("clearInterval(window.e2eRateFeed); state.recordFilterDraft.subject_ids = []; saveSettings();")
+        await record_close(page, server)
+
+
 @test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
 async def _(page):
     try:
