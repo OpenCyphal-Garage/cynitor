@@ -7158,9 +7158,16 @@ body.dsdl-resizing-row {
 #recordContainer {
   height: 100%;
   overflow: auto;
+  /* The room for the scrollbar is kept from the start: the tab's width, and
+     so its layout, must not change as the scrollbar comes, once the
+     pickers have taken their columns' widths from it. */
+  scrollbar-gutter: stable;
 }
 
+/* The tab lays itself out by the room it has (see the @container rules
+   below), which the log panel and the sidebar take from the window's. */
 .record-view {
+  container: record-view / inline-size;
   padding: 1rem 1.25rem;
   display: flex;
   flex-direction: column;
@@ -7924,15 +7931,18 @@ body.dsdl-resizing-row {
   border-color: var(--accent);
 }
 
-@media (max-width: 80rem) {
+/* One column below what a 1336 px window leaves the tab beside an open
+   sidebar: narrower, the recordings and the pickers would be cramped. */
+@container record-view (max-width: 64rem) {
   .record-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
-@media (max-width: 48rem) {
+/* The pickers one above the other, as in a phone-wide window. */
+@container record-view (max-width: 45rem) {
   .record-pickers-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

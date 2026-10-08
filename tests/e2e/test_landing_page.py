@@ -4456,17 +4456,53 @@ CUT_SHORT = """(id) => [...el(id).querySelectorAll('.tabulator-col-title, .tabul
     .filter((part) => part.scrollWidth > part.clientWidth).map((part) => part.textContent.trim())"""
 
 
+async def set_log_panel(page, shown):
+    """Opens or closes the log panel with its button; returns whether it was open."""
+    was_open = not await page.evaluate("state.logPanelCollapsed")
+    if was_open != shown:
+        await page.locator("#logPanelCollapseBtn").click()
+        await page.wait_for_timeout(300)  # the tables take their new widths
+    return was_open
+
+
 @test("Record: the pickers show types and node names whole, the columns of numbers as wide as theirs")
 async def _(page):
     server = _RecordServer()
     await page.set_viewport_size({"width": 1440, "height": 900})  # two pickers side by side, beside the recordings
+    log_was_open = None
     try:
         await record_open(page, server, setup=RECORD_TYPES)
+        log_was_open = await set_log_panel(page, False)  # the room it takes is another test's
         cut = {picker: await page.evaluate(CUT_SHORT, picker) for picker in ("recSubjectsPicker", "recNodesPicker")}
         assert cut == {"recSubjectsPicker": [], "recNodesPicker": []}, f"Cut short: {cut}"
         hover = await page.evaluate("_subjectsPicker.getRow('subject-7509').getCell('label').getElement().title")
         assert hover == "Heartbeat_1_0", f"Heartbeat's type, hovered, reads {hover!r}"
     finally:
+        if log_was_open is not None:
+            await set_log_panel(page, log_was_open)
+        await page.set_viewport_size({"width": 1280, "height": 800})
+        await record_close(page, server)
+
+
+@test("Record: the tab takes one column when the log panel leaves too little room for two")
+async def _(page):
+    server = _RecordServer([_recording(1, "boot sequence")])
+    await page.set_viewport_size({"width": 1440, "height": 900})
+    columns = "getComputedStyle(document.querySelector('.record-layout')).gridTemplateColumns.split(' ').length"
+    log_was_open = None
+    try:
+        await record_open(page, server, setup=RECORD_TYPES)
+        log_was_open = await set_log_panel(page, False)
+        beside = await page.evaluate(columns)
+        await set_log_panel(page, True)
+        under = await page.evaluate(columns)
+        cut = {picker: await page.evaluate(CUT_SHORT, picker) for picker in ("recSubjectsPicker", "recNodesPicker")}
+        sideways = await page.evaluate("el('recordContainer').scrollWidth > el('recordContainer').clientWidth")
+        assert (beside, under) == (2, 1) and cut == {"recSubjectsPicker": [], "recNodesPicker": []} and not sideways, \
+            f"Columns with the log panel shut, then open: {beside}, {under}; then cut short: {cut}; scrolls sideways: {sideways}"
+    finally:
+        if log_was_open is not None:
+            await set_log_panel(page, log_was_open)
         await page.set_viewport_size({"width": 1280, "height": 800})
         await record_close(page, server)
 
