@@ -779,6 +779,7 @@ const _writeSettingsNow = () => {
     compactRows: state.compactRows,
     subjectsHeaderFilters: typeof getSubjectsHeaderFilters === 'function' ? getSubjectsHeaderFilters() : null,
     recordFilterDraft: state.recordFilterDraft,
+    rawLogPlaybackSpeed: state.rawLogPlaybackSpeed,
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
 };
@@ -919,6 +920,9 @@ const loadSettings = () => {
       max_events: typeof d.max_events === 'number' && d.max_events > 0 ? d.max_events : 100_000,
       stop_on_limit: d.stop_on_limit !== false,
     };
+  }
+  if (RAW_LOG_SPEEDS.some(([speed]) => speed === settings.rawLogPlaybackSpeed)) {
+    state.rawLogPlaybackSpeed = settings.rawLogPlaybackSpeed;
   }
   if (Array.isArray(settings.favouriteSubjectIds)) {
     state.favouriteSubjectIds = new Set(settings.favouriteSubjectIds);

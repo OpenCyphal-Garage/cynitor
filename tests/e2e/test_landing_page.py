@@ -3768,6 +3768,7 @@ class _RecordServer:
         self.requests = []          # (method, path, JSON body)
         self.gates = {}             # (method, path) -> an asyncio.Event its answer waits for
         self.failures = {}          # (method, path) -> (status, error) it answers instead
+        self.rawlogs = {"active": None, "logs": []}  # GET /api/rawlogs
 
     def _answer(self, method, path, body):
         if (method, path) in self.failures:
@@ -3775,7 +3776,7 @@ class _RecordServer:
             return {"error": error}, status
         recs = self.recordings
         if path == "/api/rawlogs":
-            return {"active": None, "logs": []}, 200
+            return self.rawlogs, 200
         if path == "/api/recordings/buffer":
             return {"buffer": {"retention_seconds": 86400, "max_events": 5000000, "event_count": 0,
                                "oldest_event_unix": None, "newest_event_unix": None, "db_size_bytes": 4096}}, 200
@@ -4342,6 +4343,34 @@ async def _(page):
         assert server.count("POST", "/api/recordings") == 1, "Record again started no recording"
         assert not await page.locator(".record-card-menu:visible").count(), "The menu stays open after its action"
     finally:
+        await record_close(page, server)
+
+
+# A raw log is running, and one from yesterday is saved.
+RAW_LOGS = {"active": {"name": "cynitor-20261008-101500.log", "frames": 1200, "bytes": 64000,
+                       "started_unix": 1.79e9, "error": None},
+            "logs": [{"name": "cynitor-20261008-101500.log", "bytes": 64000, "modified_unix": 1.79e9},
+                     {"name": "cynitor-20261007-091500.log", "bytes": 265000, "modified_unix": 1.79e9}]}
+RAW_LOG_SPEED = '#rawLogPanel select[data-rawlog="speed"]'
+
+
+@test("Record: a raw log's playback speed sits with the saved logs, and is remembered")
+async def _(page):
+    server = _RecordServer()
+    server.rawlogs = RAW_LOGS
+    await record_open(page, server)
+    try:
+        await page.wait_for_selector(RAW_LOG_SPEED, timeout=WAIT_MS)
+        assert not await page.locator('.rawlog-active select[data-rawlog="speed"]').count(), \
+            "The playback speed sits beside the running log's Stop"
+        await page.locator(RAW_LOG_SPEED).select_option("10")
+        await record_close(page, server)
+        await record_open(page, server)  # the page loaded again
+        await page.wait_for_selector(RAW_LOG_SPEED, timeout=WAIT_MS)
+        speed = await page.locator(RAW_LOG_SPEED).input_value()
+        assert speed == "10", f"Loaded again, the playback speed reads {speed}"
+    finally:
+        await page.evaluate("state.rawLogPlaybackSpeed = 1; saveSettings();")
         await record_close(page, server)
 
 

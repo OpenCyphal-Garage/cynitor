@@ -1064,17 +1064,21 @@ const _renderRawLogPanel = () => {
   const saved = (logs || []).filter((log) => !active || log.name !== active.name);
   const speeds = RAW_LOG_SPEEDS.map(([value, label]) =>
     `<option value="${value}"${value === state.rawLogPlaybackSpeed ? ' selected' : ''}>${label}</option>`).join('');
-  const speedPicker = saved.length
-    ? `<label class="rawlog-speed">Play at <select data-rawlog="speed" aria-label="Playback speed">${speeds}</select></label>`
-    : '';
+  // The speed belongs to the saved logs' Play buttons: it sits over them.
+  const savedHtml = saved.length ? `
+    <div class="rawlog-saved-head">
+      <span class="record-builder-h">Saved logs</span>
+      <label class="rawlog-speed">Play at <select data-rawlog="speed" aria-label="Playback speed">${speeds}</select></label>
+    </div>
+    <ul class="rawlog-list">${saved.map(_rawLogRow).join('')}</ul>` : '';
   const fresh = document.createElement('div');
   fresh.innerHTML = `
     <div class="rawlog-head">
       <h3 class="record-builder-h">Raw CAN log
         <span class="record-builder-sub">every frame, candump .log · opens in python-can, SavvyCAN, can-utils</span></h3>
-      <div class="rawlog-active">${speedPicker}${control}</div>
+      <div class="rawlog-active">${control}</div>
     </div>
-    ${saved.length ? `<ul class="rawlog-list">${saved.map(_rawLogRow).join('')}</ul>` : ''}`;
+    ${savedHtml}`;
   patchChildren(panel, fresh);  // keeps Stop in place while the frame count ticks
 };
 
@@ -1115,7 +1119,9 @@ const initRecordView = () => {
   _renderViewShell(container);
   el('rawLogPanel').addEventListener('click', _onRawLogClick);
   el('rawLogPanel').addEventListener('change', (e) => {
-    if (e.target.dataset.rawlog === 'speed') state.rawLogPlaybackSpeed = Number(e.target.value);
+    if (e.target.dataset.rawlog !== 'speed') return;
+    state.rawLogPlaybackSpeed = Number(e.target.value);
+    saveSettings();
   });
   _initPickers();
   _bindBuilderInputs();

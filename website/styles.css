@@ -7318,6 +7318,14 @@ body.dsdl-resizing-row {
   margin-right: auto;
 }
 
+/* "Saved logs", and the speed their Play buttons play at. */
+.rawlog-saved-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
 .rawlog-speed {
   display: flex;
   align-items: center;
