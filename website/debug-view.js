@@ -16,8 +16,7 @@ const DebugView = (() => {
   const MAX_KEPT = 5000; // frames kept for the filter, so a rare frame is still found
 
   let pollTimer = null;
-  let prevStats = null;   // previous transport statistics sample (for rates)
-  let prevAt = 0;         // when it arrived (performance.now())
+  let prev = null;        // the previous sample, for rates: {stats, link, at: performance.now()}
 
   // Frame-monitor state
   let captureOn = false;  // are we currently forwarding frames to this client?
@@ -75,27 +74,27 @@ const DebugView = (() => {
     return null;
   };
 
-  const fmt = (v) => (v === null || v === undefined ? '—' : v);
-
+  // A row for what the interface reports, and none for what it does not.
   const statRow = (label, value, status) => {
+    if (value === null || value === undefined) return '';
     const cls = status ? ` stat-${status}` : '';
     return `<div class="debug-stat${cls}">
       <span class="debug-stat-label">${escapeHtml(label)}</span>
-      <span class="debug-stat-val">${escapeHtml(String(fmt(value)))}</span>
+      <span class="debug-stat-val">${escapeHtml(String(value))}</span>
     </div>`;
   };
 
   const card = (title, rowsHtml) => `
     <section class="debug-card">
       <h3 class="debug-card-title">${escapeHtml(title)}</h3>
-      <div class="debug-grid">${rowsHtml.join('')}</div>
+      <div class="debug-grid">${rowsHtml.join('') || '<div class="debug-none">Not reported by this interface.</div>'}</div>
     </section>`;
 
   // The counter's growth per second since the previous sample, which a
   // late poll may have taken more than a second ago.
-  const rateSuffix = (cur, prev, seconds) => {
-    if (prev == null || cur == null || !(seconds > 0)) return '';
-    const d = cur - prev;
+  const rateSuffix = (cur, before, seconds) => {
+    if (before == null || cur == null || !(seconds > 0)) return '';
+    const d = cur - before;
     return d < 0 ? '' : `  (+${Math.round(d / seconds)}/s)`;
   };
 
@@ -104,7 +103,7 @@ const DebugView = (() => {
     if (!target) return;
 
     if (!data || data.connected === false) {
-      prevStats = null;
+      prev = null;
       target.innerHTML = `<div class="debug-empty">CAN not connected — connect a bus to inspect the transport layer.</div>`;
       return;
     }
@@ -113,14 +112,16 @@ const DebugView = (() => {
     const stats = data.statistics || {};
     const link = data.link || {};
     const now = performance.now();
-    const seconds = (now - prevAt) / 1000;
+    const seconds = prev ? (now - prev.at) / 1000 : 0;
+    // A count, with its growth per second since the previous sample.
+    const counted = (value, before) => (value != null ? `${value}${rateSuffix(value, before, seconds)}` : null);
 
     const protoCard = card('Transport / MTU', [
       statRow('Interface', data.interface),
       statRow('Mode', proto.is_fd === true ? 'CAN FD' : (proto.is_fd === false ? 'Classic CAN' : null)),
       statRow('MTU (payload bytes)', proto.mtu),
-      statRow('Arbitration bitrate', link.bitrate != null ? `${link.bitrate} bit/s` : null),
-      statRow('Data bitrate (FD)', link.dbitrate != null ? `${link.dbitrate} bit/s` : null),
+      statRow('Arbitration bitrate', link.bitrate != null ? formatBitrate(link.bitrate) : null),
+      statRow('Data bitrate (FD)', link.dbitrate != null ? formatBitrate(link.dbitrate) : null),
       statRow('Transfer-ID modulo', proto.transfer_id_modulo),
       statRow('Max nodes', proto.max_nodes),
       statRow('Bus utilization', data.bus_utilization != null ? `${data.bus_utilization}%` : null),
@@ -129,11 +130,11 @@ const DebugView = (() => {
     const effPct = stats.media_acceptance_filtering_efficiency != null
       ? `${Math.round(stats.media_acceptance_filtering_efficiency * 100)}%` : null;
     const statsCard = card('Frame statistics', [
-      statRow('Frames in', stats.in_frames != null ? `${stats.in_frames}${rateSuffix(stats.in_frames, prevStats?.in_frames, seconds)}` : null),
+      statRow('Frames in', counted(stats.in_frames, prev?.stats.in_frames)),
       statRow('— Cyphal frames', stats.in_frames_cyphal),
       statRow('— Accepted (for us)', stats.in_frames_cyphal_accepted),
       statRow('Frames errored', stats.in_frames_errored, stats.in_frames_errored > 0 ? 'error' : null),
-      statRow('Frames out', stats.out_frames != null ? `${stats.out_frames}${rateSuffix(stats.out_frames, prevStats?.out_frames, seconds)}` : null),
+      statRow('Frames out', counted(stats.out_frames, prev?.stats.out_frames)),
       statRow('Out timed out', stats.out_frames_timeout, stats.out_frames_timeout > 0 ? 'warn' : null),
       statRow('Filtering efficiency', effPct),
       statRow('Lost loopback', stats.lost_loopback_frames, stats.lost_loopback_frames ? 'warn' : null),
@@ -149,21 +150,20 @@ const DebugView = (() => {
       statRow('Error-warning events', link.error_warning, link.error_warning > 0 ? 'warn' : null),
       statRow('Bus errors', link.bus_errors, link.bus_errors > 0 ? 'warn' : null),
       statRow('Arbitration lost', link.arbitration_lost),
+      statRow('Controller restarts', link.restarts, link.restarts > 0 ? 'warn' : null),
       statRow('Auto-restart (ms)', link.restart_ms),
-      // Only for adapters Cynitor opens itself (not SocketCAN): sends the
-      // adapter refused, e.g. because nothing on the bus acknowledges.
-      ...(link.adapter_send_failures != null ? [
-        statRow('Adapter send failures', link.adapter_send_failures, link.adapter_send_failures > 0 ? 'warn' : null),
-      ] : []),
+      // Only for adapters Cynitor opens itself (not SocketCAN): every frame
+      // the adapter passed, before any filter, so the bus's own traffic.
+      statRow('Adapter frames in', counted(link.adapter_frames_in, prev?.link.adapter_frames_in)),
+      statRow('Adapter frames out', counted(link.adapter_frames_out, prev?.link.adapter_frames_out)),
+      // Sends the adapter refused, e.g. because nothing on the bus acknowledges.
+      statRow('Adapter send failures', link.adapter_send_failures, link.adapter_send_failures > 0 ? 'warn' : null),
       // Error frames the adapter's driver reports; not every driver does.
-      ...(link.adapter_error_frames != null ? [
-        statRow('Adapter error frames', link.adapter_error_frames, link.adapter_error_frames > 0 ? 'warn' : null),
-      ] : []),
+      statRow('Adapter error frames', link.adapter_error_frames, link.adapter_error_frames > 0 ? 'warn' : null),
     ]);
 
     target.innerHTML = protoCard + statsCard + busCard;
-    prevStats = stats;
-    prevAt = now;
+    prev = { stats, link, at: now };
   };
 
   const renderDiagError = (message) => {
@@ -186,7 +186,7 @@ const DebugView = (() => {
     // token, and every refused poll would open the token prompt again.
     const problem = connectionPlaceholder('inspect the CAN transport');
     if (problem) {
-      prevStats = null;
+      prev = null;
       busCapturing = false;
       renderProblem(problem);
       return;
@@ -428,7 +428,7 @@ const DebugView = (() => {
       renderSkeleton();
       wireControls();
     }
-    prevStats = null;
+    prev = null;
     if (!paused) takePending();
     renderControls();
     poll();
@@ -437,7 +437,7 @@ const DebugView = (() => {
 
   const hide = () => {
     if (pollTimer) { window.clearInterval(pollTimer); pollTimer = null; }
-    prevStats = null;
+    prev = null;
   };
 
   return { init, hide, onFrames, onCaptureStatus, onSocketClosed, renderControls };

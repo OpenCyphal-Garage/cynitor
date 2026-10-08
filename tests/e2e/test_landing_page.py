@@ -4612,6 +4612,7 @@ class _DebugServer:
         self.right_after = []       # frames the bus carries the moment the dashboard subscribes
         self.can = True             # a CAN session is up
         self.capturing = False      # its transport capture is on (it stays on until CAN disconnects)
+        self.link = VCAN_LINK       # what the transport diagnostics say of the controller
 
     def _transport(self):
         frames_in = 1000 + int(100 * (time.monotonic() - self.started))
@@ -4620,7 +4621,7 @@ class _DebugServer:
                  "out_frames_loopback": 0, "media_acceptance_filtering_efficiency": 1.0, "lost_loopback_frames": 0}
         return {"connected": True, "interface": "vcan0", "statistics": stats, "capture_active": self.capturing,
                 "protocol": {"mtu": 7, "transfer_id_modulo": 32, "max_nodes": 128, "is_fd": False},
-                "link": VCAN_LINK, "bus_utilization": 12.0}
+                "link": self.link, "bus_utilization": 12.0}
 
     def _answer(self, path):
         if path in self.answers:
@@ -4960,6 +4961,29 @@ async def _(page):
         still_paused = await page.locator("#fmPause").get_attribute("aria-pressed")
         assert back == (10, "n42", "Stop") and still_paused == "true", \
             f"Back on the tab, (rows, filter, button) are {back}; paused before leaving, aria-pressed={still_paused}"
+    finally:
+        await debug_close(page, server)
+
+
+# Each diagnostics row, label: value.
+DEBUG_STATS = """Object.fromEntries([...document.querySelectorAll('#debugBody .debug-stat')].map(
+    row => [row.querySelector('.debug-stat-label').textContent, row.querySelector('.debug-stat-val').textContent]))"""
+
+
+@test("Debug: the diagnostics show what the interface reports, in the sidebar's units, and nothing it does not")
+async def _(page):
+    server = _DebugServer()
+    server.link = {"bitrate": 500000, "dbitrate": None, "adapter_frames_in": 123456, "adapter_frames_out": 789,
+                   "adapter_send_failures": 0, "adapter_error_frames": 17}  # what the hub knows of an adapter
+    await debug_open(page, server)
+    try:
+        await page.wait_for_selector("#debugBody .debug-card", timeout=WAIT_MS)
+        shown = await page.evaluate(DEBUG_STATS)
+        blank = [label for label, value in shown.items() if value == "—"]
+        assert not blank and shown.get("Arbitration bitrate") == "500 kbit/s" \
+            and (shown.get("Adapter frames in") or "").startswith("123456"), \
+            f"Rows with nothing to say: {blank}; bitrate {shown.get('Arbitration bitrate')!r}; " \
+            f"the adapter's frames in {shown.get('Adapter frames in')!r}"
     finally:
         await debug_close(page, server)
 
