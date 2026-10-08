@@ -621,6 +621,7 @@ const duplicateRecording = async (rec) => {
 
 let _editLimitsRecId = null;
 let _editLimitsModalEl = null;
+let _editLimitsOpener = null;  // what had the focus: it gets it back on closing
 
 const _ensureEditLimitsModal = () => {
   if (_editLimitsModalEl) return _editLimitsModalEl;
@@ -658,6 +659,16 @@ const _ensureEditLimitsModal = () => {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !backdrop.classList.contains('hidden')) closeEditLimitsModal();
   });
+  // Tab goes round the dialog's controls while it is open.
+  backdrop.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    const controls = [...backdrop.querySelectorAll('select, input, button')];
+    const [first, last] = [controls[0], controls[controls.length - 1]];
+    if (document.activeElement === (e.shiftKey ? first : last)) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+    }
+  });
   _editLimitsModalEl = backdrop;
   return backdrop;
 };
@@ -679,11 +690,15 @@ const openEditLimitsModal = (rec) => {
   el('recEditMaxEvents').innerHTML = _limitOptionsHtml(EVENTS_OPTIONS, rec.max_events, (n) => n.toLocaleString());
   el('recEditStopOnLimit').checked = !!rec.stop_on_limit;
   _editLimitsModalEl.classList.remove('hidden');
+  _editLimitsOpener = document.activeElement;
+  el('recEditLength').focus();
 };
 
 const closeEditLimitsModal = () => {
   if (_editLimitsModalEl) _editLimitsModalEl.classList.add('hidden');
   _editLimitsRecId = null;
+  if (_editLimitsOpener?.isConnected) _editLimitsOpener.focus();
+  _editLimitsOpener = null;
 };
 
 const applyEditLimits = async () => {

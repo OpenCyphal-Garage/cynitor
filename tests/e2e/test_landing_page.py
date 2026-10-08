@@ -4088,6 +4088,27 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: Edit limits takes the focus, keeps Tab inside, and gives the focus back")
+async def _(page):
+    server = _RecordServer([_recording(1, "field test", live=True)])
+    await record_open(page, server)
+    try:
+        await page.locator('.record-card[data-id="1"] [data-action="edit-limits"]').focus()
+        await page.keyboard.press("Enter")
+        await page.wait_for_selector("#recEditLimitsBackdrop:not(.hidden)")
+        focused = await page.evaluate("document.activeElement.id || document.activeElement.textContent")
+        assert focused == "recEditLength", f"Opened, the dialog leaves the focus on {focused!r}"
+        await page.locator("#recEditApply").focus()
+        await page.keyboard.press("Tab")
+        wrapped = await page.evaluate("document.activeElement.id || document.activeElement.textContent")
+        assert wrapped == "recEditLength", f"Tab from Apply goes to {wrapped!r}"
+        await page.keyboard.press("Escape")
+        back = await page.evaluate("document.activeElement.dataset.action || document.activeElement.tagName")
+        assert back == "edit-limits", f"Closed, the dialog leaves the focus on {back!r}"
+    finally:
+        await record_close(page, server)
+
+
 @test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
 async def _(page):
     try:
