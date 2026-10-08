@@ -8026,6 +8026,17 @@ body.dsdl-resizing-row {
   grid-column: 1 / -1;
 }
 
+/* A poll failed: the last values stay, dimmed, under a note saying so. */
+.debug-body.debug-stale .debug-card {
+  opacity: 0.55;
+}
+
+.debug-stale-note {
+  grid-column: 1 / -1;
+  font-size: 0.75rem;
+  color: var(--warn);
+}
+
 .debug-card {
   border: 1px solid var(--border);
   border-radius: var(--radius);

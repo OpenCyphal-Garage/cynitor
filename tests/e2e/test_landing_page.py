@@ -4988,6 +4988,28 @@ async def _(page):
         await debug_close(page, server)
 
 
+@test("Debug: the diagnostics update in place, and a failed update keeps the last values, marked stale")
+async def _(page):
+    server = _DebugServer()
+    await debug_open(page, server)
+    try:
+        await page.wait_for_selector("#debugBody .debug-card", timeout=WAIT_MS)
+        await page.evaluate("""() => { const value = [...document.querySelectorAll('#debugBody .debug-stat')]
+            .find(row => row.textContent.includes('Interface')).querySelector('.debug-stat-val');
+            const range = document.createRange(); range.selectNodeContents(value);
+            getSelection().removeAllRanges(); getSelection().addRange(range); }""")
+        await page.wait_for_timeout(1300)  # a poll has answered
+        kept = await page.evaluate("getSelection().toString()")
+        server.answers["/api/can/transport"] = ({"error": "Internal Server Error"}, 500)
+        await page.wait_for_timeout(1300)
+        stale = await page.evaluate("""() => ({cards: document.querySelectorAll('#debugBody .debug-card').length,
+            said: document.querySelector('#debugBody .debug-stale-note')?.textContent || ''})""")
+        assert kept == "vcan0" and stale["cards"] == 3 and "failed" in stale["said"], \
+            f"Selected 'vcan0', a poll later the selection is {kept!r}; after a failed poll: {stale}"
+    finally:
+        await debug_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

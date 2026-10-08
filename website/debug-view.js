@@ -162,13 +162,31 @@ const DebugView = (() => {
       statRow('Adapter error frames', link.adapter_error_frames, link.adapter_error_frames > 0 ? 'warn' : null),
     ]);
 
-    target.innerHTML = protoCard + statsCard + busCard;
+    // In place, so a value being selected or read out is not redrawn under it.
+    const fresh = document.createElement('div');
+    fresh.innerHTML = protoCard + statsCard + busCard;
+    target.classList.remove('debug-stale');
+    patchChildren(target, fresh);
     prev = { stats, link, at: now };
   };
 
+  // A failed poll keeps the values last shown, marked stale; with none
+  // shown yet, it says what failed.
   const renderDiagError = (message) => {
     const target = body();
-    if (target) target.innerHTML = `<div class="debug-error">${escapeHtml(message || 'Failed to load transport diagnostics')}</div>`;
+    if (!target) return;
+    if (!target.querySelector('.debug-card')) {
+      target.innerHTML = `<div class="debug-error">${escapeHtml(message || 'Failed to load transport diagnostics')}</div>`;
+      return;
+    }
+    target.classList.add('debug-stale');
+    let note = target.querySelector('.debug-stale-note');
+    if (!note) {
+      note = document.createElement('div');
+      note.className = 'debug-stale-note';
+      target.prepend(note);
+    }
+    note.textContent = `Last update failed: ${message || 'no answer'}. Retrying…`;
   };
 
   // Why the transport cannot be read, in the other tabs' words. Drawn only
