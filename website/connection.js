@@ -140,6 +140,7 @@ const updateSemaphores = () => {
   el('canSpecInput').disabled = state.canConnecting;
   el('canBitrateSelect').disabled = state.canConnecting;
   el('canBitrateCustom').disabled = state.canConnecting;
+  renderRecordStart();  // the Record tab's Start needs both connections
 
   if (serverInfo) {
     if (state.dashboardConnected && state.wsThroughput > 0) {

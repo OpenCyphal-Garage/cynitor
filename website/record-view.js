@@ -473,12 +473,26 @@ const _scheduleNextRecordPoll = () => {
   }
 };
 
+// Start only when a recording can begin, and once at a time; say why not.
+let _starting = false;
+
+const renderRecordStart = () => {
+  const button = el('recStart');
+  if (!button) return;
+  const why = !state.dashboardConnected ? 'Connect to the backend to record.'
+    : !state.canConnected ? 'Connect a CAN interface to record.' : '';
+  button.disabled = _starting || Boolean(why);
+  el('recStartWhy').textContent = why;
+};
+
 const startRecording = async () => {
   const draft = state.recordFilterDraft;
   if (!draft.name.trim()) {
     showToast('Recording name is required', 'warn');
     return;
   }
+  _starting = true;
+  renderRecordStart();
   try {
     await requestJson('/api/recordings', {
       method: 'POST',
@@ -495,6 +509,9 @@ const startRecording = async () => {
     await fetchRecordings();
   } catch (e) {
     showToast(`Start failed: ${e.message}`, 'error');
+  } finally {
+    _starting = false;
+    renderRecordStart();
   }
 };
 
@@ -803,6 +820,7 @@ const _renderViewShell = (container) => {
             <div class="record-actions">
               <button id="recStart" class="btn-primary">Start recording</button>
             </div>
+            <p class="record-start-why" id="recStartWhy" role="status"></p>
           </div>
         </section>
       </div>
@@ -834,6 +852,7 @@ const _bindBuilderInputs = () => {
   });
 
   el('recStart').addEventListener('click', startRecording);
+  renderRecordStart();
 };
 
 // ── Raw CAN log: every frame on the bus, as a candump .log file ──

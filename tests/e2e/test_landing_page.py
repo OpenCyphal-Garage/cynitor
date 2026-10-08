@@ -3876,6 +3876,40 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: Start makes one recording however fast it is clicked")
+async def _(page):
+    server = _RecordServer()
+    server.gates[("POST", "/api/recordings")] = gate = asyncio.Event()
+    await record_open(page, server)
+    try:
+        await page.locator("#recName").fill("bench run")
+        await page.locator("#recStart").dblclick()
+        await page.wait_for_timeout(300)
+        gate.set()
+        await page.wait_for_selector(".record-card.live", timeout=WAIT_MS)
+        await page.wait_for_timeout(300)
+        posts = server.count("POST", "/api/recordings")
+        assert posts == 1, f"A double-click on Start sent {posts} requests: {len(server.recordings)} recordings"
+    finally:
+        await record_close(page, server)
+
+
+@test("Record: Start is off, and says why, until CAN is connected")
+async def _(page):
+    server = _RecordServer()
+    await record_open(page, server, can=False)
+    try:
+        start = page.locator("#recStart")
+        why = await page.locator("#recStartWhy").all_inner_texts()
+        assert await start.is_disabled() and why and "CAN" in why[0], \
+            f"With CAN not connected, Start is disabled: {await start.is_disabled()}, and the tab says {why}"
+        await page.evaluate("state.canConnected = true; updateSemaphores();")
+        assert await start.is_enabled(), "Start stays disabled once CAN is connected"
+        assert not await page.locator("#recStartWhy").inner_text(), "The reason stays once CAN is connected"
+    finally:
+        await record_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

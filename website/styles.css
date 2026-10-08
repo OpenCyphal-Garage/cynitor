@@ -7676,6 +7676,16 @@ body.dsdl-resizing-row {
   flex: 1;
 }
 
+.record-start-why {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.record-start-why:empty {
+  display: none;
+}
+
 /* Edit-limits modal. Singleton appended to body. */
 .rec-modal-backdrop {
   position: fixed;
