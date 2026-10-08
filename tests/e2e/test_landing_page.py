@@ -4064,6 +4064,28 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
+async def _(page):
+    try:
+        await page.evaluate("""() => {
+            state.recordings = [{id: 1, name: 'long soak'}];
+            _applyReplayStatus({active: true, recording_id: 1, position_s: 300, duration_s: 7480, speed: 1,
+                                paused: false, events_emitted: 1499, total_events: 1500, finished: false});
+            showReplayStrip(); }""")
+        shown = await page.locator("#replayTime").inner_text()
+        assert shown == "0:05:00 / 2:04:40", f"The strip's time reads {shown!r}"
+        live = await page.evaluate("[...document.querySelectorAll('#replayStrip [aria-live]')].map((e) => e.id)")
+        assert live == ["replayStripLabel"], f"Read out as they change: {live}"
+        # The replay's end, through the handler the WebSocket's messages go to.
+        await page.evaluate("""() => { connectWs();
+            state.ws.onmessage({data: JSON.stringify({type: 'replay_ended', recording_id: 1, finished: true})}); }""")
+        await page.wait_for_selector("#replayStrip.replay-strip-finished", timeout=WAIT_MS)
+        events = await page.locator("#replayEvents").inner_text()
+        assert events.startswith("1,500 / 1,500"), f"At its end the strip counts {events!r}"
+    finally:
+        await page.evaluate("disconnectWs(); hideReplayStrip(); state.recordings = [];")
+
+
 # ── Debug tab ──
 #
 # _DebugServer answers /api/* as the backend does with a CAN session up on

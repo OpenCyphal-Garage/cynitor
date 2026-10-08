@@ -328,6 +328,7 @@ const connectWs = () => {
           state.replayPaused = false;
           state.replayFinished = true;
           state.replayPositionS = state.replayDurationS;
+          state.replayEventsEmitted = state.replayTotalEvents;  // the last poll was before the last events
           if (typeof syncReplayStrip === 'function') syncReplayStrip();
         } else {
           state.latestBySubject.clear();

@@ -8,12 +8,14 @@
 const REPLAY_POLL_MS = 1000;
 const REPLAY_SPEEDS = [0.5, 1, 2, 5, 10];
 
-const _formatReplayTime = (s) => {
+// mm:ss, or h:mm:ss with `hours` (a replay of an hour or more: both times
+// take it, so they line up).
+const _formatReplayTime = (s, hours = false) => {
   if (!Number.isFinite(s) || s < 0) s = 0;
   const total = Math.floor(s);
-  const mm = Math.floor(total / 60).toString().padStart(2, '0');
+  const mm = Math.floor((hours ? total % 3600 : total) / 60).toString().padStart(2, '0');
   const ss = (total % 60).toString().padStart(2, '0');
-  return `${mm}:${ss}`;
+  return hours ? `${Math.floor(total / 3600)}:${mm}:${ss}` : `${mm}:${ss}`;
 };
 
 const startReplay = async (recordingId, speed = 1.0) => {
@@ -128,17 +130,17 @@ const _ensureStripBuilt = (strip) => {
   strip.dataset.built = '1';
   strip.innerHTML = `
     <span class="replay-strip-icon" aria-hidden="true">▶</span>
-    <span class="replay-strip-label" id="replayStripLabel">Replay</span>
+    <span class="replay-strip-label" id="replayStripLabel" aria-live="polite">Replay</span>
     <button class="replay-strip-btn" id="replayPlayPauseBtn" aria-label="Pause replay">Pause</button>
     <button class="replay-strip-btn replay-strip-btn-stop" id="replayStopBtn" aria-label="Stop replay">Stop</button>
     <button class="replay-strip-btn replay-strip-btn-again hidden" id="replayAgainBtn" aria-label="Replay again">Replay again</button>
     <button class="replay-strip-btn replay-strip-btn-close hidden" id="replayCloseBtn" aria-label="Close replay strip">Close</button>
     <input type="range" class="replay-strip-seek" id="replaySeek" min="0" max="100" step="0.1" value="0" aria-label="Replay position" />
-    <span class="replay-strip-time" id="replayTime" aria-live="polite">00:00 / 00:00</span>
+    <span class="replay-strip-time" id="replayTime">00:00 / 00:00</span>
     <span class="replay-strip-speed-group" role="group" aria-label="Replay speed">
       ${REPLAY_SPEEDS.map(v => `<button class="replay-strip-speed-btn" data-speed="${v}">${v}×</button>`).join('')}
     </span>
-    <span class="replay-strip-events" id="replayEvents" aria-live="polite">0 / 0</span>
+    <span class="replay-strip-events" id="replayEvents">0 / 0 events</span>
   `;
 
   el('replayPlayPauseBtn').addEventListener('click', () => {
@@ -196,9 +198,8 @@ const syncReplayStrip = () => {
   if (labelEl) {
     const rec = state.recordings.find(r => r.id === state.replayRecordingId);
     const name = rec?.name || `Recording #${state.replayRecordingId ?? ''}`;
-    labelEl.textContent = finished
-      ? `Replay finished · ${name}`
-      : `Replay · ${name}`;
+    const label = finished ? `Replay finished · ${name}` : `Replay · ${name}`;
+    if (labelEl.textContent !== label) labelEl.textContent = label;  // read out when it changes
   }
   if (pauseBtn) {
     pauseBtn.classList.toggle('hidden', finished);
@@ -214,10 +215,11 @@ const syncReplayStrip = () => {
     if (document.activeElement !== seek) seek.value = String(state.replayPositionS || 0);
   }
   if (timeEl) {
-    timeEl.textContent = `${_formatReplayTime(state.replayPositionS)} / ${_formatReplayTime(state.replayDurationS)}`;
+    const hours = state.replayDurationS >= 3600;
+    timeEl.textContent = `${_formatReplayTime(state.replayPositionS, hours)} / ${_formatReplayTime(state.replayDurationS, hours)}`;
   }
   if (events) {
-    events.textContent = `${state.replayEventsEmitted ?? 0} / ${state.replayTotalEvents ?? 0}`;
+    events.textContent = `${(state.replayEventsEmitted ?? 0).toLocaleString()} / ${(state.replayTotalEvents ?? 0).toLocaleString()} events`;
   }
   strip.querySelectorAll('.replay-strip-speed-btn').forEach(btn => {
     const v = Number(btn.dataset.speed);
