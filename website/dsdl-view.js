@@ -263,6 +263,8 @@ const DsdlView = (() => {
       await _reloadTree();
     } catch (err) {
       _showCompileError(scope, err.message);
+      // Refused, it may still have compiled the other namespaces: show them.
+      if (err.status === 422) await _reloadTree();
     } finally {
       _compiling.delete(scope);
       _renderTreeHeaders();

@@ -3684,6 +3684,34 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+@test("DSDL: after a compile that fails, the tree shows at once what did compile")
+async def _(page):
+    server = _DsdlServer()
+    server.types["myapp.Reading.1.0"]["compiled"] = False
+    server.types["other.Broken.1.0"] = _dsdl_type("other.Broken.1.0", source="custom", compiled=False,
+                                                  text="uint8 x\n")
+    server.custom_namespaces.add("other")
+    server.compile_answer = ({"error": "other.Broken.1.0: Either `@sealed` or `@extent ...` are required"}, 422)
+    await dsdl_open(page, server)
+    try:
+        await page.locator('#dsdlCustomTree .dsdl-ns-row[data-ns="myapp"]').click()
+        # The compile compiles myapp, and fails in other. The status the tab
+        # polls stays as it was, so no poll reloads the tree in its stead.
+        server.types["myapp.Reading.1.0"]["compiled"] = True
+        await page.locator("#dsdlCustomCompileBtn").click()
+        compiled = '#dsdlCustomTree .dsdl-type-row.dsdl-type-compiled[data-type="myapp.Reading.1.0"]'
+        try:
+            await page.wait_for_selector(compiled, timeout=WAIT_MS)
+            shown = True
+        except Exception:
+            shown = False
+        error = await page.locator("#dsdlCustomHeader ~ .dsdl-compile-error").inner_text()
+        assert shown and "other.Broken.1.0" in error, \
+            f"myapp.Reading.1.0 shown compiled: {shown}; the error under the header: {error!r}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
