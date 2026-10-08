@@ -638,7 +638,7 @@ class DsdlManager:
 
         self.invalidate_cache()
         if errors:
-            return {"ok": False, "errors": errors}
+            return {"ok": False, "error": "\n".join(errors)}
         # Drop Python's cached module objects for any namespace under
         # compiled_dir so the scanner's next import_module() picks up the
         # freshly generated .py files instead of the pre-compile snapshot

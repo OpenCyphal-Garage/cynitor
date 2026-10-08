@@ -98,7 +98,7 @@ class TestRunCompilationRefreshHook:
         try:
             result = mgr._run_compilation(scope="public")
             assert result["ok"] is False
-            assert "errors" in result
+            assert "exit code 1" in result["error"]
             assert "myapp" in sys.modules
         finally:
             sys.modules.pop("myapp", None)
@@ -112,7 +112,7 @@ class TestRunCompilationRefreshHook:
         (mgr.custom_dir / "myapp" / "Foo.1.0.dsdl").write_text("@sealed\n")
         result = mgr.compile_custom()
         assert result["ok"] is False
-        assert "syntax error" in result["errors"][0]
+        assert "syntax error" in result["error"]
 
 
 class TestTreeEntries:

@@ -307,6 +307,8 @@ These do not include a `type` field; the bare `error` key signals a protocol-lev
 
 ### REST API
 
+Every endpoint answers an error with a `4xx` or `5xx` status and `{"error": "<message>"}`, sometimes with more fields that say more (such as `available_interfaces`).
+
 **Get server status (connection state, available interfaces, bus load):**
 ```bash
 curl http://localhost:8080/api/status
@@ -553,7 +555,7 @@ curl -X POST http://localhost:8080/api/dsdl/compile \
   -H 'Content-Type: application/json' \
   -d '{"scope": "all"}'
 ```
-Returns `200` with `{"ok": true}` on success, or `422` with `{"ok": false, "errors": [...]}`. Compiles run one at a time: a request made while one runs waits for it to end.
+Returns `200` with `{"ok": true}` on success, or `422` with `{"error": "..."}`, each failing namespace's error on a line of its own. Compiles run one at a time: a request made while one runs waits for it to end.
 
 Compilation runs inside the server. In the packaged binaries the public types are built in: `"public"` is refused and `"all"` compiles the custom types; `GET /api/dsdl/status` reports this as `"public_compilable": false`. Custom types and their compiled code are kept in the data folder (`dsdl/custom`, `dsdl/compiled`).
 

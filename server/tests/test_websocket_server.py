@@ -1008,6 +1008,23 @@ class TestDsdlCompile:
         assert [a.status for a in answers] == [200, 200]
         assert overlapped == [False, False]
 
+    @pytest.mark.asyncio
+    async def test_a_failed_compile_answers_as_every_route_does(self, session, log_store, tmp_path, monkeypatch):
+        """{"error": message}: each namespace's error on a line of its own."""
+        (tmp_path / "dsdl_messages" / "custom").mkdir(parents=True)
+        mgr = DsdlManager(tmp_path)
+        server = WebSocketServer(session=session, host="127.0.0.1", port=0, log_store=log_store, dsdl_manager=mgr)
+        async with TestClient(TestServer(server.app)) as c:
+            server._running = True
+            nothing = await c.post("/api/dsdl/compile", json={"scope": "custom"})
+            for namespace in ("alpha", "beta"):
+                mgr.save_type(namespace, "Reading", "1.0", "uint8 x\n@sealed\n")
+            monkeypatch.setattr(mgr, "_compile", lambda target, lookups, output, label: [f"{label}: broken"])
+            broken = await c.post("/api/dsdl/compile", json={"scope": "custom"})
+            answers = [(nothing.status, await nothing.json()), (broken.status, await broken.json())]
+        assert answers == [(422, {"error": "No custom types to compile"}),
+                           (422, {"error": "custom/alpha: broken\ncustom/beta: broken"})]
+
 
 class TestDsdlDeleteNamespace:
     """DELETE /api/dsdl/custom/namespace/{namespace}: an empty one goes."""

@@ -623,9 +623,8 @@ const requestJson = async (path, options = {}) => {
     throw err;
   }
   if (!response.ok) {
-    const detail = data.error
-      || (Array.isArray(data.errors) && data.errors.length ? data.errors.join('\n') : null);
-    const err = new Error(detail || `HTTP ${response.status} for ${path}`);
+    // Every route answers an error as {"error": message}, sometimes with more fields.
+    const err = new Error(data.error || `HTTP ${response.status} for ${path}`);
     // Attach the raw status and body so callers can distinguish e.g. a 504
     // service-call timeout (body carries {status: "timeout", latency_ms, error})
     // from a generic 500 with the same envelope.

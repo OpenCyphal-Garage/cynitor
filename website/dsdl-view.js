@@ -241,12 +241,12 @@ const DsdlView = (() => {
     _renderTreeHeaders();
     _clearCompileError(scope);
     try {
-      const result = await requestJson('/api/dsdl/compile', {
+      // A failed compile is answered 422: requestJson throws with its error.
+      await requestJson('/api/dsdl/compile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scope }),
       });
-      if (!result.ok) _showCompileError(scope, (result.errors || []).join('\n'));
       await _reloadTree();
     } catch (err) {
       _showCompileError(scope, err.message);

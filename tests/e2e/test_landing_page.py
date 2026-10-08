@@ -2770,7 +2770,7 @@ ERROR_COLOUR = """(() => { const probe = document.createElement('span'); probe.s
 @test("DSDL: compile and editor errors are drawn in the error colour")
 async def _(page):
     server = _DsdlServer()
-    server.compile_answer = ({"ok": False, "errors": ["custom/myapp: Reading.1.0.dsdl: @sealed or @extent required"]}, 422)
+    server.compile_answer = ({"error": "custom/myapp: Reading.1.0.dsdl: @sealed or @extent required"}, 422)
     await dsdl_open(page, server)
     try:
         error = await page.evaluate(ERROR_COLOUR)
@@ -3013,7 +3013,7 @@ async def _(page):
 @test("DSDL: a public recompile leaves the custom types' compile error alone")
 async def _(page):
     server = _DsdlServer()
-    server.compile_answer = ({"ok": False, "errors": ["custom/myapp: Reading.1.0.dsdl: @sealed or @extent required"]}, 422)
+    server.compile_answer = ({"error": "custom/myapp: Reading.1.0.dsdl: @sealed or @extent required"}, 422)
     await dsdl_open(page, server)
     try:
         await page.locator("#dsdlCustomCompileBtn").click()
@@ -3159,7 +3159,7 @@ async def _(page):
 @test("DSDL: screen readers hear the editor's fields and the results, and the bus dots hold still on request")
 async def _(page):
     server = _DsdlServer()
-    server.compile_answer = ({"ok": False, "errors": ["custom/myapp: Reading.1.0.dsdl: @sealed or @extent required"]}, 422)
+    server.compile_answer = ({"error": "custom/myapp: Reading.1.0.dsdl: @sealed or @extent required"}, 422)
     nodes = {"node_count": 1, "nodes": {"10": _graph_node(10, "org.example.dev", [7509], [], uid_byte=1)}}
     setup = f"""() => {{
         state.latestNodesPayload = {json.dumps(nodes)};
