@@ -3712,6 +3712,39 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+# How many lines an element's text takes, and its words drawn across two.
+SPLIT_WORDS = r"""(el) => {
+    const text = el.firstChild, range = document.createRange(), split = [];
+    range.selectNodeContents(text);
+    const lines = new Set([...range.getClientRects()].map(rect => Math.round(rect.top))).size;
+    for (const word of text.data.matchAll(/\S+/g)) {
+        range.setStart(text, word.index);
+        range.setEnd(text, word.index + word[0].length);
+        if (range.getClientRects().length > 1) split.push(word[0]);
+    }
+    return { lines, split };
+}"""
+
+
+@test("DSDL: a compile error wraps between words, never inside one")
+async def _(page):
+    server = _DsdlServer()
+    server.compile_answer = ({"error": "myapp.Reading.1.0: Reading: Either `@sealed` or `@extent ...` are required. "
+                                       "The smallest valid extent for this type (i.e., its max bit length) is 8 bits "
+                                       "(1 bytes). If you are not sure what this means, add the following line near "
+                                       "the end of this definition: `@extent 64 * 8`"}, 422)
+    await dsdl_open(page, server)
+    try:
+        await page.locator("#dsdlCustomCompileBtn").click()
+        error = page.locator("#dsdlCustomHeader ~ .dsdl-compile-error")
+        await error.wait_for(timeout=WAIT_MS)
+        drawn = await error.evaluate(SPLIT_WORDS)
+        assert drawn["lines"] > 1 and not drawn["split"], \
+            f"Over {drawn['lines']} lines, these words are cut in two: {drawn['split']}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

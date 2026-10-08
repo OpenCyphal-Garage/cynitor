@@ -5957,7 +5957,8 @@ details.svc-history-entry[open] > summary::before {
   background: var(--error-muted);
   border-bottom: 0.0625rem solid var(--border);
   white-space: pre-wrap;
-  word-break: break-all;
+  /* Between words; inside one only when it is longer than a line. */
+  overflow-wrap: anywhere;
 }
 
 .dsdl-custom-empty {
