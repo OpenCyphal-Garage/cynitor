@@ -316,7 +316,7 @@ const DebugView = (() => {
     const tbody = el('fmRows');
     if (!tbody || !frames || !frames.length) return;
     const newest = numbered(frames);
-    if (paused) {  // kept for Resume; the table stays as it is
+    if (paused || state.activeView !== 'debug') {  // kept for Resume, or for the tab's return
       pending = newest.concat(pending).slice(0, MAX_KEPT);
       return;
     }
@@ -330,6 +330,14 @@ const DebugView = (() => {
       tbody.lastChild.remove();
     }
     updateEmpty();
+  };
+
+  // The frames that came while paused or while another tab was shown.
+  const takePending = () => {
+    if (!pending.length) return;
+    rows = pending.concat(rows).slice(0, MAX_KEPT);
+    pending = [];
+    renderTableFromRows();
   };
 
   const sendWs = (obj) => {
@@ -382,8 +390,6 @@ const DebugView = (() => {
   };
 
   const onFrames = (event) => {
-    // A batch can land just after the user leaves the tab; skip rendering then.
-    if (state.activeView !== 'debug') return;
     if (event.stats) { captureStats = event.stats; renderCounters(); }
     appendBatch(event.frames);
   };
@@ -396,11 +402,7 @@ const DebugView = (() => {
       btn.textContent = paused ? 'Resume' : 'Pause';
       btn.setAttribute('aria-pressed', String(paused));
       btn.classList.toggle('active', paused);
-      if (!paused && pending.length) {
-        rows = pending.concat(rows).slice(0, MAX_KEPT);
-        pending = [];
-        renderTableFromRows();
-      }
+      if (!paused) takePending();
     });
     el('fmClear').addEventListener('click', () => {
       rows = [];
@@ -420,28 +422,21 @@ const DebugView = (() => {
   const init = () => {
     // Every dashboard connect calls this again: one poller, not one per call.
     if (pollTimer) window.clearInterval(pollTimer);
-    renderSkeleton();
-    wireControls();
+    // Drawn once: the frame table keeps its frames, filter and pause across
+    // tab switches, and a capture goes on while another tab is shown.
+    if (!el('fmRows')) {
+      renderSkeleton();
+      wireControls();
+    }
     prevStats = null;
-    shownProblem = null;
-    captureOn = false;
-    paused = false;
-    filterText = '';
-    rows = [];
-    pending = [];
-    captureStats = null;
-    setToggleLabel();
-    updateEmpty();
+    if (!paused) takePending();
+    renderControls();
     poll();
     pollTimer = window.setInterval(poll, POLL_MS);
   };
 
   const hide = () => {
     if (pollTimer) { window.clearInterval(pollTimer); pollTimer = null; }
-    // Stop the server forwarding frames to us (capture itself stays active on
-    // the transport — it is sticky until disconnect).
-    if (captureOn) sendWs({ type: 'capture', enabled: false });
-    captureOn = false;
     prevStats = null;
   };
 

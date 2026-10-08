@@ -4652,6 +4652,8 @@ class _DebugServer:
 
     def flush(self):
         """What is queued, as one can_frame batch, as _capture_loop sends it."""
+        if self.queued is None:  # the dashboard is not subscribed: nothing goes to it
+            return
         frames, self.queued = self.queued, []
         self.ws.send(json.dumps({"type": "can_frame", "frames": frames, "stats": self._stats()}))
 
@@ -4936,6 +4938,28 @@ async def _(page):
         label = await page.locator("#fmToggle").inner_text()
         assert "until CAN disconnects" in said and label == "Stop", \
             f"With the bus capturing already, the table says {said!r}; capturing, the button reads {label!r}"
+    finally:
+        await debug_close(page, server)
+
+
+@test("Debug: the frame table keeps its frames, filter and pause across tabs, and takes in what came meanwhile")
+async def _(page):
+    server = _DebugServer()
+    await debug_open(page, server)
+    try:
+        await debug_start_capture(page)
+        await debug_frames_come(page, server, range(5))
+        await page.locator("#fmFilter").fill("n42")
+        await page.evaluate("switchView('nodes')")
+        await debug_frames_come(page, server, range(5, 10))  # while another tab is shown
+        await page.evaluate("switchView('debug')")
+        back = (len(await page.evaluate(DEBUG_ROWS)), await page.locator("#fmFilter").input_value(),
+                await page.locator("#fmToggle").inner_text())
+        await page.locator("#fmPause").click()
+        await page.evaluate("switchView('nodes'); switchView('debug')")
+        still_paused = await page.locator("#fmPause").get_attribute("aria-pressed")
+        assert back == (10, "n42", "Stop") and still_paused == "true", \
+            f"Back on the tab, (rows, filter, button) are {back}; paused before leaving, aria-pressed={still_paused}"
     finally:
         await debug_close(page, server)
 
