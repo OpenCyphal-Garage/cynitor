@@ -557,7 +557,7 @@ curl -X POST http://localhost:8080/api/dsdl/compile \
   -H 'Content-Type: application/json' \
   -d '{"scope": "all"}'
 ```
-Returns `200` with `{"ok": true}` on success, or `422` with `{"error": "..."}`, each failing namespace's error on a line of its own. Compiles run one at a time: a request made while one runs waits for it to end.
+Returns `200` with `{"ok": true}` on success, or `422` with `{"error": "..."}`, each failing namespace's error on a line of its own. A fault the compiler finds in a type reads `<full name>, line <n>: <message>` (`, line <n>` left out when it is about the whole file), for example `myapp.sensors.Reading.1.0, line 2: Syntax error`; any other failure reads `<namespace label>: <message>`. Compiles run one at a time: a request made while one runs waits for it to end.
 
 Compilation runs inside the server. In the packaged binaries the public types are built in: `"public"` is refused and `"all"` compiles the custom types; `GET /api/dsdl/status` reports this as `"public_compilable": false`. Custom types and their compiled code are kept in the data folder (`dsdl/custom`, `dsdl/compiled`).
 

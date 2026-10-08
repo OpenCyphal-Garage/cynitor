@@ -697,8 +697,33 @@ class DsdlManager:
             output.mkdir(parents=True, exist_ok=True)
             pycyphal.dsdl.compile(target, [ld for ld in lookups if ld.is_dir()], output_directory=output)
         except Exception as exc:
-            return [f"{label}: {exc}"]
+            return [DsdlManager._compile_error(exc, [target, *lookups]) or f"{label}: {exc}"]
         return []
+
+    @staticmethod
+    def _compile_error(exc: Exception, roots: list[Path]) -> Optional[str]:
+        """A fault the compiler (pydsdl) found, as one reads it: the type it is
+        in by its full name, and its line, in place of the file's path on the
+        server. ``roots`` are the root namespace folders the compile read.
+        None for any other failure."""
+        try:
+            import pydsdl
+        except ImportError:
+            return None
+        if not isinstance(exc, pydsdl.FrontendError) or not exc.path:
+            return None
+        path = Path(exc.path).resolve()
+        where = path.name
+        for folder in {root.resolve().parent for root in roots}:
+            if not path.is_relative_to(folder):
+                continue
+            relative = path.relative_to(folder)
+            type_name, version, _ = DsdlManager._parse_filename(relative.name)
+            if type_name:
+                where = ".".join([*relative.parts[:-1], type_name, version])
+                break
+        line = f", line {exc.line}" if exc.line else ""
+        return f"{where}{line}: {exc.text}"
 
     def _adopt_legacy_custom_types(self, legacy_dir: Path) -> None:
         """Copy custom types an earlier version kept in the source tree into the data folder.

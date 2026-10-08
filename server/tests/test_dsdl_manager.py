@@ -117,6 +117,27 @@ class TestRunCompilationRefreshHook:
         assert "syntax error" in result["error"]
 
 
+class TestCompileErrors:
+    """A failed compile names each type it fails in as one reads it, not by
+    where its file is on the server."""
+
+    def test_the_type_and_its_line(self, project_root, data_dir, monkeypatch) -> None:
+        # pycyphal is stubbed in these tests; the errors come from its front
+        # end, pydsdl, reading each namespace, which this does for real.
+        import pycyphal.dsdl
+        import pydsdl
+        monkeypatch.setattr(pycyphal.dsdl, "compile", lambda target, lookups, output_directory:
+                            pydsdl.read_namespace(str(target), [str(d) for d in lookups]), raising=False)
+        mgr = DsdlManager(project_root, data_dir=data_dir)
+        mgr.save_type("myapp.sensors", "Reading", "1.0", "uint8 x\nnot_a_type y\n@sealed\n", 6200)
+        mgr.save_type("other", "Sealless", "1.0", "uint8 x\n")
+        error = mgr.compile_custom()["error"]
+        syntax, sealless = error.split("\n")
+        assert syntax == "myapp.sensors.Reading.1.0, line 2: Syntax error", error
+        assert sealless.startswith("other.Sealless.1.0: ") and "@sealed" in sealless, error
+        assert str(data_dir) not in error
+
+
 class TestTreeEntries:
 
     def test_a_type_lists_its_field_and_constant_names_for_search(self, mgr: DsdlManager) -> None:
