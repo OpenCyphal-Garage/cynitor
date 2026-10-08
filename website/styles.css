@@ -7407,6 +7407,16 @@ body.dsdl-resizing-row {
   font-family: var(--mono, ui-monospace, monospace);
 }
 
+/* A card's name is shown whole, wrapping if need be; its times go under it. */
+.record-card .record-name {
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+.record-card-head .record-meta {
+  flex-basis: 100%;
+}
+
 .record-badge {
   font-size: 0.625rem;
   text-transform: uppercase;

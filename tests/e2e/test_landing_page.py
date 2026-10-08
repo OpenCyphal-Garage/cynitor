@@ -4241,6 +4241,21 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: a recording's name is shown whole, its times under it")
+async def _(page):
+    server = _RecordServer([_recording(1, "boot sequence"),
+                            _recording(2, "ESC thermal soak, node 12, 8 h at full PWM", auto_stopped=True)])
+    await page.set_viewport_size({"width": 1440, "height": 900})  # the recordings take a narrow column
+    try:
+        await record_open(page, server)
+        cut = await page.evaluate("""[...document.querySelectorAll('.record-card .record-name')]
+            .filter((name) => name.scrollWidth > name.clientWidth + 1).map((name) => name.textContent)""")
+        assert not cut, f"Names cut short: {cut}"
+    finally:
+        await page.set_viewport_size({"width": 1280, "height": 800})
+        await record_close(page, server)
+
+
 @test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
 async def _(page):
     try:
