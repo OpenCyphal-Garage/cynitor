@@ -188,9 +188,11 @@ const _setHighlightedNode = (nodeId) => {
   if (_nodesPicker) _nodesPicker.redraw(true);
 };
 
+// What follows the live traffic: the pickers, and the size estimate.
 const _refreshPickerTables = () => {
   _refreshPicker(_subjectsPicker, _subjectsPickerData());
   _refreshPicker(_nodesPicker, _nodesPickerData());
+  _updateDiskHint();
 };
 
 // ── Buffer chip + disk hint ─────────────────────────────────────────
@@ -206,21 +208,32 @@ const _renderBufferChip = () => {
   chip.textContent = `Global buffer: last ${_formatRetention(b.retention_seconds)} · ${b.event_count.toLocaleString()} events · ${formatBytes(b.db_size_bytes)}`;
 };
 
-const _observedRatePerSec = () => {
-  const b = state.recordBuffer;
-  if (!b || !b.oldest_event_unix || !b.newest_event_unix || b.event_count < 20) return null;
-  const span = b.newest_event_unix - b.oldest_event_unix;
-  return span > 0 ? b.event_count / span : null;
+// Messages a second the draft would record, at the rates they are sent now:
+// those its filter matches (any of its subjects, nodes or types, as the
+// backend matches them) from every publisher; all of them with no filter.
+const _draftRatePerSec = () => {
+  const d = state.recordFilterDraft;
+  const everything = !d.subject_ids.length && !d.service_ids.length && !d.node_ids.length && !d.message_types.length;
+  const now = Date.now();
+  let total = 0;
+  for (const [nodeId, events] of state.latestByNode) {
+    for (const ev of events.values()) {
+      const matches = everything || d.subject_ids.includes(ev.subject_id)
+        || d.node_ids.includes(nodeId) || d.message_types.includes(ev.message_type);
+      if (matches && isEventFresh(ev, now)) total += Number(ev.rate) || 0;
+    }
+  }
+  return total;
 };
 
 const _updateDiskHint = () => {
   const hint = el('recDiskHint');
   if (!hint) return;
   const draft = state.recordFilterDraft;
-  const rate = _observedRatePerSec();
+  const rate = _draftRatePerSec();
   const maxBytes = draft.max_events * BYTES_PER_EVENT_ESTIMATE;
   if (!rate) {
-    hint.textContent = `≈ up to ${formatBytes(maxBytes)} (no rate observed yet)`;
+    hint.textContent = `≈ up to ${formatBytes(maxBytes)} (nothing it would record is being sent now)`;
     return;
   }
   const fillSeconds = draft.max_events / rate;
@@ -228,14 +241,14 @@ const _updateDiskHint = () => {
   const projectedEvents = Math.min(draft.max_events, Math.round(rate * draft.max_length_seconds));
   const projectedBytes = projectedEvents * BYTES_PER_EVENT_ESTIMATE;
   const limitingFactor = fillSeconds < draft.max_length_seconds ? 'events cap' : 'time limit';
-  hint.textContent = `≈ ${formatBytes(projectedBytes)} · ${formatUptime(cappedSeconds)} before ${limitingFactor} (~${rate.toFixed(0)} msg/s observed)`;
+  hint.textContent = `≈ ${formatBytes(projectedBytes)} · ${formatUptime(cappedSeconds)} before ${limitingFactor}`
+    + ` (~${rate.toFixed(rate < 10 ? 1 : 0)} msg/s now)`;
 };
 
 const fetchRecordBuffer = async () => {
   if (!state.dashboardConnected) {
     state.recordBuffer = null;
     _renderBufferChip();
-    _updateDiskHint();
     return;
   }
   try {
@@ -245,7 +258,6 @@ const fetchRecordBuffer = async () => {
     state.recordBuffer = null;
   }
   _renderBufferChip();
-  _updateDiskHint();
 };
 
 // ── Cards (left pane) ───────────────────────────────────────────────

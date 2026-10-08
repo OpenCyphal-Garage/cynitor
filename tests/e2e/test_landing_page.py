@@ -4016,6 +4016,36 @@ async def _(page):
         await record_close(page, server)
 
 
+# Node 10 publishes subject 100 at 10 Hz; nodes 10 and 11 send Heartbeat at
+# 1 Hz each: 12 messages a second in all, for as long as window.e2eRateFeed runs.
+RECORD_RATES = """() => {
+    state.latestNodesPayload = {node_count: 2, nodes: {
+        '10': {node_id: 10, name: 'org.example.imu', publishers: [100, 7509], subscribers: [], servers: [], clients: []},
+        '11': {node_id: 11, name: 'org.example.esc', publishers: [7509], subscribers: [], servers: [], clients: []}}};
+    const ev = (subject_id, publisher_node_id, rate, subject_rate) => ({subject_id, publisher_node_id,
+        message_type: 'Real64_1_0', rate, subject_rate, attributes: [], timestamp_unix: Date.now() / 1000});
+    const feed = () => { cacheEvent(ev(100, 10, 10, 10)); cacheEvent(ev(7509, 10, 1, 2)); cacheEvent(ev(7509, 11, 1, 2)); };
+    feed();
+    window.e2eRateFeed = setInterval(feed, 500);
+}"""
+
+
+@test("Record: the size estimate is for what the selection would record, at the rate it is sent now")
+async def _(page):
+    server = _RecordServer()
+    await record_open(page, server, setup=RECORD_RATES)
+    try:
+        await page.evaluate("state.recordFilterDraft.subject_ids = [100]; _refreshSelection();")
+        selected = await page.locator("#recDiskHint").inner_text()
+        await page.evaluate("state.recordFilterDraft.subject_ids = []; _refreshSelection();")
+        everything = await page.locator("#recDiskHint").inner_text()
+        assert "~10 msg/s" in selected and "~12 msg/s" in everything, \
+            f"With subject 100 selected: {selected!r}; with nothing selected (everything): {everything!r}"
+    finally:
+        await page.evaluate("clearInterval(window.e2eRateFeed); state.recordFilterDraft.subject_ids = []; saveSettings();")
+        await record_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
