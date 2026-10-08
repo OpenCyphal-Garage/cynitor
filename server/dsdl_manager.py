@@ -9,6 +9,8 @@ import logging
 import re
 import shutil
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -29,6 +31,11 @@ _FIXED_PORT_RANGES = {"message": (6144, 7167), "service": (256, 383)}
 # The public regulated types' root namespaces. A custom namespace under one
 # would merge into theirs, in the tree and in the compiled code.
 _PUBLIC_ROOTS = ("uavcan", "reg")
+
+# How old the status kept in memory may get. A change made here resets it at
+# once; this bounds how late one made elsewhere shows: the public types
+# compiled when CAN connects (if they are not yet), files changed by hand.
+_STATUS_MAX_AGE_S = 30.0
 
 # pydsdl and nunavut log a line per type at INFO: hundreds for a public
 # compile, a few for every type shown, which would bury the dashboard's log
@@ -65,6 +72,11 @@ class DsdlManager:
 
         self._tree_cache: Optional[dict] = None
         self._type_index: dict[str, Path] = {}
+        self._status_cache: Optional[dict] = None
+        self._status_read_at = 0.0
+        # Held while the status is read, so a change made meanwhile resets
+        # what that read keeps, instead of the read keeping what was before.
+        self._status_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Public API
@@ -77,6 +89,15 @@ class DsdlManager:
             sys.path.append(path)
 
     def get_status(self) -> dict[str, Any]:
+        """Kept in memory: each open DSDL tab asks for it every few seconds,
+        and reading it walks every source and compiled file."""
+        with self._status_lock:
+            if self._status_cache is None or time.monotonic() - self._status_read_at > _STATUS_MAX_AGE_S:
+                self._status_cache = self._read_status()
+                self._status_read_at = time.monotonic()
+            return self._status_cache
+
+    def _read_status(self) -> dict[str, Any]:
         paths: list[dict] = []
         if self.public_types_dir.is_dir():
             paths.append({"path": str(self.public_types_dir), "label": "Public regulated types", "source": "regulated"})
@@ -272,6 +293,8 @@ class DsdlManager:
     def invalidate_cache(self) -> None:
         self._tree_cache = None
         self._type_index.clear()
+        with self._status_lock:
+            self._status_cache = None
 
     def create_namespace(self, namespace: str) -> dict[str, Any]:
         self._validate_custom_namespace(namespace)

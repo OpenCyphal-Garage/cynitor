@@ -1,11 +1,13 @@
 """Tests for DsdlManager: the module-cache refresh, where custom types live, and compiling them."""
 
 import sys
+import threading
 import types
 from pathlib import Path
 
 import pytest
 
+import dsdl_manager
 from dsdl_manager import DsdlManager
 
 
@@ -121,6 +123,65 @@ class TestTreeEntries:
         mgr.save_type("myapp", "Reading", "1.0", "uint8 MAX = 3   # the most\nuint8 value\nvoid8\n@sealed\n")
         [entry] = mgr.get_namespaces()["namespaces"]["myapp"]["types"]
         assert (entry["field_names"], entry["constant_names"]) == (["value"], ["MAX"])
+
+
+class TestStatus:
+    """Each open DSDL tab asks for the status every 4 s; reading it walks
+    every source and compiled file, so it is kept until something changes."""
+
+    @staticmethod
+    def _count_walks(monkeypatch) -> list:
+        walks = []
+        walk = DsdlManager._max_compiled_mtime
+        monkeypatch.setattr(DsdlManager, "_max_compiled_mtime",
+                            lambda self, *a, **kw: walks.append(1) or walk(self, *a, **kw))
+        return walks
+
+    def test_polls_read_the_folders_once(self, mgr: DsdlManager, monkeypatch) -> None:
+        walks = self._count_walks(monkeypatch)
+        first = mgr.get_status()
+        once = len(walks)
+        assert (mgr.get_status(), len(walks)) == (first, once)
+
+    def test_a_change_made_here_shows_at_once(self, mgr: DsdlManager) -> None:
+        assert mgr.get_status()["custom_types"] == 0
+        mgr.save_type("myapp", "Reading", "1.0", "uint8 x\n@sealed\n")
+        assert mgr.get_status()["custom_types"] == 1
+
+    def test_one_made_elsewhere_within_half_a_minute(self, mgr: DsdlManager, monkeypatch) -> None:
+        # Such as the public types, compiled when CAN connects if they are not yet.
+        clock = types.SimpleNamespace(now=1000.0)
+        monkeypatch.setattr(dsdl_manager, "time", types.SimpleNamespace(monotonic=lambda: clock.now))
+        assert mgr.get_status()["compiled"] is False
+        for root in ("uavcan", "reg"):
+            (mgr.compiled_dir / root).mkdir()
+        clock.now += 31
+        assert mgr.get_status()["compiled"] is True
+
+    def test_a_read_a_change_overlaps_is_not_kept(self, mgr: DsdlManager, monkeypatch) -> None:
+        # A poll reading while a compile ends would otherwise keep what it read
+        # before the compile, after the compile had reset it.
+        reading, release = threading.Event(), threading.Event()
+        walk = DsdlManager._max_compiled_mtime
+
+        def slow_walk(self, *a, **kw):
+            reading.set()
+            release.wait(5)
+            return walk(self, *a, **kw)
+
+        monkeypatch.setattr(DsdlManager, "_max_compiled_mtime", slow_walk)
+        poll = threading.Thread(target=mgr.get_status)
+        poll.start()
+        reading.wait(5)
+        change = threading.Thread(target=mgr.invalidate_cache)
+        change.start()
+        change.join(0.2)  # done by now, unless it waits for the poll to end
+        release.set()
+        poll.join(5)
+        change.join(5)
+        walks = self._count_walks(monkeypatch)
+        mgr.get_status()
+        assert walks, "not read again after the change"
 
 
 class TestDeleteNamespace:

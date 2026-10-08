@@ -474,6 +474,8 @@ Response:
 
 `last_public_compiled` covers the public `uavcan/` and `reg/` namespaces, compiled into `python_compiled_messages/`; `last_custom_compiled` covers the custom types, compiled into the data folder (`dsdl/compiled`). `last_compiled` is the max of both, kept for backward compatibility.
 
+The status is kept in memory, so polling it is cheap. It is read from disk again at once after a save, delete or compile made through this API, and otherwise at most every 30 s, for changes made elsewhere (such as the public types compiled when CAN connects, if they were not yet).
+
 **DSDL namespace tree:**
 ```bash
 curl http://localhost:8080/api/dsdl/namespaces
