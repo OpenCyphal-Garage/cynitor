@@ -208,10 +208,24 @@ const _setHighlightedNode = (nodeId) => {
   if (_nodesPicker) _nodesPicker.redraw(true);
 };
 
+// An empty picker says why, as the Nodes and Subjects tabs do: no backend,
+// no bus, or nothing sent on it yet.
+const _showPickerPlaceholder = (picker, html) => {
+  const contents = picker?.element.querySelector('.tabulator-placeholder-contents');
+  if (!contents) return;  // it has rows
+  const fresh = document.createElement('div');
+  fresh.innerHTML = html;
+  patchChildren(contents, fresh);  // its spinner turns on, not drawn anew
+};
+
 // What follows the live traffic: the pickers, and the size estimate.
 const _refreshPickerTables = () => {
-  _refreshPicker(_subjectsPicker, _subjectsPickerData());
-  _refreshPicker(_nodesPicker, _nodesPickerData());
+  const subjects = _subjectsPickerData();
+  const nodes = _nodesPickerData();
+  _refreshPicker(_subjectsPicker, subjects);
+  _refreshPicker(_nodesPicker, nodes);
+  if (!subjects.length) _showPickerPlaceholder(_subjectsPicker, subjectsPlaceholder());
+  if (!nodes.length) _showPickerPlaceholder(_nodesPicker, tablePlaceholder());
   _updateDiskHint();
 };
 
@@ -850,7 +864,6 @@ const _initPickers = () => {
   const commonOpts = {
     layout: 'fitColumns',
     height: '14rem',
-    placeholder: 'No data',
     selectable: false,
     movableColumns: false,
     index: 'key',
@@ -862,6 +875,7 @@ const _initPickers = () => {
   _subjectsPicker = new Tabulator(subjectsEl, {
     ...tallOpts,
     data: _subjectsPickerData(),
+    placeholder: subjectsPlaceholder,  // and anew as the pickers refresh
     rowFormatter: (row) => {
       focusableRow(row);
       const ids = row.getData().ownerIds || [];
@@ -882,6 +896,7 @@ const _initPickers = () => {
   _nodesPicker = new Tabulator(nodesEl, {
     ...tallOpts,
     data: _nodesPickerData(),
+    placeholder: tablePlaceholder,  // the Nodes table's
     rowFormatter: (row) => {
       focusableRow(row);
       const isSel = row.getData().id === _highlightedNodeId;

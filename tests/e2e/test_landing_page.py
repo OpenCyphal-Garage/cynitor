@@ -4485,6 +4485,27 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: an empty picker says why, and what to do, in the tab's own text")
+async def _(page):
+    server = _RecordServer()
+    await record_open(page, server, can=False)
+    try:
+        said = """['recSubjectsPicker', 'recNodesPicker'].map((id) =>
+            el(id).querySelector('.tabulator-placeholder').innerText.replace(/\\s+/g, ' ').trim())"""
+        down = await page.evaluate(said)
+        assert all("Connect a CAN interface" in words for words in down), f"With CAN down, the pickers say {down}"
+        await page.evaluate("state.canConnected = true; _refreshPickerTables();")
+        quiet = await page.evaluate(said)
+        assert quiet[0].startswith("Waiting for traffic") and quiet[1].startswith("Waiting for nodes"), \
+            f"With CAN up and nothing sent yet, they say {quiet}"
+        drawn = await page.evaluate("""(() => { const style = getComputedStyle(
+            el('recSelectionPicker').querySelector('.tabulator-placeholder-contents'));
+            return [parseFloat(style.fontSize) / parseFloat(getComputedStyle(document.documentElement).fontSize), style.fontWeight]; })()""")
+        assert drawn == [0.8125, "400"], f"An empty selection's words are {drawn[0]}rem, weight {drawn[1]}"
+    finally:
+        await record_close(page, server)
+
+
 @test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
 async def _(page):
     try:

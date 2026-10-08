@@ -7665,6 +7665,13 @@ body.dsdl-resizing-row {
   padding-right: 0.5rem;
 }
 
+/* An empty picker's words: the tab's muted text, not Tabulator's 20 px bold. */
+.record-picker.tabulator .tabulator-tableholder .tabulator-placeholder .tabulator-placeholder-contents {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 400;
+}
+
 /* The record bar: what starts a recording, at the top of the tab. */
 .record-bar {
   display: flex;
