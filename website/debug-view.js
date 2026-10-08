@@ -46,7 +46,7 @@ const DebugView = (() => {
             <button id="fmPause" class="fm-btn" type="button" aria-pressed="false">Pause</button>
             <button id="fmClear" class="fm-btn" type="button">Clear</button>
             <input id="fmFilter" class="fm-filter" type="text" placeholder="Filter: id, node, port, hex…" aria-label="Filter captured frames" />
-            <span id="fmCounters" class="fm-counters" aria-live="polite"></span>
+            <span id="fmCounters" class="fm-counters"></span>
             <span id="fmStatus" class="fm-status" role="status" aria-live="polite"></span>
             <span class="fm-note">Capture forces loopback + accept-all filtering and stays on until CAN disconnect.</span>
           </div>

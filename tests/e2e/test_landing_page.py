@@ -4453,6 +4453,24 @@ async def _(page):
         await debug_close(page, server)
 
 
+@test("Debug: screen readers are not read the frame counters on every batch")
+async def _(page):
+    server = _DebugServer()
+    await debug_open(page, server)
+    try:
+        await debug_start_capture(page)
+        await page.evaluate("""() => { window.e2eSaid = [];  // what live regions would read out
+            document.querySelectorAll('.frame-monitor [aria-live]:not([aria-live=off]), .frame-monitor [role=status]')
+                .forEach((node) => new MutationObserver(() => e2eSaid.push(node.id))
+                    .observe(node, {childList: true, characterData: true, subtree: true})); }""")
+        for first in range(0, 25, 5):
+            await debug_frames_come(page, server, range(first, first + 5))
+        said = await page.evaluate("e2eSaid")
+        assert not said, f"In 5 batches of frames, live regions changed {len(said)} times: {sorted(set(said))}"
+    finally:
+        await debug_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
