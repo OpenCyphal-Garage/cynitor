@@ -3910,6 +3910,32 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: Edit limits shows a recording's own limits, and sends only what is changed")
+async def _(page):
+    server = _RecordServer([
+        _recording(1, "no limits", live=True, max_length_seconds=None, max_events=None, stop_on_limit=False),
+        _recording(2, "ten minutes", live=True, max_length_seconds=600.0)])
+    await record_open(page, server)
+    limits = ("max_length_seconds", "max_events", "stop_on_limit")
+    try:
+        for rid in (1, 2):  # opened and applied as it is, nothing changes
+            before = {key: server.recordings[rid][key] for key in limits}
+            await page.locator(f'.record-card[data-id="{rid}"] [data-action="edit-limits"]').click()
+            shown = await page.evaluate("[el('recEditLength'), el('recEditMaxEvents')].map(s => s.selectedOptions[0].text)")
+            await page.locator("#recEditApply").click()
+            await page.wait_for_timeout(500)
+            after = {key: server.recordings[rid][key] for key in limits}
+            assert after == before, f"The dialog showed {shown} for {before}; Apply made it {after}"
+        await page.locator('.record-card[data-id="1"] [data-action="edit-limits"]').click()
+        await page.locator("#recEditMaxEvents").select_option("10000")
+        await page.locator("#recEditApply").click()
+        await page.wait_for_timeout(500)
+        patches = [body for method, _, body in server.requests if method == "PATCH"]
+        assert patches == [{"max_events": 10000}], f"Requests sent: {patches}"
+    finally:
+        await record_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

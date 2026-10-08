@@ -644,12 +644,21 @@ const _ensureEditLimitsModal = () => {
   return backdrop;
 };
 
+// The recording's own limit first when the list lacks it (none at all, or a
+// length set some other way), so that the dialog shows what it has.
+const _limitOptionsHtml = (options, current, label) => {
+  const value = current ?? '';
+  const listed = options.some((o) => o.value === value);
+  return _buildOptionsHtml(listed ? options
+    : [{ label: value === '' ? 'No limit' : label(value), value }, ...options], value);
+};
+
 const openEditLimitsModal = (rec) => {
   _ensureEditLimitsModal();
   _editLimitsRecId = rec.id;
   el('recEditLimitsTitle').textContent = `Edit limits — ${rec.name}`;
-  el('recEditLength').innerHTML = _buildOptionsHtml(LENGTH_OPTIONS, rec.max_length_seconds || LENGTH_OPTIONS[1].value);
-  el('recEditMaxEvents').innerHTML = _buildOptionsHtml(EVENTS_OPTIONS, rec.max_events || EVENTS_OPTIONS[3].value);
+  el('recEditLength').innerHTML = _limitOptionsHtml(LENGTH_OPTIONS, rec.max_length_seconds, _humanDuration);
+  el('recEditMaxEvents').innerHTML = _limitOptionsHtml(EVENTS_OPTIONS, rec.max_events, (n) => n.toLocaleString());
   el('recEditStopOnLimit').checked = !!rec.stop_on_limit;
   _editLimitsModalEl.classList.remove('hidden');
 };
@@ -662,11 +671,20 @@ const closeEditLimitsModal = () => {
 const applyEditLimits = async () => {
   const id = _editLimitsRecId;
   if (id == null) return;
-  const body = {
-    max_length_seconds: Number(el('recEditLength').value),
-    max_events: Number(el('recEditMaxEvents').value),
-    stop_on_limit: el('recEditStopOnLimit').checked,
-  };
+  // Only what was changed: the backend keeps a limit it is not sent, and
+  // cannot take one away, so "No limit" left alone stays.
+  const rec = state.recordings.find((r) => r.id === id) || {};
+  const length = el('recEditLength').value;
+  const events = el('recEditMaxEvents').value;
+  const stopOnLimit = el('recEditStopOnLimit').checked;
+  const body = {};
+  if (length !== String(rec.max_length_seconds ?? '')) body.max_length_seconds = Number(length);
+  if (events !== String(rec.max_events ?? '')) body.max_events = Number(events);
+  if (stopOnLimit !== !!rec.stop_on_limit) body.stop_on_limit = stopOnLimit;
+  if (!Object.keys(body).length) {
+    closeEditLimitsModal();
+    return;
+  }
   try {
     await requestJson(`/api/recordings/${id}`, {
       method: 'PATCH',
