@@ -4414,6 +4414,31 @@ async def _(page):
         await debug_close(page, server)
 
 
+@test("Debug: the frame filter shows the same rows whenever it is typed, and says when none match")
+async def _(page):
+    server = _DebugServer()
+    await debug_open(page, server)
+    try:
+        await debug_start_capture(page)
+        await page.locator("#fmFilter").fill("n42")
+        for first in range(0, 6000, 250):  # one frame in a hundred from node 42, in the backend's batches
+            server.capture([_can_frame(n, src=42 if n % 100 == 0 else 7) for n in range(first, first + 250)])
+            server.flush()
+        await page.wait_for_timeout(800)
+        live = len(await page.evaluate(DEBUG_ROWS))
+        await page.locator("#fmFilter").press("End")
+        await page.locator("#fmFilter").press("Space")  # the same filter, typed again
+        await page.wait_for_timeout(300)
+        again = len(await page.evaluate(DEBUG_ROWS))
+        await page.locator("#fmFilter").fill("no such frame")
+        said = await page.locator("#fmEmpty").inner_text()
+        assert live == again and said == "No frames match the filter.", \
+            f"Filtered on n42, {live} rows as the frames came and {again} once typed again; " \
+            f"a filter nothing matches says {said!r}"
+    finally:
+        await debug_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

@@ -13,6 +13,7 @@
 const DebugView = (() => {
   const POLL_MS = 1000;
   const MAX_ROWS = 1000; // cap rendered frame rows to bound DOM size
+  const MAX_KEPT = 5000; // frames kept for the filter, so a rare frame is still found
 
   let pollTimer = null;
   let prevStats = null;   // previous transport statistics sample (for rates)
@@ -24,6 +25,7 @@ const DebugView = (() => {
   let filterText = '';    // lowercased substring filter
   let rows = [];          // recent frames, newest first
   let pending = [];       // frames that came while paused, newest first: shown on Resume
+  let lastSeq = 0;        // frames are numbered as they come, for trimming the table
   let captureStats = null;
 
   const body = () => el('debugBody');
@@ -225,7 +227,7 @@ const DebugView = (() => {
     } else {
       transfer = '<span class="fm-foreign-tag">foreign</span>';
     }
-    return `<tr class="fm-row${f.cyphal ? '' : ' fm-foreign'}">
+    return `<tr class="fm-row${f.cyphal ? '' : ' fm-foreign'}" data-seq="${f.seq}">
       <td class="fm-time">${escapeHtml(fmtTime(f.ts))}</td>
       <td><span class="fm-dir ${dirCls}">${f.dir === 'tx' ? 'TX' : 'RX'}</span></td>
       <td class="fm-id">${escapeHtml(f.id)}</td>
@@ -242,9 +244,9 @@ const DebugView = (() => {
     const hasRows = tbody.children.length > 0;
     empty.classList.toggle('hidden', hasRows);
     if (!hasRows) {
-      empty.textContent = captureOn
-        ? 'Waiting for frames…'
-        : 'Capture is off — click "Start capture" to inspect raw frames.';
+      empty.textContent = rows.length ? 'No frames match the filter.'
+        : captureOn ? 'Waiting for frames…'
+          : 'Capture is off — click "Start capture" to inspect raw frames.';
     }
   };
 
@@ -279,19 +281,29 @@ const DebugView = (() => {
     updateEmpty();
   };
 
+  // Frames as the server sends them (oldest first), numbered, newest first.
+  const numbered = (frames) => {
+    for (const f of frames) f.seq = ++lastSeq;
+    return frames.slice().reverse();
+  };
+
   const appendBatch = (frames) => {
     const tbody = el('fmRows');
     if (!tbody || !frames || !frames.length) return;
-    const newest = frames.slice().reverse(); // server batch is oldest→newest
+    const newest = numbered(frames);
     if (paused) {  // kept for Resume; the table stays as it is
-      pending = newest.concat(pending).slice(0, MAX_ROWS);
+      pending = newest.concat(pending).slice(0, MAX_KEPT);
       return;
     }
-    rows = newest.concat(rows);
-    if (rows.length > MAX_ROWS) rows.length = MAX_ROWS;
-    const html = newest.filter(matchesFilter).map(rowHtml).join('');
+    rows = newest.concat(rows).slice(0, MAX_KEPT);
+    const html = newest.filter(matchesFilter).slice(0, MAX_ROWS).map(rowHtml).join('');
     if (html) tbody.insertAdjacentHTML('afterbegin', html);
-    while (tbody.children.length > MAX_ROWS) tbody.removeChild(tbody.lastChild);
+    // What a rebuild would show: the newest matches among the frames kept.
+    const oldestKept = rows[rows.length - 1].seq;
+    while (tbody.lastChild && (tbody.children.length > MAX_ROWS
+        || Number(tbody.lastChild.dataset.seq) < oldestKept)) {
+      tbody.lastChild.remove();
+    }
     updateEmpty();
   };
 
@@ -329,7 +341,7 @@ const DebugView = (() => {
     // The frames caught before this client subscribed come with the reply
     // (oldest first); the live stream carries on from there.
     if (captureOn && event.frames?.length && rows.length === 0) {
-      rows = event.frames.slice().reverse();
+      rows = numbered(event.frames);
       renderTableFromRows();
     }
     updateEmpty();
@@ -361,7 +373,7 @@ const DebugView = (() => {
       btn.setAttribute('aria-pressed', String(paused));
       btn.classList.toggle('active', paused);
       if (!paused && pending.length) {
-        rows = pending.concat(rows).slice(0, MAX_ROWS);
+        rows = pending.concat(rows).slice(0, MAX_KEPT);
         pending = [];
         renderTableFromRows();
       }
