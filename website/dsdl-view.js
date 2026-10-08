@@ -114,6 +114,25 @@ const DsdlView = (() => {
     }
   };
 
+  const _reloadTree = async () => {
+    _namespacesData = null;
+    _statusData = null;
+    try {
+      const [statusResp, nsResp] = await Promise.all([
+        requestJson('/api/dsdl/status'),
+        requestJson('/api/dsdl/namespaces'),
+      ]);
+      _statusData = statusResp;
+      _namespacesData = nsResp.namespaces;
+      _buildTelemetryIndex();
+      _renderTreeHeaders();
+      _renderTree();
+      _renderCustomTree();
+      _lockEditorIfCompiled();
+      if (_selectedType) _loadTypeDetail(_selectedType);
+    } catch {}
+  };
+
   const _statusChanged = (a, b) => {
     if (!a || !b) return true;
     return a.compiled !== b.compiled
@@ -1032,6 +1051,51 @@ const DsdlView = (() => {
     });
   };
 
+  const _confirmDeleteType = (fullName, compiled) => {
+    const panel = document.getElementById('dsdlDetail');
+    if (!panel) return;
+    panel.querySelector('.dsdl-confirm-bar')?.remove();
+    const bar = document.createElement('div');
+    bar.className = 'dsdl-inline-dialog dsdl-confirm-bar';
+    bar.innerHTML = `
+      <span class="dsdl-confirm-text">Delete <code class="dsdl-confirm-code">${escapeHtml(fullName)}</code>${compiled ? ' and its compiled code' : ''}?</span>
+      <button class="dsdl-dialog-ok dsdl-dialog-danger" id="dsdlDelOk">Delete</button>
+      <button class="dsdl-dialog-cancel" id="dsdlDelCancel" aria-label="Cancel delete">&times;</button>`;
+    panel.insertBefore(bar, panel.firstChild);
+    // The bar stays until the server answers: deleted, the type's pane goes
+    // with it; refused, the bar says why.
+    const ok = document.getElementById('dsdlDelOk');
+    ok?.addEventListener('click', async () => {
+      ok.disabled = true;
+      const refused = await _deleteType(fullName);
+      if (refused) {
+        ok.disabled = false;
+        _showDialogError(bar, refused);
+      }
+    });
+    document.getElementById('dsdlDelCancel')?.addEventListener('click', () => bar.remove());
+  };
+
+  // Deletes a custom type; returns why not when the server refuses.
+  const _deleteType = async (fullName) => {
+    try {
+      await requestJson(`/api/dsdl/custom/type/${encodeURIComponent(fullName)}`, { method: 'DELETE' });
+    } catch (err) {
+      return err.message;
+    }
+    if (_editorOpen && _editorMode === 'edit' && _editPrefill?.full_name === fullName) {
+      _closeEditor();
+      _editorMode = 'new';
+      _editPrefill = null;
+    }
+    _selectedType = null;
+    _lastDetailData = null;
+    _saveDsdlState();
+    const panel = document.getElementById('dsdlDetail');
+    if (panel) panel.innerHTML = _placeholderHtml;
+    await _reloadTree();
+  };
+
   // ------------------------------------------------------------------
   // Namespace dialog
   // ------------------------------------------------------------------
@@ -1144,51 +1208,6 @@ const DsdlView = (() => {
       source_text: typeData.source_text || '',
       fixed_port_id: typeData.fixed_port_id,
     });
-  };
-
-  const _confirmDeleteType = (fullName, compiled) => {
-    const panel = document.getElementById('dsdlDetail');
-    if (!panel) return;
-    panel.querySelector('.dsdl-confirm-bar')?.remove();
-    const bar = document.createElement('div');
-    bar.className = 'dsdl-inline-dialog dsdl-confirm-bar';
-    bar.innerHTML = `
-      <span class="dsdl-confirm-text">Delete <code class="dsdl-confirm-code">${escapeHtml(fullName)}</code>${compiled ? ' and its compiled code' : ''}?</span>
-      <button class="dsdl-dialog-ok dsdl-dialog-danger" id="dsdlDelOk">Delete</button>
-      <button class="dsdl-dialog-cancel" id="dsdlDelCancel" aria-label="Cancel delete">&times;</button>`;
-    panel.insertBefore(bar, panel.firstChild);
-    // The bar stays until the server answers: deleted, the type's pane goes
-    // with it; refused, the bar says why.
-    const ok = document.getElementById('dsdlDelOk');
-    ok?.addEventListener('click', async () => {
-      ok.disabled = true;
-      const refused = await _deleteType(fullName);
-      if (refused) {
-        ok.disabled = false;
-        _showDialogError(bar, refused);
-      }
-    });
-    document.getElementById('dsdlDelCancel')?.addEventListener('click', () => bar.remove());
-  };
-
-  // Deletes a custom type; returns why not when the server refuses.
-  const _deleteType = async (fullName) => {
-    try {
-      await requestJson(`/api/dsdl/custom/type/${encodeURIComponent(fullName)}`, { method: 'DELETE' });
-    } catch (err) {
-      return err.message;
-    }
-    if (_editorOpen && _editorMode === 'edit' && _editPrefill?.full_name === fullName) {
-      _closeEditor();
-      _editorMode = 'new';
-      _editPrefill = null;
-    }
-    _selectedType = null;
-    _lastDetailData = null;
-    _saveDsdlState();
-    const panel = document.getElementById('dsdlDetail');
-    if (panel) panel.innerHTML = _placeholderHtml;
-    await _reloadTree();
   };
 
   const _openEditorEdit = async (typeData) => {
@@ -1538,25 +1557,6 @@ const DsdlView = (() => {
     } catch (err) {
       _showEditorStatus(err.message, true);
     }
-  };
-
-  const _reloadTree = async () => {
-    _namespacesData = null;
-    _statusData = null;
-    try {
-      const [statusResp, nsResp] = await Promise.all([
-        requestJson('/api/dsdl/status'),
-        requestJson('/api/dsdl/namespaces'),
-      ]);
-      _statusData = statusResp;
-      _namespacesData = nsResp.namespaces;
-      _buildTelemetryIndex();
-      _renderTreeHeaders();
-      _renderTree();
-      _renderCustomTree();
-      _lockEditorIfCompiled();
-      if (_selectedType) _loadTypeDetail(_selectedType);
-    } catch {}
   };
 
   const _lockEditorIfCompiled = () => {
