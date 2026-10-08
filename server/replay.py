@@ -136,8 +136,7 @@ class ReplayManager:
         except asyncio.CancelledError:
             pass
         finally:
-            self._task = None
-            self._notify_session_end()
+            self._task = None  # _run has said the session ended
             self.subscribers.clear()
 
     def _notify_session_end(self) -> None:
@@ -224,7 +223,8 @@ class ReplayManager:
         except Exception as exc:
             logger.error("Replay task crashed: %s", exc, exc_info=True)
         finally:
-            self._finished.set()
+            if not self._stop.is_set():  # played to the end, not stopped
+                self._finished.set()
             self._notify_session_end()
             if self._on_finish is not None:
                 try:

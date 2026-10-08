@@ -61,6 +61,14 @@ def _insert_event(db: Path, rec_id: int, t_unix: float, subject_id: int = 7509,
         )
 
 
+def _sentinels(queue: asyncio.Queue) -> list[dict]:
+    """The replay_ended frames waiting in a subscriber queue."""
+    frames = []
+    while not queue.empty():
+        frames.append(queue.get_nowait())
+    return [f for f in frames if f.get("type") == "replay_ended"]
+
+
 # ---------------------------------------------------------------------------
 # Row translation
 # ---------------------------------------------------------------------------
@@ -214,6 +222,18 @@ class TestControl:
         await mgr.stop()  # double stop → no-op
 
     @pytest.mark.asyncio
+    async def test_stop_says_once_that_it_was_stopped(self, replay_db):
+        # The dashboard closes a stopped replay, and keeps a finished one on screen.
+        for ts in range(10, 20):
+            _insert_event(replay_db, 1, t_unix=float(ts))
+        mgr = ReplayManager(replay_db, 1, speed=1.0)
+        sub = mgr.subscribe()
+        await mgr.start()
+        await asyncio.wait_for(sub.get(), 2.0)
+        await mgr.stop()
+        assert _sentinels(sub) == [{"type": "replay_ended", "recording_id": 1, "finished": False}]
+
+    @pytest.mark.asyncio
     async def test_seek_jumps_past_early_events(self, replay_db):
         # 10 events at t = 10..19. Seek to position 5s → first event seen is t=15.
         for ts in range(10, 20):
@@ -286,6 +306,20 @@ class TestAutoFinish:
             assert mgr.is_finished
         finally:
             await mgr.stop()
+
+    @pytest.mark.asyncio
+    async def test_natural_end_says_once_that_it_finished(self, replay_db):
+        _insert_event(replay_db, 1, 10.0)
+        _insert_event(replay_db, 1, 10.1)
+        mgr = ReplayManager(replay_db, 1, speed=50.0)
+        sub = mgr.subscribe()
+        await mgr.start()
+        for _ in range(40):
+            if mgr.is_finished:
+                break
+            await asyncio.sleep(0.05)
+        await mgr.stop()
+        assert _sentinels(sub) == [{"type": "replay_ended", "recording_id": 1, "finished": True}]
 
 
 # ---------------------------------------------------------------------------
