@@ -321,7 +321,7 @@ const _progressBarHtml = (label, pct, rightLabel, noLimit = false) => {
       <span class="rec-bar-label">${label}</span>
       <div class="rec-bar-track" role="progressbar" aria-label="${label}" aria-valuetext="${escapeHtml(rightLabel)}"
            aria-valuemin="0" aria-valuemax="100" aria-valuenow="${clamped.toFixed(0)}">
-        <div class="rec-bar-fill" style="width:${clamped}%"></div>
+        <div class="rec-bar-fill" style="--fill: ${clamped}%"></div>
       </div>
       <span class="rec-bar-right">${rightLabel}</span>
     </div>
@@ -871,7 +871,7 @@ const _initPickers = () => {
     rowFormatter: (row) => {
       focusableRow(row);
       const isSel = row.getData().id === _highlightedNodeId;
-      row.getElement().classList.toggle('rec-row-selected', isSel);
+      row.getElement().classList.toggle('selected-row', isSel);
     },
     columns: [
       { title: 'ID', field: 'id', width: 80, sorter: 'number' },

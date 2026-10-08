@@ -4387,6 +4387,44 @@ async def _(page):
         await record_close(page, server)
 
 
+# The Record tab's style rules that set a length in px other than a 1px line,
+# or set anything !important; and what its elements are styled with inline,
+# custom properties aside unless in px (as for the DSDL tab, INLINE_STYLING).
+RECORD_CSS_FAULTS = r"""() => {
+    // A style rule has cssRules too (nesting), and a shorthand using var() has
+    // no longhand values: the rules' own text is what is read.
+    const rules = [];
+    const walk = (list) => { for (const rule of list) {
+        if (rule instanceof CSSStyleRule) rules.push(rule);
+        if (rule.cssRules) walk(rule.cssRules); } };
+    for (const sheet of document.styleSheets) { try { walk(sheet.cssRules); } catch (e) { /* another origin */ } }
+    const ruleFaults = rules.filter((rule) => /record|rec-|rawlog/.test(rule.selectorText)
+            && /!important|(^|[^.\d])([2-9]|\d\d+)(\.\d+)?px/.test(rule.style.cssText))
+        .map((rule) => `${rule.selectorText} { ${rule.style.cssText} }`);
+    const inline = [...document.querySelectorAll('#recordContainer [style]')]
+        .filter((el) => !el.closest('.tabulator'))  // Tabulator sizes its own parts
+        .flatMap((el) => [...el.style]
+            .filter((prop) => !prop.startsWith('--') || el.style.getPropertyValue(prop).includes('px'))
+            .map((prop) => `${el.className} ${prop}: ${el.style.getPropertyValue(prop)}`));
+    return [...ruleFaults, ...inline];
+}"""
+
+
+@test("Record: the tab is styled by its CSS, in rem, without !important")
+async def _(page):
+    server = _RecordServer([_recording(1, "field test", live=True), _recording(2, "capped", auto_stopped=True,
+                                                                               max_events=1000, event_count=1000)])
+    await record_open(page, server)
+    try:
+        faults = await page.evaluate(RECORD_CSS_FAULTS)
+        assert not faults, "Styled in px, !important or inline:\n" + "\n".join(faults)
+        widths = await page.evaluate("""[...document.querySelectorAll('.record-card[data-id="2"] .rec-bar-fill')]
+            .map((fill) => Math.round(fill.getBoundingClientRect().width / fill.parentElement.getBoundingClientRect().width * 100))""")
+        assert widths[1] == 100, f"A recording at its events cap fills {widths[1]}% of its Events bar"
+    finally:
+        await record_close(page, server)
+
+
 @test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
 async def _(page):
     try:
