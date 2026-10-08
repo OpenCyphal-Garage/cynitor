@@ -3787,6 +3787,12 @@ class _RecordServer:
                                    filter=body.get("filter") or {}, max_length_seconds=body.get("max_length_seconds"),
                                    max_events=body.get("max_events"), stop_on_limit=bool(body.get("stop_on_limit")))
             return {"recording": recs[rid]}, 201
+        if path == "/api/recordings/quick":  # the last seconds of the history, saved: 42 events in them
+            rid, now = max(recs, default=0) + 1, time.time()
+            recs[rid] = _recording(rid, body["name"], start=now - body["last_seconds"], end_unix=now, event_count=42,
+                                   filter=body.get("filter") or {}, max_length_seconds=None, max_events=None,
+                                   stop_on_limit=False)
+            return {"recording": recs[rid]}, 201
         match = re.fullmatch(r"/api/recordings/(\d+)(/stop|/export)?", path)
         rec = recs.get(int(match[1])) if match else None
         if rec is None:
@@ -4170,6 +4176,23 @@ async def _(page):
             f"Recordings started: {names}"
         left = [await page.locator(f).input_value() for f in ("#recName", "#recNotes")]
         assert left == ["", ""], f"After a start the name and notes read {left}"
+    finally:
+        await record_close(page, server)
+
+
+@test("Record: Save the last minutes keeps what the bus sent before it was pressed")
+async def _(page):
+    server = _RecordServer()
+    await record_open(page, server)
+    try:
+        assert await page.locator("#recSaveLast").count() == 1, "The record bar has no Save the last"
+        await page.locator("#recSaveLastSeconds").select_option("300")
+        await page.locator("#recSaveLast").click()
+        await page.wait_for_selector(".record-card", timeout=WAIT_MS)
+        saves = [body for method, path, body in server.requests if (method, path) == ("POST", "/api/recordings/quick")]
+        assert len(saves) == 1 and saves[0]["last_seconds"] == 300, f"Saves asked for: {saves}"
+        card = await page.locator(".record-card").first.inner_text()
+        assert "5m 0s" in card and "42" in card, f"The saved recording's card reads {card!r}"
     finally:
         await record_close(page, server)
 

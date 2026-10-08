@@ -7620,8 +7620,17 @@ body.dsdl-resizing-row {
   width: auto;  /* not the full width inputs take */
 }
 
-.record-bar .btn-primary {
+.record-bar .btn-primary,
+.record-bar .btn-secondary {
   min-height: 2rem;
+}
+
+/* Save the last: kept apart from Start, at the bar's far end. */
+.record-bar-save {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  margin-left: auto;
 }
 
 .record-limit-row {

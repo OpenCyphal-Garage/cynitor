@@ -35,6 +35,14 @@ const EVENTS_OPTIONS = [
   { label: '10M', value: 10_000_000 },
 ];
 
+// How far back Save the last reaches into the history buffer.
+const SAVE_LAST_OPTIONS = [
+  { label: '1 min', value: 60 },
+  { label: '5 min', value: 300 },
+  { label: '15 min', value: 900 },
+  { label: '1 hour', value: 3600 },
+];
+
 const PICKER_REFRESH_MS = 2000;
 
 let _recordPollTimer = null;
@@ -501,6 +509,8 @@ const renderRecordStart = () => {
   const why = !state.dashboardConnected ? 'Connect to the backend to record.'
     : !state.canConnected ? 'Connect a CAN interface to record.' : '';
   button.disabled = _starting || Boolean(why);
+  // Saving from the history needs only the backend: the bus may have gone since.
+  el('recSaveLast').disabled = _starting || !state.dashboardConnected;
   el('recStartWhy').textContent = why;
 };
 
@@ -521,32 +531,49 @@ const _clearNameAndNotes = () => {
   saveSettings();
 };
 
-const startRecording = async () => {
-  const draft = state.recordFilterDraft;
-  const name = draft.name.trim() || _timeName();
+// Posts a new recording to `path`, one at a time; `said` words the toast
+// from the recording the backend answers with.
+const _postRecording = async (action, path, body, said) => {
   _starting = true;
   renderRecordStart();
   try {
-    await requestJson('/api/recordings', {
-      method: 'POST',
-      body: JSON.stringify({
-        name,
-        filter: _draftFilter(),
-        notes: draft.notes || undefined,
-        max_length_seconds: draft.max_length_seconds,
-        max_events: draft.max_events,
-        stop_on_limit: !!draft.stop_on_limit,
-      }),
-    });
-    showToast(`Recording "${name}"`, 'success');
+    const data = await requestJson(path, { method: 'POST', body: JSON.stringify(body) });
+    showToast(said(data.recording || {}), 'success');
     _clearNameAndNotes();
     await fetchRecordings();
   } catch (e) {
-    showToast(`Start failed: ${e.message}`, 'error');
+    showToast(`${action} failed: ${e.message}`, 'error');
   } finally {
     _starting = false;
     renderRecordStart();
   }
+};
+
+const startRecording = () => {
+  const draft = state.recordFilterDraft;
+  const name = draft.name.trim() || _timeName();
+  return _postRecording('Start', '/api/recordings', {
+    name,
+    filter: _draftFilter(),
+    notes: draft.notes || undefined,
+    max_length_seconds: draft.max_length_seconds,
+    max_events: draft.max_events,
+    stop_on_limit: !!draft.stop_on_limit,
+  }, () => `Recording "${name}"`);
+};
+
+// What the bus sent in the last minutes, kept from the history buffer: for
+// when something has just happened that no recording was running for.
+const saveLastMinutes = () => {
+  const draft = state.recordFilterDraft;
+  const select = el('recSaveLastSeconds');
+  const name = draft.name.trim() || `${_timeName()} (last ${select.selectedOptions[0].text})`;
+  return _postRecording('Save', '/api/recordings/quick', {
+    name,
+    last_seconds: Number(select.value),
+    filter: _draftFilter(),
+    notes: draft.notes || undefined,
+  }, (rec) => `Saved "${name}": ${(rec.event_count ?? 0).toLocaleString()} events`);
 };
 
 const stopRecording = async (id) => {
@@ -871,6 +898,13 @@ const _renderViewShell = (container) => {
             <span>Stop when limit hit</span>
           </label>
           <button id="recStart" class="btn-primary">Start recording</button>
+          <div class="record-bar-save">
+            <label class="record-field">
+              <span>Save the last</span>
+              <select id="recSaveLastSeconds">${_buildOptionsHtml(SAVE_LAST_OPTIONS, 300)}</select>
+            </label>
+            <button id="recSaveLast" class="btn-secondary">Save</button>
+          </div>
         </div>
         <div class="record-disk-hint" id="recDiskHint"></div>
         <p class="record-start-why" id="recStartWhy" role="status"></p>
@@ -931,6 +965,7 @@ const _bindBuilderInputs = () => {
   });
 
   el('recStart').addEventListener('click', startRecording);
+  el('recSaveLast').addEventListener('click', saveLastMinutes);
   renderRecordStart();
 };
 
