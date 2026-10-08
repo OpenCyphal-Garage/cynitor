@@ -8093,10 +8093,6 @@ body.dsdl-resizing-row {
   word-break: break-word;
 }
 
-.debug-stat.stat-ok .debug-stat-val {
-  color: var(--ok);
-}
-
 .debug-stat.stat-warn .debug-stat-val {
   color: var(--warn);
 }
@@ -8144,7 +8140,7 @@ body.dsdl-resizing-row {
 }
 
 .fm-btn.active {
-  color: #fff;
+  color: var(--on-accent);
   background: var(--accent);
   border-color: var(--accent);
 }
@@ -8155,7 +8151,7 @@ body.dsdl-resizing-row {
 }
 
 .fm-btn-primary.active {
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .fm-filter {
@@ -8175,6 +8171,11 @@ body.dsdl-resizing-row {
   font-family: var(--mono);
   font-size: 0.6875rem;
   color: var(--muted);
+}
+
+/* Frames the stream lost: the one count that is not routine. */
+.fm-dropped {
+  color: var(--warn);
 }
 
 .fm-status {
@@ -8249,8 +8250,9 @@ body.dsdl-resizing-row {
   font-weight: 600;
 }
 
-.fm-dir.fm-rx { color: var(--accent); background: var(--accent-muted); }
-.fm-dir.fm-tx { color: var(--ok); background: rgba(26, 127, 55, 0.12); }
+/* Received is the usual, so plain; Cynitor's own frames stand out. */
+.fm-dir.fm-rx { color: var(--muted); background: var(--surface-3); }
+.fm-dir.fm-tx { color: var(--ok); background: var(--ok-muted); }
 
 .fm-kind {
   display: inline-block;

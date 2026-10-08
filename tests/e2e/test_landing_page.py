@@ -4613,6 +4613,7 @@ class _DebugServer:
         self.can = True             # a CAN session is up
         self.capturing = False      # its transport capture is on (it stays on until CAN disconnects)
         self.link = VCAN_LINK       # what the transport diagnostics say of the controller
+        self.dropped = 0            # frames the stream lost to a full queue
 
     def _transport(self):
         frames_in = 1000 + int(100 * (time.monotonic() - self.started))
@@ -4643,7 +4644,7 @@ class _DebugServer:
 
     def _stats(self):
         n = len(self.ring)
-        return {"active": True, "captured": n, "rx": n, "tx": 0, "cyphal": n, "foreign": 0, "dropped": 0}
+        return {"active": True, "captured": n, "rx": n, "tx": 0, "cyphal": n, "foreign": 0, "dropped": self.dropped}
 
     def capture(self, frames):
         """Frames the bus carried: into the ring, and queued for a subscribed dashboard."""
@@ -5006,6 +5007,37 @@ async def _(page):
             said: document.querySelector('#debugBody .debug-stale-note')?.textContent || ''})""")
         assert kept == "vcan0" and stale["cards"] == 3 and "failed" in stale["said"], \
             f"Selected 'vcan0', a poll later the selection is {kept!r}; after a failed poll: {stale}"
+    finally:
+        await debug_close(page, server)
+
+
+@test("Debug: colour marks only the unusual, in the theme's own colours: own frames, lost frames, a bus in trouble")
+async def _(page):
+    server = _DebugServer()
+    server.link = dict(VCAN_LINK, operstate="up", state="ERROR-ACTIVE")  # a controller doing fine
+    server.dropped = 3
+    await debug_open(page, server)
+    try:
+        await page.evaluate("document.documentElement.setAttribute('data-theme', 'dark')")
+        await debug_start_capture(page)
+        server.capture([_can_frame(1), dict(_can_frame(2), dir="tx")])
+        server.flush()
+        await page.wait_for_timeout(1300)  # and the diagnostics have answered
+        seen = await page.evaluate("""() => {
+            const token = (name) => { const probe = document.createElement('span');
+                probe.style.color = `var(${name})`; document.body.append(probe);
+                const color = getComputedStyle(probe).color; probe.remove(); return color; };
+            const style = (selector) => getComputedStyle(document.querySelector(selector));
+            const state = [...document.querySelectorAll('#debugBody .debug-stat')]
+                .find(row => row.textContent.includes('CAN state')).querySelector('.debug-stat-val');
+            const dropped = document.querySelector('#fmCounters .fm-dropped');
+            return {
+                'own frames: the dark theme\\'s ok-muted': style('.fm-dir.fm-tx').backgroundColor === token('--ok-muted'),
+                'frames received: plain': style('.fm-dir.fm-rx').color === token('--muted'),
+                'ERROR-ACTIVE: plain': getComputedStyle(state).color === token('--text-bright'),
+                'dropped: warning': !!dropped && getComputedStyle(dropped).color === token('--warn'),
+            }; }""")
+        assert all(seen.values()), f"Each colour as it should be: {seen}"
     finally:
         await debug_close(page, server)
 

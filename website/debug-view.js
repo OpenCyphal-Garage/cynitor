@@ -65,10 +65,10 @@ const DebugView = (() => {
 
   // ── Section 1: transport diagnostics ──────────────────────────────────
 
+  // Colour for a controller in trouble; ERROR-ACTIVE, the normal state, has none.
   const stateStatus = (state_) => {
     if (!state_) return null;
     const s = String(state_).toUpperCase();
-    if (s === 'ERROR-ACTIVE') return 'ok';
     if (s === 'ERROR-WARNING' || s === 'ERROR-PASSIVE') return 'warn';
     if (s === 'BUS-OFF' || s === 'STOPPED') return 'error';
     return null;
@@ -288,9 +288,13 @@ const DebugView = (() => {
     if (!node) return;
     const c = captureStats;
     if (!c) { node.textContent = ''; return; }
-    let text = `captured ${c.captured} · rx ${c.rx} · tx ${c.tx} · foreign ${c.foreign}`;
-    if (c.dropped) text += ` · dropped ${c.dropped}`;
-    node.textContent = text;
+    node.textContent = `captured ${c.captured} · rx ${c.rx} · tx ${c.tx} · foreign ${c.foreign}`;
+    if (c.dropped) {  // frames lost before they reached this table
+      const lost = document.createElement('span');
+      lost.className = 'fm-dropped';
+      lost.textContent = `dropped ${c.dropped}`;
+      node.append(' · ', lost);
+    }
   };
 
   const setStatus = (msg) => {
