@@ -16,6 +16,7 @@ const DebugView = (() => {
 
   let pollTimer = null;
   let prevStats = null;   // previous transport statistics sample (for rates)
+  let prevAt = 0;         // when it arrived (performance.now())
 
   // Frame-monitor state
   let captureOn = false;  // are we currently forwarding frames to this client?
@@ -86,10 +87,12 @@ const DebugView = (() => {
       <div class="debug-grid">${rowsHtml.join('')}</div>
     </section>`;
 
-  const rateSuffix = (cur, prev) => {
-    if (prev == null || cur == null) return '';
+  // The counter's growth per second since the previous sample, which a
+  // late poll may have taken more than a second ago.
+  const rateSuffix = (cur, prev, seconds) => {
+    if (prev == null || cur == null || !(seconds > 0)) return '';
     const d = cur - prev;
-    return d < 0 ? '' : `  (+${d}/s)`;
+    return d < 0 ? '' : `  (+${Math.round(d / seconds)}/s)`;
   };
 
   const renderDiagnostics = (data) => {
@@ -105,6 +108,8 @@ const DebugView = (() => {
     const proto = data.protocol || {};
     const stats = data.statistics || {};
     const link = data.link || {};
+    const now = performance.now();
+    const seconds = (now - prevAt) / 1000;
 
     const protoCard = card('Transport / MTU', [
       statRow('Interface', data.interface),
@@ -120,11 +125,11 @@ const DebugView = (() => {
     const effPct = stats.media_acceptance_filtering_efficiency != null
       ? `${Math.round(stats.media_acceptance_filtering_efficiency * 100)}%` : null;
     const statsCard = card('Frame statistics', [
-      statRow('Frames in', stats.in_frames != null ? `${stats.in_frames}${rateSuffix(stats.in_frames, prevStats?.in_frames)}` : null),
+      statRow('Frames in', stats.in_frames != null ? `${stats.in_frames}${rateSuffix(stats.in_frames, prevStats?.in_frames, seconds)}` : null),
       statRow('— Cyphal frames', stats.in_frames_cyphal),
       statRow('— Accepted (for us)', stats.in_frames_cyphal_accepted),
       statRow('Frames errored', stats.in_frames_errored, stats.in_frames_errored > 0 ? 'error' : null),
-      statRow('Frames out', stats.out_frames != null ? `${stats.out_frames}${rateSuffix(stats.out_frames, prevStats?.out_frames)}` : null),
+      statRow('Frames out', stats.out_frames != null ? `${stats.out_frames}${rateSuffix(stats.out_frames, prevStats?.out_frames, seconds)}` : null),
       statRow('Out timed out', stats.out_frames_timeout, stats.out_frames_timeout > 0 ? 'warn' : null),
       statRow('Filtering efficiency', effPct),
       statRow('Lost loopback', stats.lost_loopback_frames, stats.lost_loopback_frames ? 'warn' : null),
@@ -154,6 +159,7 @@ const DebugView = (() => {
 
     target.innerHTML = protoCard + statsCard + busCard;
     prevStats = stats;
+    prevAt = now;
   };
 
   const renderDiagError = (message) => {
@@ -348,6 +354,8 @@ const DebugView = (() => {
   // ── Lifecycle ──────────────────────────────────────────────────────────
 
   const init = () => {
+    // Every dashboard connect calls this again: one poller, not one per call.
+    if (pollTimer) window.clearInterval(pollTimer);
     renderSkeleton();
     wireControls();
     prevStats = null;

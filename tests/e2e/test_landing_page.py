@@ -4064,6 +4064,128 @@ async def _(page):
         await record_close(page, server)
 
 
+# ── Debug tab ──
+#
+# _DebugServer answers /api/* as the backend does with a CAN session up on
+# vcan0, where frames come in at exactly 100 a second, so a rate the tab
+# shows can be checked; it also plays the server end of /ws. Each test opens
+# the tab on a freshly loaded page.
+
+# What get_can_link_diagnostics finds on a vcan: no controller to report on.
+VCAN_LINK = {"operstate": "unknown", "state": None, "bitrate": None, "dbitrate": None, "berr_tx": None,
+             "berr_rx": None, "restart_ms": None, "restarts": None, "bus_errors": None, "arbitration_lost": None,
+             "error_warning": None, "error_passive": None, "bus_off": None}
+
+
+class _DebugServer:
+    """The backend's /api/* and /ws for the Debug tab, over a CAN session on vcan0."""
+
+    def __init__(self):
+        self.started = time.monotonic()
+        self.requests = []          # (monotonic time, path)
+        self.answers = {}           # path -> (JSON, status) given instead of the usual answer
+        self.ws = None              # the server end of the dashboard's socket
+        self.received = []          # what the dashboard sent on it
+
+    def _transport(self):
+        frames_in = 1000 + int(100 * (time.monotonic() - self.started))
+        stats = {"in_frames": frames_in, "in_frames_cyphal": frames_in, "in_frames_cyphal_accepted": frames_in,
+                 "in_frames_errored": 0, "in_frames_loopback": 0, "out_frames": 40, "out_frames_timeout": 0,
+                 "out_frames_loopback": 0, "media_acceptance_filtering_efficiency": 1.0, "lost_loopback_frames": 0}
+        return {"connected": True, "interface": "vcan0", "statistics": stats, "capture_active": False,
+                "protocol": {"mtu": 7, "transfer_id_modulo": 32, "max_nodes": 128, "is_fd": False},
+                "link": VCAN_LINK, "bus_utilization": 12.0}
+
+    def _answer(self, path):
+        if path in self.answers:
+            return self.answers[path]
+        if path == "/api/status":
+            return {"status": "running", "can_interface": "vcan0", "can_bitrate": None, "can_data_bitrate": None,
+                    "can_fd": False, "available_interfaces": ["vcan0"], "available_adapters": [
+                        {"interface": "vcan0", "label": "vcan0 (SocketCAN)", "needs_bitrate": False}],
+                    "bus_utilization": 12.0, "dropped": None, "last_error": None, "cyphal_v11": None}, 200
+        if path == "/api/can/transport":
+            return self._transport(), 200
+        quiet = {"/api/nodes": {"node_count": 0, "nodes": {}}, "/api/replay/status": {"active": False},
+                 "/api/recordings": {"recordings": []}, "/api/rawlogs": {"active": None, "logs": []},
+                 "/api/can/capture": {"active": False, "stats": None, "frames": []}}
+        return (quiet[path], 200) if path in quiet else ({"error": "Not found"}, 404)
+
+    async def handle(self, route):
+        path = unquote(urlparse(route.request.url).path)
+        self.requests.append((time.monotonic(), path))
+        answer, status = self._answer(path)
+        await route.fulfill(json=answer, status=status, headers={"Access-Control-Allow-Origin": "*"})
+
+    def on_socket(self, ws):
+        self.ws = ws
+        ws.on_message(lambda message: self.received.append(json.loads(message)))
+
+    def polls(self, since):
+        """How often the tab asked for the diagnostics since `since` (monotonic time)."""
+        return sum(1 for t, path in self.requests if path == "/api/can/transport" and t >= since)
+
+
+# The page's /ws reaches the server of the Debug test that runs. Playwright
+# cannot take a socket route back, so it is made once and follows this.
+_debug_server = None
+_debug_socket_routed = False
+
+
+async def debug_open(page, server, restore=False, connected=True):
+    """The Debug tab on a freshly loaded page, served by `server`. With restore
+    the page loads on the tab with a connected dashboard saved, as after a
+    reload; otherwise it loads on Nodes, connects (or not), and opens the tab."""
+    global _debug_server, _debug_socket_routed
+    _debug_server = server
+    if not _debug_socket_routed:
+        _debug_socket_routed = True
+        await page.route_web_socket("**/ws**", lambda ws: _debug_server and _debug_server.on_socket(ws))
+    await page.route("**/api/**", server.handle)
+    await page.evaluate(f"""() => {{ state.dashboardConnected = {json.dumps(restore)};
+        state.activeView = {json.dumps('debug' if restore else 'nodes')}; _writeSettingsNow(); }}""")
+    await page.reload(wait_until="load")
+    if not restore:
+        if connected:
+            await page.locator("#connectDashboardBtn").click()
+            await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        await page.evaluate("switchView('debug')")
+    if restore or connected:
+        await page.wait_for_function("state.ws?.readyState === 1", timeout=5000)
+
+
+async def debug_close(page, server):
+    global _debug_server
+    await page.evaluate("() => { switchView('nodes'); disconnectAll(); }")
+    _debug_server = None
+    await page.unroute("**/api/**", server.handle)
+
+
+# The value a diagnostics card shows for `label`.
+DEBUG_STAT = """(label) => [...document.querySelectorAll('#debugBody .debug-stat')]
+    .find(row => row.querySelector('.debug-stat-label').textContent === label)
+    ?.querySelector('.debug-stat-val').textContent"""
+
+
+@test("Debug: a page reopened on the tab asks once a second, and shows the bus's own frame rate")
+async def _(page):
+    server = _DebugServer()
+    await debug_open(page, server, restore=True)
+    try:
+        await page.wait_for_selector("#debugBody .debug-card", timeout=WAIT_MS)
+        await page.wait_for_timeout(500)  # the connect that follows the reload has run
+        since, read = time.monotonic(), []
+        for _ in range(10):
+            await page.wait_for_timeout(300)
+            read.append(await page.evaluate(DEBUG_STAT, "Frames in"))
+        polls = server.polls(since)
+        rates = [int(m[1]) for text in read if (m := re.search(r"\(\+(\d+)/s\)", text or ""))]
+        assert polls <= 4 and rates and all(90 <= rate <= 110 for rate in rates), \
+            f"In 3 s the tab asked {polls} times; at 100 frames/s, Frames in read {sorted(set(read))}"
+    finally:
+        await debug_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
