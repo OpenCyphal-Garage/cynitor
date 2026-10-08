@@ -4374,6 +4374,31 @@ async def _(page):
         await debug_close(page, server)
 
 
+async def debug_frames_come(page, server, numbers):
+    server.capture([_can_frame(n) for n in numbers])
+    server.flush()
+    await page.wait_for_timeout(300)
+
+
+@test("Debug: what comes while the frame table is paused shows on Resume")
+async def _(page):
+    server = _DebugServer()
+    await debug_open(page, server)
+    try:
+        await debug_start_capture(page)
+        await debug_frames_come(page, server, range(5))
+        await page.locator("#fmPause").click()
+        await debug_frames_come(page, server, range(5, 10))
+        held = len(await page.evaluate(DEBUG_ROWS))
+        await page.locator("#fmPause").click()  # Resume
+        await debug_frames_come(page, server, range(10, 15))
+        shown = await page.evaluate(DEBUG_ROWS)
+        assert held == 5 and len(shown) == 15 and shown == sorted(shown, reverse=True), \
+            f"Paused, the table held {held} rows (5 came before Pause); after Resume it shows {len(shown)} of the 15"
+    finally:
+        await debug_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
