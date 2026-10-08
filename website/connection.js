@@ -294,6 +294,7 @@ const connectWs = () => {
   };
 
   state.ws.onclose = () => {
+    DebugView.onSocketClosed();
     updateSemaphores();
     if (state.userClosedWs) {
       return;

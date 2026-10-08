@@ -340,6 +340,16 @@ const DebugView = (() => {
     updateEmpty();
   };
 
+  // The socket closed (CAN or the dashboard disconnected, the backend went
+  // away): the backend forgets what this client asked for, so capture stops.
+  const onSocketClosed = () => {
+    if (!captureOn) return;
+    captureOn = false;
+    setStatus('Capture stopped: the connection to the backend closed.');
+    setToggleLabel();
+    updateEmpty();
+  };
+
   const onFrames = (event) => {
     // A batch can land just after the user leaves the tab; skip rendering then.
     if (state.activeView !== 'debug') return;
@@ -398,5 +408,5 @@ const DebugView = (() => {
     prevStats = null;
   };
 
-  return { init, hide, onFrames, onCaptureStatus };
+  return { init, hide, onFrames, onCaptureStatus, onSocketClosed };
 })();

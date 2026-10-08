@@ -4119,7 +4119,16 @@ class _DebugServer:
 
     def on_socket(self, ws):
         self.ws = ws
-        ws.on_message(lambda message: self.received.append(json.loads(message)))
+        ws.on_message(lambda message: self._on_message(ws, json.loads(message)))
+
+    def _on_message(self, ws, msg):
+        """A `capture` message, answered as _handle_capture_message does."""
+        self.received.append(msg)
+        if msg.get("type") == "capture" and msg.get("enabled"):
+            stats = {"active": True, "captured": 0, "rx": 0, "tx": 0, "cyphal": 0, "foreign": 0, "dropped": 0}
+            ws.send(json.dumps({"type": "capture_status", "active": True, "stats": stats}))
+        elif msg.get("type") == "capture":
+            ws.send(json.dumps({"type": "capture_status", "active": False, "forwarding": False}))
 
     def polls(self, since):
         """How often the tab asked for the diagnostics since `since` (monotonic time)."""
@@ -4221,6 +4230,26 @@ async def _(page):
             f"At 1024×800, rows cut off the bottom of each card (px): {cut}; the panel's scroll and visible height: {panel}"
     finally:
         await page.set_viewport_size({"width": 1280, "height": 800})
+        await debug_close(page, server)
+
+
+async def debug_start_capture(page):
+    await page.locator("#fmToggle").click()
+    await page.wait_for_function("el('fmToggle').textContent === 'Stop forwarding'", timeout=WAIT_MS)
+
+
+@test("Debug: a capture whose connection closes stops, and says so")
+async def _(page):
+    server = _DebugServer()
+    await debug_open(page, server)
+    try:
+        await debug_start_capture(page)
+        await server.ws.close(code=1012, reason="backend restarting")
+        await page.wait_for_timeout(500)
+        button, said = await page.locator("#fmToggle").inner_text(), await page.locator("#fmStatus").inner_text()
+        assert button == "Start capture" and "Capture stopped" in said, \
+            f"Once the socket closed, the button reads {button!r} and the status says {said!r}"
+    finally:
         await debug_close(page, server)
 
 
