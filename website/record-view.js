@@ -881,7 +881,7 @@ let _rawLogTimer = null;
 
 const fetchRawLogs = async () => {
   try {
-    _rawLogState = await requestJson('/api/rawlogs');
+    _rawLogState = state.dashboardConnected ? await requestJson('/api/rawlogs') : null;
   } catch {
     _rawLogState = null;
   }
@@ -958,15 +958,11 @@ const _onRawLogClick = async (e) => {
   fetchRawLogs();
 };
 
+// Builds the tab, the first time it is shown; setRecordViewActive, which
+// follows, fills it and keeps it current.
 const initRecordView = () => {
   const container = el('recordContainer');
-  if (container.dataset.ready) {
-    _refreshPickerTables();
-    _refreshSelection();
-    fetchRecordings();
-    fetchRecordBuffer();
-    return;
-  }
+  if (container.dataset.ready) return;
   container.dataset.ready = '1';
   _renderViewShell(container);
   el('rawLogPanel').addEventListener('click', _onRawLogClick);
@@ -975,10 +971,6 @@ const initRecordView = () => {
   });
   _initPickers();
   _bindBuilderInputs();
-  _refreshSelection();
-  _updateDiskHint();
-  fetchRecordings();
-  fetchRecordBuffer();
 };
 
 const setRecordViewActive = (active) => {

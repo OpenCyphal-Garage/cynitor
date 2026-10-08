@@ -3983,6 +3983,22 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: opening the tab asks for each list once, and nothing while disconnected")
+async def _(page):
+    server = _RecordServer([_recording(1, "boot sequence")])
+    await record_open(page, server)
+    try:
+        await page.wait_for_timeout(500)
+        asked = {path: server.count("GET", path) for path in ("/api/recordings", "/api/recordings/buffer", "/api/rawlogs")}
+        assert set(asked.values()) == {1}, f"Requests on opening the tab: {asked}"
+        await page.evaluate("state.dashboardConnected = false")
+        before = len(server.requests)
+        await page.wait_for_timeout(2500)  # the raw logs are polled every 2 s
+        assert not server.requests[before:], f"Requests with the backend disconnected: {server.requests[before:]}"
+    finally:
+        await record_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
