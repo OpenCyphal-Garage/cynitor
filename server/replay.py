@@ -69,6 +69,9 @@ class ReplayManager:
         # Optional callback fired once on auto-stop, so the WS layer can clear
         # session.replay without polling.
         self._on_finish: Optional[Any] = None
+        # GET /api/nodes during this replay, read from the recording once (see
+        # websocket_server): its publishers stay as recorded while it plays.
+        self.nodes_payload: Optional[dict[str, Any]] = None
 
     # ------------------------------------------------------------------
     # Subscriber management (same shape as TelemetryManager)

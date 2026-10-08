@@ -497,3 +497,21 @@ class TestReplayRestRoutes:
             assert "42" in body["nodes"] or 42 in body["nodes"]
         finally:
             await session.stop_replay()
+
+    @pytest.mark.asyncio
+    async def test_nodes_read_from_the_recording_once_per_replay(self, rest_client, monkeypatch):
+        # The dashboard asks every second; reading them takes seconds for a big recording.
+        import websocket_server
+        reads = []
+        read = websocket_server._synthesize_nodes_from_recording
+        monkeypatch.setattr(websocket_server, "_synthesize_nodes_from_recording",
+                            lambda *args: reads.append(args) or read(*args))
+        c, session = rest_client
+        try:
+            await c.post("/api/replay/start", json={"recording_id": 1, "speed": 1.0})
+            first = await (await c.get("/api/nodes")).json()
+            second = await (await c.get("/api/nodes")).json()
+            assert first == second and first["node_count"] == 1
+            assert len(reads) == 1
+        finally:
+            await session.stop_replay()

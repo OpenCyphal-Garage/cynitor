@@ -1675,11 +1675,14 @@ class WebSocketServer:
         replay = self.session.replay
         if replay is not None and self.session.event_logger is not None:
             try:
-                nodes_info = await asyncio.to_thread(
-                    _synthesize_nodes_from_recording,
-                    self.session.event_logger.db_path, replay.recording_id,
-                )
-                return web.json_response(nodes_info)
+                # Read once per replay: the dashboard asks every second, and a
+                # big recording takes seconds to read.
+                if replay.nodes_payload is None:
+                    replay.nodes_payload = await asyncio.to_thread(
+                        _synthesize_nodes_from_recording,
+                        self.session.event_logger.db_path, replay.recording_id,
+                    )
+                return web.json_response(replay.nodes_payload)
             except Exception as e:
                 logger.error(f"Error synthesising replay nodes: {e}", exc_info=True)
                 return web.json_response({"error": str(e)}, status=500)
