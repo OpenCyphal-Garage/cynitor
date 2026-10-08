@@ -135,8 +135,9 @@ class BusLoadMonitor:
 
     `canbusload` ships with Linux `can-utils`. If it is not on PATH (any non-
     Linux OS, or a minimal Linux install) the monitor becomes a permanent
-    no-op: utilization stays 0, `is_alive` reports True so the health watchdog
-    in `_register_loop` does not trip a disconnect.
+    no-op: utilization stays None, unknown rather than an idle 0 %, and
+    `is_alive` reports True so the health watchdog in `_register_loop` does
+    not trip a disconnect.
     """
 
     def __init__(self, iface: str) -> None:
@@ -145,7 +146,7 @@ class BusLoadMonitor:
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._task: Optional[asyncio.Task] = None
         self._disabled = shutil.which("canbusload") is None
-        self.utilization: float = 0.0
+        self.utilization: Optional[float] = None if self._disabled else 0.0
 
     async def start(self) -> None:
         if self._disabled:
@@ -177,7 +178,7 @@ class BusLoadMonitor:
             except asyncio.TimeoutError:
                 self._proc.kill()
             self._proc = None
-        self.utilization = 0.0
+        self.utilization = None if self._disabled else 0.0
         logger.info("BusLoadMonitor stopped")
 
     @property

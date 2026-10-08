@@ -153,4 +153,15 @@ class TestBusLoadMonitorWithoutCanUtils:
             await monitor.start()
         spawn.assert_not_called()
         assert monitor._proc is None
-        assert monitor.utilization == 0.0
+
+    @pytest.mark.asyncio
+    async def test_load_is_unknown_not_zero(self):
+        # Nothing measures the load here, and 0 % would read as an idle bus:
+        # the API says null, and the dashboard shows no figure.
+        monitor = make_monitor(canbusload=None)
+        unknown = [monitor.utilization]
+        await monitor.start()
+        unknown.append(monitor.utilization)
+        await monitor.stop()
+        unknown.append(monitor.utilization)
+        assert unknown == [None, None, None]
