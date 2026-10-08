@@ -376,8 +376,9 @@ const _buildCard = (rec) => {
   const card = document.createElement('div');
   const live = _isLiveRecording(rec);
   const waiting = live && !state.canConnected;  // nothing can come until CAN is connected
+  const replaying = state.replayActive && state.replayRecordingId === rec.id;
   const stop = _autoStop(rec);
-  card.className = `record-card${live ? ' live' : ''}${stop?.short ? ' auto-stopped' : ''}`;
+  card.className = `record-card${live ? ' live' : ''}${stop?.short ? ' auto-stopped' : ''}${replaying ? ' replaying' : ''}`;
   card.dataset.id = String(rec.id);
 
   const filterText = _filterSummary(rec);
@@ -388,6 +389,7 @@ const _buildCard = (rec) => {
       <span class="record-dot ${waiting ? 'waiting' : live ? 'rec' : 'done'}" aria-hidden="true"></span>
       <span class="record-name">${escapeHtml(rec.name)}</span>
       ${waiting ? '<span class="record-badge" title="It goes on recording once CAN is connected">waiting for CAN</span>' : ''}
+      ${replaying ? '<span class="record-badge record-badge-accent">replaying</span>' : ''}
       ${legacy ? '<span class="record-badge" title="Legacy bookmark (Phase 1); reads from the shared events buffer">bookmark</span>' : ''}
       ${stop ? `<span class="record-badge${stop.short ? ' record-badge-warn' : ''}" title="${stop.title}">${escapeHtml(stop.text)}</span>` : ''}
       <span class="record-meta">${escapeHtml(_formatCardMeta(rec))}</span>
@@ -438,7 +440,8 @@ const _playButtonHtml = (rec) => {
   const why = rec.events_source === 'global' ? 'A bookmark keeps no events of its own to replay'
     : !rec.event_count ? 'Nothing was recorded'
     : state.canConnected ? 'Disconnect from CAN to replay'
-    : state.replayActive ? 'Another replay is already running' : '';
+    : state.replayActive ? (state.replayRecordingId === rec.id ? 'Replaying now' : 'Another replay is already running')
+    : '';
   return `<button class="btn-mini" data-action="play" aria-label="Replay recording"`
     + ` title="${escapeHtml(why || 'Replay this recording')}"${why ? ' disabled' : ''}>▶ Play</button>`;
 };

@@ -7359,6 +7359,10 @@ body.dsdl-resizing-row {
   border-left: 3px solid var(--warn);
 }
 
+.record-card.replaying {
+  border-left: 3px solid var(--accent);
+}
+
 .record-card-head {
   display: flex;
   align-items: center;
@@ -7437,6 +7441,11 @@ body.dsdl-resizing-row {
 .record-badge.record-badge-warn {
   background: var(--warn-muted);
   color: var(--warn);
+}
+
+.record-badge.record-badge-accent {
+  background: var(--accent-muted);
+  color: var(--accent);
 }
 
 .record-card-bars {

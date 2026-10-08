@@ -104,6 +104,7 @@ const showReplayStrip = () => {
   _ensureStripBuilt(strip);
   syncReplayStrip();
   _startReplayPoll();
+  renderRecordList();  // the replayed recording's card says so; Play turns off
 };
 
 const hideReplayStrip = () => {
@@ -123,6 +124,7 @@ const hideReplayStrip = () => {
   state.replayPaused = false;
   state.replayEventsEmitted = 0;
   state.replayTotalEvents = 0;
+  renderRecordList();
 };
 
 const _ensureStripBuilt = (strip) => {

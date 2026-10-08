@@ -4295,6 +4295,23 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: the recording being replayed is marked on its card")
+async def _(page):
+    server = _RecordServer([_recording(1, "boot sequence"), _recording(2, "motor test")])
+    await record_open(page, server, can=False)
+    try:
+        await page.evaluate("""() => { _applyReplayStatus({active: true, recording_id: 2, position_s: 0, duration_s: 60,
+            speed: 1, paused: false, events_emitted: 0, total_events: 120, finished: false}); showReplayStrip(); }""")
+        marked = await page.evaluate("[...document.querySelectorAll('.record-card.replaying')].map((c) => c.dataset.id)")
+        badges = await page.locator('.record-card[data-id="2"] .record-badge').all_text_contents()
+        assert marked == ["2"] and "replaying" in badges, f"Cards marked: {marked}; recording 2's badges: {badges}"
+        await page.evaluate("hideReplayStrip()")
+        assert not await page.locator(".record-card.replaying").count(), "A card stays marked after the replay"
+    finally:
+        await page.evaluate("hideReplayStrip()")
+        await record_close(page, server)
+
+
 @test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
 async def _(page):
     try:
