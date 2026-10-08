@@ -4611,13 +4611,14 @@ class _DebugServer:
         self.queued = None          # captured since the dashboard subscribed, not sent yet (None: not subscribed)
         self.right_after = []       # frames the bus carries the moment the dashboard subscribes
         self.can = True             # a CAN session is up
+        self.capturing = False      # its transport capture is on (it stays on until CAN disconnects)
 
     def _transport(self):
         frames_in = 1000 + int(100 * (time.monotonic() - self.started))
         stats = {"in_frames": frames_in, "in_frames_cyphal": frames_in, "in_frames_cyphal_accepted": frames_in,
                  "in_frames_errored": 0, "in_frames_loopback": 0, "out_frames": 40, "out_frames_timeout": 0,
                  "out_frames_loopback": 0, "media_acceptance_filtering_efficiency": 1.0, "lost_loopback_frames": 0}
-        return {"connected": True, "interface": "vcan0", "statistics": stats, "capture_active": False,
+        return {"connected": True, "interface": "vcan0", "statistics": stats, "capture_active": self.capturing,
                 "protocol": {"mtu": 7, "transfer_id_modulo": 32, "max_nodes": 128, "is_fd": False},
                 "link": VCAN_LINK, "bus_utilization": 12.0}
 
@@ -4679,6 +4680,7 @@ class _DebugServer:
         earlier = self.ring[-500:] if self.queued is None else []
         if self.queued is None:
             self.queued = []
+        self.capturing = True
         ws.send(json.dumps({"type": "capture_status", "active": True, "stats": self._stats(), "frames": earlier}))
         self.capture(self.right_after)
 
@@ -4787,7 +4789,7 @@ async def _(page):
 
 async def debug_start_capture(page):
     await page.locator("#fmToggle").click()
-    await page.wait_for_function("el('fmToggle').textContent === 'Stop forwarding'", timeout=WAIT_MS)
+    await page.wait_for_function("el('fmToggle').classList.contains('active')", timeout=WAIT_MS)
 
 
 def _can_frame(n, src=42):
@@ -4918,6 +4920,22 @@ async def _(page):
         assert can_idle == (True, "Connect a CAN interface to capture frames.") and not can_up \
             and no_socket[0] and "connection" in no_socket[1], \
             f"Start disabled, and why: with CAN idle {can_idle}; with CAN up {can_up}; with no socket yet {no_socket}"
+    finally:
+        await debug_close(page, server)
+
+
+@test("Debug: the frame table says when the bus is in capture mode already, and its stop button reads Stop")
+async def _(page):
+    server = _DebugServer()
+    server.capturing = True  # started from another dashboard: it stays on until CAN disconnects
+    await debug_open(page, server)
+    try:
+        await page.wait_for_timeout(1200)  # the diagnostics have answered
+        said = await page.locator("#fmEmpty").inner_text()
+        await debug_start_capture(page)
+        label = await page.locator("#fmToggle").inner_text()
+        assert "until CAN disconnects" in said and label == "Stop", \
+            f"With the bus capturing already, the table says {said!r}; capturing, the button reads {label!r}"
     finally:
         await debug_close(page, server)
 

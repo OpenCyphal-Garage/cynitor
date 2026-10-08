@@ -27,6 +27,7 @@ const DebugView = (() => {
   let pending = [];       // frames that came while paused, newest first: shown on Resume
   let lastSeq = 0;        // frames are numbered as they come, for trimming the table
   let captureStats = null;
+  let busCapturing = false; // the backend's capture is on, for whichever dashboard started it
 
   const body = () => el('debugBody');
 
@@ -186,12 +187,15 @@ const DebugView = (() => {
     const problem = connectionPlaceholder('inspect the CAN transport');
     if (problem) {
       prevStats = null;
+      busCapturing = false;
       renderProblem(problem);
       return;
     }
     shownProblem = null;
     try {
       const data = await requestJson('/api/can/transport');
+      busCapturing = data?.capture_active === true;
+      updateEmpty();
       if (state.activeView === 'debug') renderDiagnostics(data);
     } catch (err) {
       if (state.activeView === 'debug') renderDiagError(err && err.message);
@@ -254,7 +258,9 @@ const DebugView = (() => {
     if (!hasRows) {
       const text = rows.length ? 'No frames match the filter.'
         : captureOn ? 'Waiting for frames…'
-          : startBlockedBy() || 'Capture is off — click "Start capture" to inspect raw frames.';
+          : startBlockedBy() || (busCapturing
+            ? 'Capture runs on this bus until CAN disconnects: "Start capture" shows its frames.'
+            : 'Capture is off — click "Start capture" to inspect raw frames.');
       if (empty.textContent !== text) empty.textContent = text;  // runs every second
     }
   };
@@ -279,7 +285,7 @@ const DebugView = (() => {
     const btn = el('fmToggle');
     if (!btn) return;
     const why = captureOn ? '' : startBlockedBy();
-    btn.textContent = captureOn ? 'Stop forwarding' : 'Start capture';
+    btn.textContent = captureOn ? 'Stop' : 'Start capture';
     btn.classList.toggle('active', captureOn);
     btn.disabled = Boolean(why);
     btn.title = why;
@@ -352,6 +358,7 @@ const DebugView = (() => {
       return;
     }
     captureOn = !!event.active;
+    if (captureOn) busCapturing = true;  // and on until CAN disconnects
     if (event.stats) { captureStats = event.stats; renderCounters(); }
     setStatus('');
     setToggleLabel();
