@@ -1260,6 +1260,8 @@ const DsdlView = (() => {
 
       _initEditorDrag();
     }
+    // A new editor, unlocked even where the one before it was locked.
+    editorPanel.classList.remove('dsdl-editor-locked');
 
     // Beside the type shown, its share of the area dragged at the handle
     // (--dsdl-editor-share); with no type shown, all of it.

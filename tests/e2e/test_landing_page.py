@@ -3656,6 +3656,34 @@ async def _(page):
         await dsdl_close(page, server)
 
 
+@test("DSDL: 'New version' from a locked editor opens a draft that can be edited")
+async def _(page):
+    server = _DsdlServer()
+    server.types["myapp.Reading.1.0"]["compiled"] = False
+    await dsdl_open(page, server)
+    try:
+        await page.locator('#dsdlCustomTree .dsdl-ns-row[data-ns="myapp"]').click()
+        await page.locator('#dsdlCustomTree .dsdl-type-row[data-type="myapp.Reading.1.0"]').click()
+        await page.locator("#dsdlEditBtn").click()
+        server.types["myapp.Reading.1.0"]["compiled"] = True
+        await page.locator("#dsdlCustomCompileBtn").click()
+        await page.wait_for_selector(".dsdl-editor-locked-banner", timeout=WAIT_MS)
+        # What the lock's banner advises.
+        await page.locator("#dsdlNewVersionBtn").click()
+        await page.wait_for_function("document.getElementById('dsdlEditorVer')?.value === '1.1'", timeout=WAIT_MS)
+        try:
+            await page.locator("#dsdlEditorSource").click(timeout=WAIT_MS)
+            await page.keyboard.type("uint8 extra\n")
+            typed = await page.locator("#dsdlEditorSource").input_value()
+        except Exception as e:
+            typed = f"not clicked into: {str(e).splitlines()[0]}"
+        save = await page.evaluate("getComputedStyle(document.getElementById('dsdlEditorSave')).opacity")
+        assert "uint8 extra" in typed and save == "1", \
+            f"The new version's source reads {typed!r}; its Save is drawn at opacity {save}"
+    finally:
+        await dsdl_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
