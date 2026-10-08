@@ -256,6 +256,7 @@ class CANSession:
         self.registered_nodes: set[int] = set()
         self._tasks: list[asyncio.Task] = []
         self._lock = asyncio.Lock()
+        self._event_logger_lock = asyncio.Lock()
         self._disconnect_task: Optional[asyncio.Task] = None
         self.last_error: Optional[str] = None
         # Recording-replay engine. None unless a replay session is in progress.
@@ -328,7 +329,6 @@ class CANSession:
                 from scanner_node import ScannerNode
                 from telemetry_manager import TelemetryManager
                 from allocator import AllocatorManager
-                from event_logger import EventLogger
 
                 logger.info("Initializing allocator manager...")
                 self.allocator_manager = AllocatorManager(
@@ -356,12 +356,7 @@ class CANSession:
                 self.frame_capture = FrameCaptureManager(self.scanner)
 
                 logger.info("Initializing EventLogger...")
-                self.event_logger = EventLogger(
-                    db_path=self.data_dir / EVENTS_DB,
-                    retention_seconds=86400.0,   # keep last 24h of bus traffic
-                    max_events=5_000_000,        # safety cap; bounds disk
-                )
-                await self.event_logger.start()
+                await self.ensure_event_logger()
 
                 saved_identities = await self.event_logger.load_identity_map()
                 if saved_identities:
@@ -686,6 +681,25 @@ class CANSession:
                 self.scanner.service_metadata.pop(key, None)
         logger.info("Cleared registration state — register loop will re-attempt all nodes")
 
+    async def ensure_event_logger(self):
+        """The event logger, started on first use.
+
+        Recordings live in the data folder, so listing, exporting or replaying
+        them needs it whether CAN is connected or not. A CAN disconnect stops
+        it (flushing what it holds); the next use starts it again.
+        """
+        async with self._event_logger_lock:  # two first uses at once start one
+            if self.event_logger is None:
+                from event_logger import EventLogger
+                event_logger = EventLogger(
+                    db_path=self.data_dir / EVENTS_DB,
+                    retention_seconds=86400.0,   # keep last 24h of bus traffic
+                    max_events=5_000_000,        # safety cap; bounds disk
+                )
+                await event_logger.start()
+                self.event_logger = event_logger
+        return self.event_logger
+
     async def start_replay(self, recording_id: int, speed: float = 1.0,
                              start_offset_s: float = 0.0) -> dict:
         """Open a recording for playback. Refuses if CAN is connected or
@@ -695,15 +709,7 @@ class CANSession:
             raise RuntimeError("CAN is connected — disconnect before starting replay")
         if self.replay is not None:
             raise RuntimeError("Replay already in progress")
-        if self.event_logger is None:
-            # event_logger lives on the session and gets torn down on disconnect.
-            # When CAN has never been connected this session it doesn't exist yet,
-            # so we create a transient one bound to the same DB.
-            from event_logger import EventLogger
-            self.event_logger = EventLogger(db_path=self.data_dir / EVENTS_DB,
-                                            retention_seconds=86400.0,
-                                            max_events=5_000_000)
-            await self.event_logger.start()
+        await self.ensure_event_logger()
         from replay import ReplayManager
         self.replay = ReplayManager(self.event_logger.db_path,
                                     recording_id=recording_id, speed=speed)

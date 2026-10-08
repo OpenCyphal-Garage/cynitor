@@ -1021,7 +1021,7 @@ Named captures with optional length/event-count limits. Two storage modes:
 - **`dedicated`** (default for new recordings) — matching subject events and service calls stream into a per-recording table (`recording_events`) from the moment the recording starts. Survives the global buffer's retention. Quick-save snapshots matching events from the global buffer into the same table at creation time.
 - **`global`** — Phase 1 bookmarks. Metadata only; export reads from the shared `events` table within the recording's time-range × filter. Subject to global retention.
 
-All recording endpoints return `503` if no `event_logger` is initialized (no CAN session yet), **except** `GET /api/recordings`, which returns `200 { recordings: [] }` so the frontend's startup poll doesn't error before CAN is connected.
+Recordings are kept in the data folder, so every recording endpoint works with CAN disconnected too: saved recordings are listed, exported, renamed, deleted and replayed (replay needs CAN disconnected). A live recording captures while CAN is connected; one started with CAN disconnected begins capturing once it connects.
 
 #### List, create, inspect
 

@@ -990,18 +990,11 @@ class WebSocketServer:
             return None, web.json_response({"error": "JSON body must be an object"}, status=400)
         return body, None
 
-    def _require_event_logger(self) -> Optional[web.Response]:
-        if not self.session.event_logger:
-            return web.json_response({"error": "Event logger not available"}, status=503)
-        return None
+    # Recordings live in the data folder: every recording route works with CAN
+    # disconnected too, starting the session's event logger if need be.
 
     async def _get_recordings(self, request: web.Request) -> web.Response:
-        # Before CAN is connected the event logger doesn't exist yet. Listing is a
-        # read-only poll the frontend runs continuously, so return an empty list
-        # (rather than 503) to avoid a spurious "Failed to load recordings" toast
-        # at startup. The list populates once CAN connects and the logger starts.
-        if not self.session.event_logger:
-            return web.json_response({"recordings": []})
+        await self.session.ensure_event_logger()
         recs = await self.session.event_logger.list_recordings()
         return web.json_response({"recordings": recs})
 
@@ -1026,9 +1019,7 @@ class WebSocketServer:
         return max_length, max_events, stop_on_limit, None
 
     async def _post_recording(self, request: web.Request) -> web.Response:
-        err = self._require_event_logger()
-        if err:
-            return err
+        await self.session.ensure_event_logger()
         body, err = await self._read_json_body(request)
         if err:
             return err
@@ -1051,9 +1042,7 @@ class WebSocketServer:
         return web.json_response({"recording": rec}, status=201)
 
     async def _post_quick_recording(self, request: web.Request) -> web.Response:
-        err = self._require_event_logger()
-        if err:
-            return err
+        await self.session.ensure_event_logger()
         body, err = await self._read_json_body(request)
         if err:
             return err
@@ -1076,9 +1065,7 @@ class WebSocketServer:
         return web.json_response({"recording": rec}, status=201)
 
     async def _get_recordings_buffer(self, request: web.Request) -> web.Response:
-        err = self._require_event_logger()
-        if err:
-            return err
+        await self.session.ensure_event_logger()
         stats = await self.session.event_logger.get_buffer_stats()
         return web.json_response({"buffer": stats})
 
@@ -1086,8 +1073,7 @@ class WebSocketServer:
         rec_id, err = _parse_int(request.match_info.get('rec_id'), 'recording_id', 1, self._MAX_REC_ID)
         if err:
             return err
-        if (e := self._require_event_logger()):
-            return e
+        await self.session.ensure_event_logger()
         ok = await self.session.event_logger.stop_recording(rec_id)
         if not ok:
             return web.json_response({"error": "Recording not found or already stopped"}, status=404)
@@ -1098,8 +1084,7 @@ class WebSocketServer:
         rec_id, err = _parse_int(request.match_info.get('rec_id'), 'recording_id', 1, self._MAX_REC_ID)
         if err:
             return err
-        if (e := self._require_event_logger()):
-            return e
+        await self.session.ensure_event_logger()
         body, err = await self._read_json_body(request)
         if err:
             return err
@@ -1143,8 +1128,7 @@ class WebSocketServer:
         rec_id, err = _parse_int(request.match_info.get('rec_id'), 'recording_id', 1, self._MAX_REC_ID)
         if err:
             return err
-        if (e := self._require_event_logger()):
-            return e
+        await self.session.ensure_event_logger()
         rec = await self.session.event_logger.get_recording_stats(rec_id)
         if not rec:
             return web.json_response({"error": "Recording not found"}, status=404)
@@ -1154,8 +1138,7 @@ class WebSocketServer:
         rec_id, err = _parse_int(request.match_info.get('rec_id'), 'recording_id', 1, self._MAX_REC_ID)
         if err:
             return err
-        if (e := self._require_event_logger()):
-            return e
+        await self.session.ensure_event_logger()
         purge = request.query.get("purge", "false").lower() == "true"
         ok = await self.session.event_logger.delete_recording(rec_id, purge_events=purge)
         if not ok:
@@ -1166,8 +1149,7 @@ class WebSocketServer:
         rec_id, err = _parse_int(request.match_info.get('rec_id'), 'recording_id', 1, self._MAX_REC_ID)
         if err:
             return err
-        if (e := self._require_event_logger()):
-            return e
+        await self.session.ensure_event_logger()
         fmt = request.query.get("format", "csv").lower()
         if fmt not in ("csv", "jsonl"):
             return web.json_response({"error": "format must be csv or jsonl"}, status=400)

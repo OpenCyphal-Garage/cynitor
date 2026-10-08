@@ -369,3 +369,17 @@ class TestDroppedEvents:
         s.event_logger = MagicMock(dropped_events=3)
         with patch.object(CANSession, "is_running", new_callable=PropertyMock, return_value=True):
             assert s.dropped_events() == {"scanner": 1, "logger": 5, "clients": 7}
+
+
+class TestEventLogger:
+
+    @pytest.mark.asyncio
+    async def test_first_uses_at_once_start_one_logger(self, tmp_path):
+        # The dashboard asks for the recordings and the buffer at once on opening the tab.
+        from main import CANSession
+        s = CANSession(data_dir=tmp_path)
+        first, second = await asyncio.gather(s.ensure_event_logger(), s.ensure_event_logger())
+        try:
+            assert first is second is s.event_logger
+        finally:
+            await first.stop()

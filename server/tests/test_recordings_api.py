@@ -1,11 +1,13 @@
 """Tests for the /api/recordings REST endpoints."""
 
 import json
+import time
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 from aiohttp.test_utils import TestClient, TestServer
 from websocket_server import WebSocketServer
 from event_logger import EventLogger
+from data_dir import EVENTS_DB
 
 
 @pytest.fixture
@@ -20,14 +22,7 @@ def session_with_logger(event_logger_real):
     session = MagicMock()
     session.is_running = False
     session.event_logger = event_logger_real
-    session.telemetry = None
-    return session
-
-
-@pytest.fixture
-def session_no_logger():
-    session = MagicMock()
-    session.event_logger = None
+    session.ensure_event_logger = AsyncMock(return_value=event_logger_real)
     session.telemetry = None
     return session
 
@@ -41,11 +36,22 @@ async def client(session_with_logger):
 
 
 @pytest.fixture
-async def client_no_logger(session_no_logger):
-    server = WebSocketServer(session=session_no_logger, host="127.0.0.1", port=0)
+async def client_can_idle(tmp_path):
+    """A real CANSession that never connected CAN, over a data folder holding
+    a recording ("boot", two events) saved in an earlier session."""
+    from main import CANSession
+    earlier = EventLogger(db_path=tmp_path / EVENTS_DB)
+    earlier.init_db_sync()
+    now = time.time()
+    earlier._write_events_sync([_sample_event(subject_id=100, ts=now - 30), _sample_event(subject_id=200, ts=now - 29)])
+    await earlier.create_recording(name="boot", start_unix=now - 31, end_unix=now - 28)
+    session = CANSession(data_dir=tmp_path)
+    server = WebSocketServer(session=session, host="127.0.0.1", port=0)
     async with TestClient(TestServer(server.app)) as c:
         server._running = True
         yield c
+    if session.event_logger is not None:
+        await session.event_logger.stop()
 
 
 def _sample_event(subject_id=100, ts=1700000000.0, node_id=42):
@@ -142,13 +148,24 @@ class TestRecordingsCRUD:
         resp2 = await client.get(f"/api/recordings/{rid}")
         assert resp2.status == 404
 
+
+class TestWithoutCan:
+    """Recordings are kept in the data folder: with CAN disconnected they are
+    still listed, exported, renamed and deleted (and replayed, which needs CAN
+    disconnected)."""
+
     @pytest.mark.asyncio
-    async def test_no_logger_returns_empty_list(self, client_no_logger):
-        # Before CAN connects there is no event logger; listing returns an empty
-        # list (not 503) so the frontend's startup poll doesn't error-toast.
-        resp = await client_no_logger.get("/api/recordings")
-        assert resp.status == 200
-        assert (await resp.json())["recordings"] == []
+    async def test_saved_recording_is_listed_exported_renamed_and_deleted(self, client_can_idle):
+        recs = (await (await client_can_idle.get("/api/recordings")).json())["recordings"]
+        assert [r["name"] for r in recs] == ["boot"]
+        rid = recs[0]["id"]
+        export = await client_can_idle.get(f"/api/recordings/{rid}/export?format=csv")
+        assert export.status == 200
+        assert len((await export.text()).strip().split("\n")) == 3  # header + one row per event
+        assert (await client_can_idle.patch(f"/api/recordings/{rid}", json={"name": "boot 2"})).status == 200
+        assert (await client_can_idle.get("/api/recordings/buffer")).status == 200
+        assert (await client_can_idle.delete(f"/api/recordings/{rid}")).status == 200
+        assert (await (await client_can_idle.get("/api/recordings")).json())["recordings"] == []
 
 
 class TestQuickSave:
@@ -285,11 +302,6 @@ class TestBuffer:
         assert data["buffer"]["event_count"] == 1
         assert data["buffer"]["retention_seconds"] > 0
         assert data["buffer"]["oldest_event_unix"] is not None
-
-    @pytest.mark.asyncio
-    async def test_buffer_endpoint_503_without_logger(self, client_no_logger):
-        resp = await client_no_logger.get("/api/recordings/buffer")
-        assert resp.status == 503
 
 
 class TestPurge:
