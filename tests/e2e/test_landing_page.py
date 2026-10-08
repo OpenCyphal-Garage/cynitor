@@ -4256,6 +4256,28 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: an auto-stopped recording says which limit stopped it, in amber only for the events cap")
+async def _(page):
+    now = time.time()
+    server = _RecordServer([
+        _recording(1, "capped", start=now - 9000, end_unix=now - 9000 + 600, auto_stopped=True,
+                   max_events=1000, event_count=1000),
+        _recording(2, "timed", start=now - 5000, end_unix=now - 5000 + 1802, auto_stopped=True,
+                   max_length_seconds=1800.0, event_count=50)])
+    await record_open(page, server)
+    try:
+        read = {}
+        for rid in (1, 2):
+            card = page.locator(f'.record-card[data-id="{rid}"]')
+            badge = card.locator(".record-badge")
+            read[rid] = (await badge.text_content(), "record-badge-warn" in await badge.get_attribute("class"),
+                         "auto-stopped" in await card.get_attribute("class"))
+        assert read == {1: ("stopped at 1,000 events", True, True), 2: ("stopped at 30m 0s", False, False)}, \
+            f"(badge, amber badge, amber card) by recording: {read}"
+    finally:
+        await record_close(page, server)
+
+
 @test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
 async def _(page):
     try:

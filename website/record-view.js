@@ -358,11 +358,25 @@ const _formatCardMeta = (rec) => {
   return `${start.toLocaleString()} → ${endLabel} · ran ${duration}`;
 };
 
+// Which limit stopped a recording. Its events cap cut it short of its time,
+// which is worth a look; its time limit is how it was meant to end.
+const _autoStop = (rec) => {
+  if (!rec.auto_stopped) return null;
+  if (rec.max_events && rec.event_count >= rec.max_events) {
+    return { text: `stopped at ${rec.max_events.toLocaleString()} events`, short: true,
+             title: 'Its events cap stopped it before its time limit' };
+  }
+  if (rec.max_length_seconds) {
+    return { text: `stopped at ${formatUptime(rec.max_length_seconds)}`, short: false, title: 'It ran its full length' };
+  }
+  return { text: 'auto-stopped', short: false, title: 'A limit stopped it' };
+};
+
 const _buildCard = (rec) => {
   const card = document.createElement('div');
   const live = _isLiveRecording(rec);
-  const autoStopped = !!rec.auto_stopped;
-  card.className = `record-card${live ? ' live' : ''}${autoStopped ? ' auto-stopped' : ''}`;
+  const stop = _autoStop(rec);
+  card.className = `record-card${live ? ' live' : ''}${stop?.short ? ' auto-stopped' : ''}`;
   card.dataset.id = String(rec.id);
 
   const filterText = _filterSummary(rec);
@@ -373,7 +387,7 @@ const _buildCard = (rec) => {
       <span class="record-dot ${live ? 'rec' : 'done'}" aria-hidden="true"></span>
       <span class="record-name">${escapeHtml(rec.name)}</span>
       ${legacy ? '<span class="record-badge" title="Legacy bookmark (Phase 1); reads from the shared events buffer">bookmark</span>' : ''}
-      ${autoStopped ? '<span class="record-badge record-badge-warn" title="Auto-stopped when a limit was hit">auto-stopped</span>' : ''}
+      ${stop ? `<span class="record-badge${stop.short ? ' record-badge-warn' : ''}" title="${stop.title}">${escapeHtml(stop.text)}</span>` : ''}
       <span class="record-meta">${escapeHtml(_formatCardMeta(rec))}</span>
     </div>
     <div class="record-card-bars">
