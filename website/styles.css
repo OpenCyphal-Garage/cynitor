@@ -7253,6 +7253,39 @@ body.dsdl-resizing-row {
   gap: 0.5rem;
 }
 
+/* The recordings' search, above them once there are some. */
+.record-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.record-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.375rem 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+}
+
+.record-search input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 0.125rem var(--accent-muted);
+}
+
+/* "3 of 57", while a search is typed. */
+.record-search-count {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .record-list-error {
   padding: 0.5rem 0.75rem;
   font-size: 0.75rem;

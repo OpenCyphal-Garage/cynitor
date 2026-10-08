@@ -4506,6 +4506,27 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: the search lists the recordings whose name, notes or selection hold what is typed, and the one being made")
+async def _(page):
+    server = _RecordServer([_recording(1, "boot sequence", notes="The IMU came up late"),
+                            _recording(2, "motor test", filter={"node_ids": [12]}),
+                            _recording(3, "field test", live=True)])
+    await record_open(page, server)
+    listed = "[...document.querySelectorAll('#recordList .record-name')].map((name) => name.textContent)"
+    try:
+        found = {}
+        for typed in ("imu", "Node: 12", "nothing like it"):
+            await page.locator("#recSearch").fill(typed, timeout=WAIT_MS)
+            found[typed] = (await page.evaluate(listed), await page.locator("#recSearchCount").inner_text())
+        assert found == {"imu": (["field test", "boot sequence"], "2 of 3"),
+                         "Node: 12": (["field test", "motor test"], "2 of 3"),
+                         "nothing like it": (["field test"], "1 of 3")}, f"Searched for, listed: {found}"
+        await page.locator("#recSearch").fill("")
+        assert len(await page.evaluate(listed)) == 3, "An empty search does not list every recording"
+    finally:
+        await record_close(page, server)
+
+
 @test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
 async def _(page):
     try:

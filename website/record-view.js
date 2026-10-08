@@ -496,13 +496,24 @@ const _playButtonHtml = (rec) => {
 // place, above the recordings as last loaded: every poll would toast it.
 let _recordListError = null;
 
+// What the search asks for, in lower case: the recordings whose name, notes
+// or selection (as their cards read it) hold it. One being made is listed
+// whatever is searched, so that its Stop is never hidden.
+let _recordSearch = '';
+
+const _matchesSearch = (rec) => !_recordSearch || _isLiveRecording(rec)
+  || [rec.name, rec.notes, _filterSummary(rec)].some((text) => text?.toLowerCase().includes(_recordSearch));
+
 const renderRecordList = () => {
   const list = el('recordList');
   if (!list) return;
+  el('recSearchBar').classList.toggle('hidden', !state.dashboardConnected || !state.recordings.length);
   if (!state.dashboardConnected) {
     list.innerHTML = '<div class="record-empty">Connect to the backend to view recordings.</div>';
     return;
   }
+  const shown = state.recordings.filter(_matchesSearch);
+  el('recSearchCount').textContent = _recordSearch ? `${shown.length} of ${state.recordings.length}` : '';
   const fresh = document.createElement('div');
   if (_recordListError) {
     fresh.innerHTML = `<div class="record-list-error" role="alert">Cannot load the recordings: ${escapeHtml(_recordListError)}.`
@@ -510,10 +521,13 @@ const renderRecordList = () => {
   } else if (!state.recordings.length) {
     list.innerHTML = '<div class="record-empty">No recordings yet. Start recording, above, keeps what the bus sends from then on.</div>';
     return;
+  } else if (!shown.length) {
+    list.innerHTML = `<div class="record-empty">No recording matches “${escapeHtml(el('recSearch').value.trim())}”.</div>`;
+    return;
   }
   // Patched, not rebuilt: live cards refresh every second, and a rebuilt
   // Stop button would swallow a click in progress.
-  fresh.append(...state.recordings.map(_buildCard));
+  fresh.append(...shown.map(_buildCard));
   patchChildren(list, fresh);
 };
 
@@ -994,6 +1008,11 @@ const _renderViewShell = (container) => {
       <section class="rawlog-panel" id="rawLogPanel" aria-label="Raw CAN log"></section>
       <div class="record-layout">
         <section class="record-list-pane">
+          <div class="record-search hidden" id="recSearchBar">
+            <input type="search" id="recSearch" placeholder="Search names, notes, selections"
+                   aria-label="Search recordings" autocomplete="off" />
+            <span class="record-search-count" id="recSearchCount" role="status"></span>
+          </div>
           <div class="record-list" id="recordList"></div>
         </section>
         <section class="record-builder-pane">
@@ -1158,6 +1177,10 @@ const initRecordView = () => {
     if (e.target.dataset.rawlog !== 'speed') return;
     state.rawLogPlaybackSpeed = Number(e.target.value);
     saveSettings();
+  });
+  el('recSearch').addEventListener('input', (e) => {
+    _recordSearch = e.target.value.trim().toLowerCase();
+    renderRecordList();
   });
   _initPickers();
   _bindBuilderInputs();
