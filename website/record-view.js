@@ -284,7 +284,8 @@ const fetchRecordBuffer = async () => {
 const refreshRecordTabIndicator = () => {
   const btn = el('viewTabRecord');
   if (!btn) return;
-  btn.classList.toggle('recording-active', state.recordings.some(_isLiveRecording));
+  // A recording, or a raw log, being made.
+  btn.classList.toggle('recording-active', state.recordings.some(_isLiveRecording) || Boolean(_rawLogState?.active));
 };
 
 const _timeProgressPct = (rec) => {
@@ -1034,6 +1035,12 @@ const fetchRawLogs = async () => {
     _rawLogState = null;
   }
   _renderRawLogPanel();
+  refreshRecordTabIndicator();
+  // Polled with the tab open, and from any tab while a raw log runs: the
+  // tab's dot says so, and goes when it stops.
+  const wanted = _recordViewActive || Boolean(_rawLogState?.active);
+  if (wanted && !_rawLogTimer) _rawLogTimer = setInterval(fetchRawLogs, RAW_LOG_POLL_MS);
+  else if (!wanted && _rawLogTimer) { clearInterval(_rawLogTimer); _rawLogTimer = null; }
 };
 
 // Speeds a raw log can be played at, as [value, label]; 0 = as fast as possible.
@@ -1148,9 +1155,8 @@ const setRecordViewActive = (active) => {
     if (!_cardsTickerTimer) _cardsTickerTimer = setInterval(_tickLiveCards, 1000);
     if (!_pickerRefreshTimer) _pickerRefreshTimer = setInterval(_refreshPickerTables, PICKER_REFRESH_MS);
     fetchRawLogs();
-    if (!_rawLogTimer) _rawLogTimer = setInterval(fetchRawLogs, RAW_LOG_POLL_MS);
   } else {
-    if (_rawLogTimer) { clearInterval(_rawLogTimer); _rawLogTimer = null; }
+    if (_rawLogTimer && !_rawLogState?.active) { clearInterval(_rawLogTimer); _rawLogTimer = null; }
     if (_bufferPollTimer) { clearInterval(_bufferPollTimer); _bufferPollTimer = null; }
     if (_cardsTickerTimer) { clearInterval(_cardsTickerTimer); _cardsTickerTimer = null; }
     if (_pickerRefreshTimer) { clearInterval(_pickerRefreshTimer); _pickerRefreshTimer = null; }

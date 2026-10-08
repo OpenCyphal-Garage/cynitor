@@ -4374,6 +4374,19 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: the Record tab's dot shows while a raw log runs")
+async def _(page):
+    server = _RecordServer()
+    server.rawlogs = RAW_LOGS
+    await record_open(page, server)
+    try:
+        await page.wait_for_selector("#rawLogPanel .rawlog-active .record-dot", timeout=WAIT_MS)
+        tab = await page.locator("#viewTabRecord").get_attribute("class")
+        assert "recording-active" in tab, f"A raw log runs, and the Record tab reads {tab!r}"
+    finally:
+        await record_close(page, server)
+
+
 @test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
 async def _(page):
     try:

@@ -822,6 +822,7 @@ const connectDashboard = async () => {
   if (state.activeView === 'dsdl') DsdlView.init();
   if (state.activeView === 'debug') DebugView.init();
   fetchRecordings();
+  fetchRawLogs();  // a raw log already running lights the Record tab's dot
   saveSettings();
 };
 
