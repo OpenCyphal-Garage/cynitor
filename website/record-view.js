@@ -224,7 +224,8 @@ const _renderBufferChip = () => {
     chip.textContent = '';
     return;
   }
-  chip.textContent = `Global buffer: last ${_formatRetention(b.retention_seconds)} · ${b.event_count.toLocaleString()} events · ${formatBytes(b.db_size_bytes)}`;
+  // The 24 h history of the bus that Save the last keeps minutes of.
+  chip.textContent = `History: last ${_formatRetention(b.retention_seconds)} · ${b.event_count.toLocaleString()} events · ${formatBytes(b.db_size_bytes)}`;
 };
 
 // Messages a second the draft would record, at the rates they are sent now:

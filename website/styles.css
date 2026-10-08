@@ -7212,6 +7212,10 @@ body.dsdl-resizing-row {
   align-self: flex-start;
 }
 
+.record-buffer-chip:empty {
+  display: none;  /* the history not known yet */
+}
+
 /* Two-pane layout: cards on left, builder on right. */
 .record-layout {
   display: grid;

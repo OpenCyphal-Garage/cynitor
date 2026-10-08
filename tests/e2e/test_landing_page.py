@@ -4425,6 +4425,23 @@ async def _(page):
         await record_close(page, server)
 
 
+@test("Record: the history chip names the history, and is not drawn while it is unknown")
+async def _(page):
+    server = _RecordServer()
+    server.failures[("GET", "/api/recordings/buffer")] = (500, "database is locked")
+    await record_open(page, server)
+    try:
+        await page.wait_for_timeout(300)
+        assert not await page.locator("#recBufferChip").is_visible(), "An empty chip is drawn in the header"
+        del server.failures[("GET", "/api/recordings/buffer")]
+        await page.evaluate("fetchRecordBuffer()")
+        await page.wait_for_timeout(300)
+        chip = await page.locator("#recBufferChip").inner_text()
+        assert chip.startswith("History"), f"The chip reads {chip!r}"
+    finally:
+        await record_close(page, server)
+
+
 @test("Replay strip: an hour-long replay reads h:mm:ss, its counters are not read out each second, and its end counts every event")
 async def _(page):
     try:
