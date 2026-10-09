@@ -68,7 +68,7 @@ const _formatRetention = (seconds) => {
 
 // What selecting a service records: Cynitor sees the calls it makes itself
 // (from the Services panel), not those between other nodes.
-const SERVICE_RECORDED = 'calls from Cynitor';
+const SERVICE_RECORDED = 'only service calls sent from Cynitor';
 
 // Port-ID → IDs of the nodes whose port lists named in `lists` hold it.
 const _portNodes = (lists) => {
@@ -110,7 +110,7 @@ const _subjectsPickerData = () => {
     kind: 'service',
     id: sid,
     label: 'service',  // the heading above says what it records, as its hint does
-    hint: `A service records the ${SERVICE_RECORDED}`,
+    hint: `A service records ${SERVICE_RECORDED}`,
     owner: _ownerLabel([...owners]),
     ownerIds: [...owners],
     rate: '',
@@ -1018,7 +1018,7 @@ const _renderViewShell = (container) => {
         <section class="record-builder-pane">
           <div class="record-pickers-row">
             <div class="record-builder-block">
-              <h3 class="record-builder-h">Subjects/services <span class="record-builder-sub">double-click to add · a service records the calls made from Cynitor</span></h3>
+              <h3 class="record-builder-h">Subjects/services <span class="record-builder-sub">double-click to add · a service records ${SERVICE_RECORDED}</span></h3>
               <div id="recSubjectsPicker" class="record-picker"></div>
             </div>
             <div class="record-builder-block">

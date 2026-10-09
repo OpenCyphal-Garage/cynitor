@@ -4228,15 +4228,18 @@ RECORD_SERVICE = """() => {
 }"""
 
 
-@test("Record: a service says it records only the calls made from Cynitor")
+@test("Record: a service says it records only service calls sent from Cynitor")
 async def _(page):
     server = _RecordServer()
     await record_open(page, server, setup=RECORD_SERVICE)
     try:
+        said = "only service calls sent from Cynitor"
         picked = await page.evaluate("_subjectsPicker.getRow('service-384').getCell('label').getElement().title")
         selected = await page.evaluate("_selectionPicker.getRow('service-384').getData().label")
-        assert "from Cynitor" in picked and "from Cynitor" in selected, \
-            f"Service 384 reads {picked!r} hovered in the picker, {selected!r} in the selection"
+        heading = await page.evaluate("el('recSubjectsPicker').previousElementSibling.textContent")
+        assert said in picked and said in selected and said in heading, \
+            f"Service 384 reads {picked!r} hovered in the picker, {selected!r} in the selection, " \
+            f"and the picker's heading {heading!r}"
     finally:
         await page.evaluate("state.recordFilterDraft.service_ids = []; saveSettings();")
         await record_close(page, server)
