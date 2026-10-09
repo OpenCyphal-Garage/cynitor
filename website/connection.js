@@ -601,8 +601,17 @@ const selectInterface = async () => {
     return data;
   } catch (error) {
     showToast(`CAN connect failed: ${error.message}`, 'error');
+    setCanError(`Connect failed: ${error.message}`);
     return null;
   }
+};
+
+// Why the last CAN connect failed, or the session ended, kept under the CAN
+// form until the next attempt: a toast is gone in seconds.
+const setCanError = (message) => {
+  state.canError = message || null;
+  el('canError').textContent = state.canError || '';
+  el('canError').classList.toggle('hidden', !state.canError);
 };
 
 // The bus's nodes and load curve go with its CAN session, however it ends,
@@ -680,6 +689,7 @@ const pollStatus = async () => {
   if (backendCanRunning && !state.canConnected) {
     // Another client connected CAN
     state.canConnected = true;
+    setCanError(null);
     showConnectedCanInterface(data.can_interface, data.can_bitrate, data.can_data_bitrate, data.can_fd);
     state.preferredCanInterface = data.can_interface;
     updateCanConnectButton();
@@ -702,6 +712,7 @@ const pollStatus = async () => {
 
     if (data.last_error) {
       showToast(`CAN disconnected: ${data.last_error}`, 'error');
+      setCanError(`Disconnected: ${data.last_error}`);
     }
   }
 
@@ -852,6 +863,7 @@ const openDashboard = async () => {
   if (statusData.status === 'running' && statusData.can_interface) {
     state.canAdapters = statusData.available_adapters || [];
     state.canConnected = true;
+    setCanError(null);
     showConnectedCanInterface(statusData.can_interface, statusData.can_bitrate,
       statusData.can_data_bitrate, statusData.can_fd);
     state.preferredCanInterface = statusData.can_interface;
@@ -906,6 +918,7 @@ const connectCan = async () => {
 
   // Connect CAN
   stopInterfacePolling();
+  setCanError(null);
   state.canConnecting = true;
   updateCanConnectButton();
   renderNodesTable();

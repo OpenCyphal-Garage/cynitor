@@ -85,6 +85,7 @@
             </select>
           </div>
           <button id="connectCanBtn" class="sidebar-action btn-primary">Connect</button>
+          <div id="canError" class="can-error hidden"></div>
         </div>
       </div>
 
@@ -259,7 +260,7 @@
 
   </div><!-- /app-shell -->
 
-  <div id="toastContainer" class="toast-container"></div>
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
   <div id="easterEggOverlay" class="easter-overlay hidden">
     <img src="./images/easter_bus_1.gif" alt="" />

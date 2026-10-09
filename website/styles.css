@@ -3529,6 +3529,17 @@ button:focus-visible,
   cursor: help;
 }
 
+/* Why the last CAN connect failed, or the session ended (sidebar, CAN section). */
+.can-error {
+  padding: 0.25rem 0.5rem;
+  border-left: 0.1875rem solid var(--error);
+  background: var(--error-muted);
+  color: var(--error);
+  font-size: 0.6875rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 /* ── Subjects table ── */
 
 .kind-badge {

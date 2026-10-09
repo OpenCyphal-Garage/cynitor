@@ -21,6 +21,7 @@ const state = {
   dashboardConnecting: false,
   dashboardRetry: null,  // {timer, attempts} while a backend that stopped answering is tried again
   canState: CONN.IDLE,
+  canError: null,        // why the last CAN connect failed or the session ended, until the next attempt
   preferredCanInterface: '',
   // Adapters the backend offers (GET /api/status available_adapters).
   canAdapters: [],

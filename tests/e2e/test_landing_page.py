@@ -5321,6 +5321,8 @@ class _SidebarServer:
         self.down = False   # every request refused, as by a backend that is not running
         self.ws = None      # the server end of the dashboard's socket
         self.adapters = [SIDEBAR_VCAN, SIDEBAR_PEAK]  # what discovery lists
+        self.connect_error = None  # what a CAN connect fails with, if it does
+        self.last_error = None     # why the backend last ended a CAN session itself
 
     async def handle(self, route):
         if self.down:
@@ -5332,8 +5334,12 @@ class _SidebarServer:
             answer = {"status": "running" if self.can else "idle", "can_interface": self.can,
                       "can_bitrate": None, "can_data_bitrate": None, "can_fd": False,
                       "available_interfaces": ["vcan0"], "available_adapters": self.adapters,
-                      "bus_utilization": 30.0 if self.can else None, "dropped": None, "last_error": None,
-                      "cyphal_v11": None}
+                      "bus_utilization": 30.0 if self.can else None, "dropped": None,
+                      "last_error": self.last_error, "cyphal_v11": None}
+        elif path == "/api/can/connect" and self.connect_error:
+            await route.fulfill(json={"error": self.connect_error}, status=500,
+                                headers={"Access-Control-Allow-Origin": "*"})
+            return
         elif path == "/api/can/connect":
             self.can = request.post_data_json["interface"]
             answer = {"status": "running", "can_interface": self.can, "can_fd": False}
@@ -5514,6 +5520,36 @@ async def _(page):
         back = await page.evaluate("selectedCanTarget().interface")
         assert back == "pcan:PCAN_USBBUS1", \
             f"PEAK picked, gone for a refresh ({meanwhile} shown), then back: Connect would open {back}"
+    finally:
+        await sidebar_close(page, server)
+
+
+# What the CAN section says of its last failure, if anything (#canError shown).
+SIDEBAR_CAN_ERROR = "el('canError') && !el('canError').classList.contains('hidden') ? el('canError').textContent : null"
+
+
+@test("Sidebar: why a CAN connect failed, or the session ended, stays under the CAN form until the next try")
+async def _(page):
+    server = _SidebarServer()
+    server.connect_error = "Failed to open can0: [Errno 19] No such device"
+    await sidebar_open(page, server)
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("!el('connectCanBtn').disabled", timeout=WAIT_MS)
+        await page.locator("#connectCanBtn").click()
+        await page.wait_for_function("state.canState === 'idle'", timeout=WAIT_MS)
+        failed = await page.evaluate(SIDEBAR_CAN_ERROR)
+        server.connect_error = None
+        await page.locator("#connectCanBtn").click()
+        await page.wait_for_function("state.canState === 'connected'", timeout=WAIT_MS)
+        cleared = await page.evaluate(SIDEBAR_CAN_ERROR)
+        server.can, server.last_error = None, "Interface vcan0 no longer exists"  # ended by the watchdog
+        await page.evaluate("pollStatus()")
+        lost = await page.evaluate(SIDEBAR_CAN_ERROR)
+        live = await page.get_attribute("#toastContainer", "aria-live")
+        assert (failed, cleared, lost, live) == ("Connect failed: Failed to open can0: [Errno 19] No such device", None,
+                                                 "Disconnected: Interface vcan0 no longer exists", "polite"), \
+            f"Refused: {failed!r}; connected: {cleared!r}; ended by the backend: {lost!r}; toasts' aria-live: {live!r}"
     finally:
         await sidebar_close(page, server)
 
