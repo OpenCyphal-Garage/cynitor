@@ -8243,9 +8243,13 @@ body.dsdl-resizing-row {
   color: var(--muted);
 }
 
-/* Frames the stream lost: the one count that is not routine. */
+/* Frames the stream lost, and error frames on the bus: the counts that are not routine. */
 .fm-dropped {
   color: var(--warn);
+}
+
+.fm-errors {
+  color: var(--error);
 }
 
 .fm-status {
@@ -8378,6 +8382,12 @@ body.dsdl-resizing-row {
 }
 
 .fm-kind-req, .fm-kind-resp { color: var(--accent); }
+
+/* An error frame: the controller saw the bus go wrong. */
+.fm-row.fm-error-frame .fm-id,
+.fm-row.fm-error-frame .fm-error-says {
+  color: var(--error);
+}
 
 .fm-foreign-tag {
   color: var(--warn);

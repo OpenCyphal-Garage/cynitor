@@ -349,16 +349,19 @@ const DebugView = (() => {
   };
 
   // A standard (11-bit) ID in three hex digits, as candump writes it; an extended one in eight.
-  const fmtId = (f) => (f.ext === false ? `0x${parseInt(f.id, 16).toString(16).toUpperCase().padStart(3, '0')}` : f.id);
+  // An error frame's ID holds error classes, not an ID: it reads "error".
+  const fmtId = (f) => {
+    if (f.error) return 'error';
+    return f.ext === false ? `0x${parseInt(f.id, 16).toString(16).toUpperCase().padStart(3, '0')}` : f.id;
+  };
 
   // The tail byte's start-of-transfer, end-of-transfer and toggle bits, '-' where clear.
   const fmtFlags = (f) => `${f.start ? 'S' : '-'}${f.end ? 'E' : '-'}${f.toggle ? 'T' : '-'}`;
 
   // What the free-text filter looks through: the row as shown.
   const frameText = (f) => {
-    const decoded = f.cyphal
-      ? `${f.kind} ${f.port} n${f.src ?? '?'}${f.dst != null ? ` n${f.dst}` : ''} tid${f.transfer_id} ${f.priority}`
-      : 'foreign';
+    let decoded = f.error ? f.error.join(' ') : `foreign${f.rtr ? ' rtr' : ''}`;
+    if (f.cyphal) decoded = `${f.kind} ${f.port} n${f.src ?? '?'}${f.dst != null ? ` n${f.dst}` : ''} tid${f.transfer_id} ${f.priority}`;
     return `${fmtId(f)} ${f.dir} ${f.dlc} ${decoded} ${f.data}`.toLowerCase();
   };
 
@@ -409,8 +412,13 @@ const DebugView = (() => {
   const transferCell = (f) => `<td class="fm-transfer">${f.cyphal
     ? `<span class="fm-kind fm-kind-${escapeHtml(f.kind || 'x')}">${escapeHtml(f.kind || '?')}</span> `
       + `${escapeHtml(String(f.port ?? ''))} · ${escapeHtml(`n${f.src ?? '?'}${f.dst != null ? `→n${f.dst}` : ''}`)}`
-    : '<span class="fm-foreign-tag">foreign</span>'}</td>`;
-  const rowClass = (f) => `fm-row${f.cyphal ? '' : ' fm-foreign'}`;
+    : `<span class="fm-foreign-tag">foreign</span>${f.rtr ? ' · remote' : ''}`}</td>`;
+  // What an error frame reports, across the transfer's columns, which it has none of.
+  const errorCell = (f, columns) => {
+    const said = f.error.join(' · ');
+    return `<td class="fm-transfer fm-error-says" colspan="${columns}" title="${escapeHtml(said)}">${escapeHtml(said)}</td>`;
+  };
+  const rowClass = (f) => `fm-row${f.error ? ' fm-error-frame' : (f.cyphal ? '' : ' fm-foreign')}`;
 
   // Row `index` of `shown`; aria-rowindex tells screen readers where it is
   // among all the rows, few of which are drawn.
@@ -419,10 +427,8 @@ const DebugView = (() => {
       <td class="fm-delta">${escapeHtml(fmtDelta(f, shown[index + 1]))}</td>
       ${dirCell(f)}
       <td class="fm-id">${escapeHtml(fmtId(f))}</td>
-      ${cyphalCell('fm-prio', f, f.priority?.toLowerCase())}
-      ${transferCell(f)}
-      ${cyphalCell('fm-tid', f, f.transfer_id)}
-      ${cyphalCell('fm-flags', f, fmtFlags(f))}
+      ${f.error ? errorCell(f, 4) : `${cyphalCell('fm-prio', f, f.priority?.toLowerCase())}${transferCell(f)}
+      ${cyphalCell('fm-tid', f, f.transfer_id)}${cyphalCell('fm-flags', f, fmtFlags(f))}`}
       <td class="fm-len">${escapeHtml(String(f.dlc))}</td>
       <td class="fm-data">${escapeHtml(f.data)}</td>
     </tr>`;
@@ -438,8 +444,7 @@ const DebugView = (() => {
     return `<tr class="${rowClass(f)}">
       <td class="fm-id">${escapeHtml(fmtId(f))}</td>
       ${dirCell(f)}
-      ${cyphalCell('fm-prio', f, f.priority?.toLowerCase())}
-      ${transferCell(f)}
+      ${f.error ? errorCell(f, 2) : `${cyphalCell('fm-prio', f, f.priority?.toLowerCase())}${transferCell(f)}`}
       <td class="fm-count">${entry.count.toLocaleString()}</td>
       <td class="fm-delta">${entry.cycle != null ? entry.cycle.toFixed(1) : ''}</td>
       <td class="fm-age${quiet(entry, age) ? ' fm-quiet' : ''}">${age.toFixed(1)}</td>
@@ -475,12 +480,16 @@ const DebugView = (() => {
     const c = captureStats;
     if (!c) { node.textContent = ''; return; }
     node.textContent = `captured ${c.captured} · rx ${c.rx} · tx ${c.tx} · foreign ${c.foreign}`;
-    if (c.dropped) {  // frames lost before they reached this table
-      const lost = document.createElement('span');
-      lost.className = 'fm-dropped';
-      lost.textContent = `dropped ${c.dropped}`;
-      node.append(' · ', lost);
-    }
+    // The counts that are not routine: error frames on the bus, and frames
+    // lost before they reached this table.
+    const unusual = (cls, text) => {
+      const span = document.createElement('span');
+      span.className = cls;
+      span.textContent = text;
+      node.append(' · ', span);
+    };
+    if (c.errors) unusual('fm-errors', `errors ${c.errors}`);
+    if (c.dropped) unusual('fm-dropped', `dropped ${c.dropped}`);
   };
 
   const setStatus = (msg) => {

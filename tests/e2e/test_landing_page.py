@@ -4643,8 +4643,9 @@ class _DebugServer:
         return (quiet[path], 200) if path in quiet else ({"error": "Not found"}, 404)
 
     def _stats(self):
-        n = len(self.ring)
-        return {"active": True, "captured": n, "rx": n, "tx": 0, "cyphal": n, "foreign": 0, "dropped": self.dropped}
+        n, errors = len(self.ring), sum(1 for frame in self.ring if frame.get("error"))
+        return {"active": True, "captured": n, "rx": n, "tx": 0, "cyphal": n - errors, "foreign": 0, "errors": errors,
+                "dropped": self.dropped}
 
     def capture(self, frames):
         """Frames the bus carried: into the ring, and queued for a subscribed dashboard."""
@@ -5081,10 +5082,12 @@ async def _(page):
         await debug_close(page, server)
 
 
-# Each row of the frame table, newest first, as {column heading: cell text}.
-DEBUG_CELLS = """(() => { const heads = [...document.querySelectorAll('.fm-table thead th')].map(th => th.textContent);
-    return [...document.querySelectorAll('#fmRows tr')].map(row =>
-        Object.fromEntries([...row.cells].map((cell, i) => [heads[i], cell.textContent.trim()]))); })()"""
+# Each row of the frame table, newest first, as {column heading: cell text}; a
+# cell across several columns goes under the first.
+DEBUG_CELLS = """(() => { const heads = [...document.querySelectorAll('#fmTable thead th')].map(th => th.textContent);
+    return [...document.querySelectorAll('#fmRows tr')].map((row) => { let column = 0;
+        return Object.fromEntries([...row.cells].map((cell) => {
+            const head = heads[column]; column += cell.colSpan; return [head, cell.textContent.trim()]; })); }); })()"""
 
 
 @test("Debug: the frame table writes a standard ID in three digits, and gives a Cyphal frame's priority, transfer-ID and tail bits")
@@ -5226,6 +5229,39 @@ async def _(page):
                          ("0x107D552A", "10", "100.0", "09 00 00 00 00 00 00 E5")] \
             and later == {"0x107D5507": True, "0x107D552A": False} and filtered == ["0x107D5507"], \
             f"(CAN ID, Count, Cycle, Last data): {shown}; quiet, 3 s on: {later}; filtered on src:7: {filtered}"
+    finally:
+        await debug_close(page, server)
+
+
+@test("Debug: error frames show in the trace, in red, saying what went wrong, and are counted")
+async def _(page):
+    server = _DebugServer()
+    await debug_open(page, server)
+    error = {"t": 1000.002, "ts": 1.76e9 + 0.002, "dir": "rx", "id": "0x000000A8", "ext": False, "dlc": 8,
+             "data": "00 00 04 00 00 00 00 00", "cyphal": False,
+             "error": ["protocol violation: stuff", "no ACK", "bus error"]}  # as serialize_message reports one
+    try:
+        await page.evaluate("document.documentElement.setAttribute('data-theme', 'dark')")
+        await debug_start_capture(page)
+        server.capture([_can_frame(1), error])
+        server.flush()
+        await page.wait_for_timeout(300)
+        seen = await page.evaluate("""() => { const red = (node) => { const probe = document.createElement('span');
+                probe.style.color = 'var(--error)'; document.body.append(probe);
+                const same = getComputedStyle(node).color === getComputedStyle(probe).color; probe.remove(); return same; };
+            const row = document.querySelector('#fmRows tr.fm-error-frame');
+            const counted = document.querySelector('#fmCounters .fm-errors');
+            return {id: row?.querySelector('.fm-id').textContent, says: row?.querySelector('.fm-error-says')?.textContent,
+                    red: !!row?.querySelector('.fm-error-says') && red(row.querySelector('.fm-error-says')),
+                    counted: counted && counted.textContent, countedRed: !!counted && red(counted)}; }""")
+        found = {}
+        for typed in ("-error", "ack"):
+            await page.locator("#fmFilter").fill(typed)
+            found[typed] = [row.get("CAN ID") for row in await page.evaluate(DEBUG_CELLS)]
+        assert seen == {"id": "error", "says": "protocol violation: stuff · no ACK · bus error", "red": True,
+                        "counted": "errors 1", "countedRed": True} \
+            and found == {"-error": ["0x107D5501"], "ack": ["error"]}, \
+            f"The error frame's row and the count: {seen}; filtered: {found}"
     finally:
         await debug_close(page, server)
 
