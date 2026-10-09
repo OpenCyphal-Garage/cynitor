@@ -4708,7 +4708,14 @@ details.svc-history-entry[open] > summary::before {
 .auth-modal-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 0.5rem;
   margin-top: 1rem;
+}
+
+/* Leaves the dashboard disconnected: a plain button beside the accent one. */
+.auth-modal-cancel {
+  font-weight: 600;
+  padding: 0.5rem 1rem;
 }
 
 .auth-modal-btn {

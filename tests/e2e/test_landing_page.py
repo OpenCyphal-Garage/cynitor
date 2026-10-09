@@ -5323,6 +5323,7 @@ class _SidebarServer:
         self.adapters = [SIDEBAR_VCAN, SIDEBAR_PEAK]  # what discovery lists
         self.connect_error = None  # what a CAN connect fails with, if it does
         self.last_error = None     # why the backend last ended a CAN session itself
+        self.token = None          # the CYNITOR_AUTH_TOKEN it wants, if any
 
     async def handle(self, route):
         if self.down:
@@ -5330,6 +5331,10 @@ class _SidebarServer:
             return
         request = route.request
         path = unquote(urlparse(request.url).path)
+        if self.token and request.headers.get("authorization") != f"Bearer {self.token}":
+            await route.fulfill(json={"error": "Missing or invalid token"}, status=401,
+                                headers={"Access-Control-Allow-Origin": "*"})
+            return
         if path == "/api/status":
             answer = {"status": "running" if self.can else "idle", "can_interface": self.can,
                       "can_bitrate": None, "can_data_bitrate": None, "can_fd": False,
@@ -5562,6 +5567,39 @@ async def _(page):
              "server": await page.get_by_role("group", name="Server").get_by_role("button", name=connect).count(),
              "can": await page.get_by_role("group", name="CAN").get_by_role("button", name=connect).count()}
     assert found == {"url": 1, "list": 1, "server": 1, "can": 1}, f"Found by their names: {found}"
+
+
+@test("Sidebar: a backend that wants a token says so without calling itself unreachable; the prompt can be left, and keeps what is typed")
+async def _(page):
+    server = _SidebarServer()
+    server.token = "s3cret"
+    await sidebar_open(page, server)
+    prompt = page.locator("#authModal")
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await prompt.locator("#authModalInput").wait_for(state="visible", timeout=WAIT_MS)
+        toasts = await page.locator("#toastContainer .toast").all_inner_texts()
+        await page.keyboard.press("Escape")
+        left = await prompt.is_hidden() and await page.evaluate("document.activeElement.id")
+        await page.locator("#connectDashboardBtn").click(timeout=WAIT_MS)  # under a prompt still open, it cannot be
+        await prompt.locator("#authModalInput").wait_for(state="visible", timeout=WAIT_MS)
+        await page.wait_for_timeout(100)  # the field takes the focus
+        stops = []
+        for _ in range(4):
+            await page.keyboard.press("Tab")
+            stops.append(await page.evaluate("el('authModal').contains(document.activeElement)"))
+        await prompt.locator("#authModalInput").fill("s3c")
+        await page.evaluate("showAuthModal('Missing or invalid token')")  # what each refused request does
+        kept = await prompt.locator("#authModalInput").input_value()
+        await prompt.locator("#authModalInput").fill("s3cret")
+        await prompt.locator("#authModalInput").press("Enter")
+        connected = await wait_until(page, "state.dashboardConnected", 3)
+        assert not toasts and left == "connectDashboardBtn" and all(stops) and kept == "s3c" and connected, \
+            f"Toasts: {toasts}; Escape left it (focus back on): {left}; Tab stayed in it: {stops}; " \
+            f"typed 's3c', then asked again: {kept!r}; the token saved connects: {connected}"
+    finally:
+        await page.evaluate("setAuthToken(''); hideAuthModal()")
+        await sidebar_close(page, server)
 
 
 # Keep last: it reloads the page with every other host unreachable.

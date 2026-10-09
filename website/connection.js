@@ -841,7 +841,8 @@ const openDashboard = async () => {
     updateDashboardConnectButton();
     renderNodesTable();
     renderSelectedNodeContent();
-    showToast(`Backend unreachable: ${error.message}`, 'error');
+    // A backend that wants a token was reached: its prompt says so.
+    if (error.status !== 401) showToast(`Backend unreachable: ${error.message}`, 'error');
     return;
   }
 

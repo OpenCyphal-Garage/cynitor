@@ -657,11 +657,11 @@ const requestJson = async (path, options = {}) => {
 
 let _authModalResolver = null;
 
+let _authModalOpener = null;  // what had the focus: it gets it back on closing
+
 const showAuthModal = (errorMsg) => {
   const modal = el('authModal');
   if (!modal) return;
-  const apiBaseEl = el('authModalApiBase');
-  if (apiBaseEl) apiBaseEl.textContent = apiBase();
   const errEl = el('authModalError');
   if (errEl) {
     if (errorMsg) {
@@ -671,22 +671,31 @@ const showAuthModal = (errorMsg) => {
       errEl.classList.add('hidden');
     }
   }
+  // Every refused request asks again: while it is open, what is typed stays.
+  if (!modal.classList.contains('hidden')) return;
+  const apiBaseEl = el('authModalApiBase');
+  if (apiBaseEl) apiBaseEl.textContent = apiBase();
   const input = el('authModalInput');
   if (input) {
     input.value = '';
     setTimeout(() => input.focus(), 50);
   }
+  // The Connect clicked loses the focus while it is off, connecting: it gets it back.
+  _authModalOpener = document.activeElement === document.body ? el('connectDashboardBtn') : document.activeElement;
   modal.classList.remove('hidden');
 };
 
 const hideAuthModal = () => {
   const modal = el('authModal');
   if (modal) modal.classList.add('hidden');
+  if (_authModalOpener?.isConnected) _authModalOpener.focus();
+  _authModalOpener = null;
 };
 
 const _bindAuthModalOnce = () => {
   const btn = el('authModalSave');
   const input = el('authModalInput');
+  const modal = el('authModal');
   if (!btn || !input || btn.dataset.bound) return;
   btn.dataset.bound = '1';
   const commit = () => {
@@ -694,16 +703,27 @@ const _bindAuthModalOnce = () => {
     if (!token) return;
     setAuthToken(token);
     hideAuthModal();
-    // The caller decides what to retry — most paths will recover on the
-    // next status poll / WS reconnect tick.
-    if (typeof connectDashboard === 'function') {
-      // best-effort reconnect; safe to call even if already connected
-      try { connectDashboard(); } catch (_) {}
-    }
+    // Still connected (a request was refused before the status poll noticed),
+    // the next requests carry the token; otherwise connect with it.
+    if (!state.dashboardConnected && typeof openDashboard === 'function') openDashboard();
   };
   btn.addEventListener('click', commit);
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); commit(); }
+  });
+  // Cancel or Escape leaves the dashboard disconnected, its URL free to change.
+  el('authModalCancel').addEventListener('click', hideAuthModal);
+  document.addEventListener('keydown', (e) => {
+    if (modal.classList.contains('hidden')) return;
+    if (e.key === 'Escape') { hideAuthModal(); return; }
+    if (e.key !== 'Tab') return;
+    // Tab goes round the dialog's controls while it is open.
+    const controls = [...modal.querySelectorAll('input, button')];
+    const [first, last] = [controls[0], controls[controls.length - 1]];
+    if (!modal.contains(document.activeElement) || document.activeElement === (e.shiftKey ? first : last)) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+    }
   });
 };
 
