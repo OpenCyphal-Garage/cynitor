@@ -8212,7 +8212,7 @@ body.dsdl-resizing-row {
 .fm-filter {
   flex: 1;
   min-width: 8rem;
-  max-width: 18rem;
+  max-width: 24rem;
   font-family: var(--mono);
   font-size: 0.75rem;
   padding: 0.3125rem 0.5rem;

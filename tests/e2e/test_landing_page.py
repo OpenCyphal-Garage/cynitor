@@ -5105,6 +5105,31 @@ async def _(page):
         await debug_close(page, server)
 
 
+@test("Debug: the frame filter takes node:, port:, dir: and the like, and a leading - leaves frames out")
+async def _(page):
+    server = _DebugServer()
+    await debug_open(page, server)
+    try:
+        await debug_start_capture(page)
+        server.capture([_can_frame(1, src=42), _can_frame(2, src=4),  # heartbeats from nodes 42 and 4
+                        dict(_can_frame(3, src=12), kind="req", dst=42, port=430),
+                        dict(_can_frame(4, src=42), kind="resp", dst=12, port=430, dir="tx"),
+                        {"t": 1000.005, "ts": 1.76e9 + 0.005, "dir": "rx", "id": "0x00000123", "ext": False, "dlc": 2,
+                         "data": "AA BB", "cyphal": False}])
+        server.flush()
+        await page.wait_for_timeout(300)
+        found = {}
+        for typed in ("node:42", "port:7509 -node:42", "dir:tx", "-foreign kind:req", "node:", "02 03 04"):
+            await page.locator("#fmFilter").fill(typed)
+            found[typed] = sorted(row["CAN ID"][-2:] for row in await page.evaluate(DEBUG_CELLS))
+        assert found == {"node:42": ["01", "03", "04"], "port:7509 -node:42": ["02"], "dir:tx": ["04"],
+                         "-foreign kind:req": ["03"], "node:": ["01", "02", "03", "04", "23"],
+                         "02 03 04": ["01", "02", "03", "04"]}, \
+            f"The rows each filter shows, by the end of their CAN ID: {found}"
+    finally:
+        await debug_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

@@ -24,7 +24,7 @@ const DebugView = (() => {
   // Frame-monitor state
   let captureOn = false;  // are we currently forwarding frames to this client?
   let paused = false;     // freeze the table without unsubscribing
-  let filterText = '';    // lowercased substring filter
+  let filterTests = [];   // one test per filter term, all to pass (parseFilter)
   let rows = [];          // recent frames, newest first
   let pending = [];       // frames that came while paused, newest first: shown on Resume
   let lastSeq = 0;        // frames are numbered as they come, for trimming the table
@@ -48,7 +48,9 @@ const DebugView = (() => {
             <button id="fmToggle" class="fm-btn fm-btn-primary" type="button">Start capture</button>
             <button id="fmPause" class="fm-btn" type="button" aria-pressed="false">Pause</button>
             <button id="fmClear" class="fm-btn" type="button">Clear</button>
-            <input id="fmFilter" class="fm-filter" type="text" placeholder="Filter: id, node, port, hex…" aria-label="Filter captured frames" />
+            <input id="fmFilter" class="fm-filter" type="text" placeholder="Filter: node:42 port:7509 -dir:tx, or any text"
+                   aria-label="Filter captured frames"
+                   title="Every word must match. node: src: dst: port: kind: prio: dir: tid: len: id: match that field (id: by its first digits); a leading - leaves out what the rest matches; any other word matches the row's text." />
             <span id="fmCounters" class="fm-counters"></span>
             <span id="fmStatus" class="fm-status" role="status" aria-live="polite"></span>
             <span class="fm-note">Capture forces loopback + accept-all filtering and stays on until CAN disconnect.</span>
@@ -316,12 +318,50 @@ const DebugView = (() => {
   // What the free-text filter looks through: the row as shown.
   const frameText = (f) => {
     const decoded = f.cyphal
-      ? `${f.kind} ${f.port} n${f.src} n${f.dst} tid${f.transfer_id} ${f.priority}`
+      ? `${f.kind} ${f.port} n${f.src ?? '?'}${f.dst != null ? ` n${f.dst}` : ''} tid${f.transfer_id} ${f.priority}`
       : 'foreign';
     return `${fmtId(f)} ${f.dir} ${f.dlc} ${decoded} ${f.data}`.toLowerCase();
   };
 
-  const matchesFilter = (f) => !filterText || frameText(f).includes(filterText);
+  // Filter terms naming a field: `node:42` is a frame from or to node 42.
+  const FIELD_TERMS = {
+    node: (f, v) => f.cyphal === true && (f.src === Number(v) || f.dst === Number(v)),
+    src: (f, v) => f.cyphal === true && f.src === Number(v),
+    dst: (f, v) => f.cyphal === true && f.dst === Number(v),
+    port: (f, v) => f.cyphal === true && f.port === Number(v),
+    tid: (f, v) => f.cyphal === true && f.transfer_id === Number(v),
+    kind: (f, v) => f.kind === v,
+    prio: (f, v) => String(f.priority).toLowerCase() === v,
+    dir: (f, v) => f.dir === v,
+    len: (f, v) => f.dlc === Number(v),
+    id: (f, v) => fmtId(f).toLowerCase().slice(2).startsWith(v.replace(/^0x/, '')),
+  };
+
+  // All must match: each `key:value` its field; the other words the row's
+  // text, together as typed (so `01 02` finds those bytes in a row). A
+  // leading `-` or `!` leaves out what the rest of the word matches. A term
+  // still being typed (`node:`, a lone `-`) is left out until it has a value.
+  const parseFilter = (text) => {
+    const tests = [];
+    const words = [];
+    for (const word of text.toLowerCase().split(/\s+/)) {
+      const negate = word[0] === '-' || word[0] === '!';
+      const term = negate ? word.slice(1) : word;
+      const [, key, value] = term.match(/^(\w+):(.*)$/) || [];
+      if (FIELD_TERMS[key]) {
+        if (value) tests.push((f) => FIELD_TERMS[key](f, value) !== negate);
+      } else if (negate) {
+        if (term) tests.push((f) => !frameText(f).includes(term));
+      } else if (term) {
+        words.push(term);
+      }
+    }
+    const typed = words.join(' ');
+    if (typed) tests.push((f) => frameText(f).includes(typed));
+    return tests;
+  };
+
+  const matchesFilter = (f) => filterTests.every((test) => test(f));
 
   const rowHtml = (f) => {
     const dirCls = f.dir === 'tx' ? 'fm-tx' : 'fm-rx';
@@ -520,7 +560,7 @@ const DebugView = (() => {
       updateEmpty();
     });
     el('fmFilter').addEventListener('input', (e) => {
-      filterText = e.target.value.trim().toLowerCase();
+      filterTests = parseFilter(e.target.value);
       renderTableFromRows();
     });
   };
