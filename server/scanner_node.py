@@ -10,7 +10,7 @@ import re
 import importlib
 import time
 import numpy as np
-from pycyphal.dsdl import get_model, to_builtin
+from pycyphal.dsdl import deserialize, get_model, to_builtin
 from pydsdl import CompositeType, Field
 
 from typing import Any, Optional, Callable
@@ -70,6 +70,19 @@ class ScannerNode:
         385: 'uavcan.register.List_1_0',
         430: 'uavcan.node.GetInfo_1_0',
         435: 'uavcan.node.ExecuteCommand_1_3',
+    }
+    # Every standard service with a fixed ID, for reading the calls heard on
+    # the bus: a node may serve one without a register saying so, and Cynitor
+    # serves uavcan.file.Read itself to a node updating its firmware.
+    FIXED_SERVICES = {
+        **STANDARD_SERVICES,
+        405: 'uavcan.file.GetInfo_0_2',
+        406: 'uavcan.file.List_0_2',
+        407: 'uavcan.file.Modify_1_1',
+        408: 'uavcan.file.Read_1_1',
+        409: 'uavcan.file.Write_1_1',
+        434: 'uavcan.node.GetTransportStatistics_0_1',
+        510: 'uavcan.time.GetSynchronizationMasterInfo_0_1',
     }
 
     def __init__(self, register_file: Optional[str] = None) -> None:
@@ -751,6 +764,38 @@ class ScannerNode:
         except Exception as e:
             logging.error(f"Error making service call for service {service_id} on node {node_id}: {str(e)}")
             raise
+
+    def describe_service_transfer(self, server_node_id: int, service_id: int, is_request: bool,
+                                  payload: bytes) -> tuple[Optional[str], str]:
+        """A service request or response heard on the bus, for the recordings:
+        its type's name, when known, and its fields as JSON, or its bytes in
+        hex where the type is unknown or they do not fit it."""
+        name, service_class = self._service_class(server_node_id, service_id)
+        if service_class is not None:
+            try:
+                value = deserialize(service_class.Request if is_request else service_class.Response,
+                                    [memoryview(payload)])
+                if value is not None:
+                    return name, json.dumps(to_builtin(value))
+            except Exception as e:
+                logging.debug(f"Service {service_id} transfer does not read as {name}: {e}")
+        return name, payload.hex(" ").upper()
+
+    def _service_class(self, server_node_id: int, service_id: int) -> tuple[Optional[str], Any]:
+        """The name and class of the service a node serves on ``service_id``, as
+        its registers say, else as the fixed ID says; (None, None) if unknown."""
+        meta = self.service_metadata.get((server_node_id, service_id))
+        client = self.service_clients.get((server_node_id, service_id))
+        if meta and client is not None:
+            return f"{meta['namespace']}.{meta['service_name']}", client.dtype
+        name = self.FIXED_SERVICES.get(service_id)
+        if name is None:
+            return None, None
+        namespace, _, class_name = name.rpartition('.')
+        try:
+            return name, getattr(importlib.import_module(namespace), class_name)
+        except (ImportError, AttributeError):
+            return name, None
 
     def get_service_schema(self, node_id: int) -> list[dict[str, Any]]:
         """Return structured schema for all services on a node."""

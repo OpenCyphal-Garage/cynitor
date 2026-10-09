@@ -252,6 +252,7 @@ class CANSession:
         self.allocator_manager = None
         self.event_logger = None
         self.frame_capture = None
+        self.service_calls = None  # every service call on the bus, for the recordings
         self.bus_load: Optional[BusLoadMonitor] = None
         # Shares a non-SocketCAN adapter among the components; see can_hub.
         self.hub: Optional[CANHub] = None
@@ -399,6 +400,18 @@ class CANSession:
                 self.can_bitrate = bitrate
                 self.can_data_bitrate = data_bitrate
                 self.can_fd = media_mtu() == FD_MTU
+
+                # Cynitor's own node hears only the calls made to it: the
+                # recordings take the calls from a tap on the bus instead.
+                from service_calls import ServiceCallRecorder, SOCKETCAN_FILTER as SERVICE_FRAMES
+                self.service_calls = ServiceCallRecorder(
+                    lambda on_frame: self._open_capture_tap(on_frame, SERVICE_FRAMES),
+                    self.scanner.describe_service_transfer, self.event_logger,
+                    node_uid=self.scanner._get_node_unique_id_hex)
+                try:
+                    self.service_calls.start()
+                except Exception as exc:  # CAN works on; only the recordings miss the calls
+                    logger.warning("Service calls will not be recorded: %s", exc)
                 logger.info("CAN session started on %s", can_iface)
             except Exception:
                 try:
@@ -407,12 +420,14 @@ class CANSession:
                     logger.error("Cleanup error during failed connect: %s", cleanup_err)
                 raise
 
-    def _open_capture_tap(self, on_frame: Callable) -> Callable[[], None]:
+    def _open_capture_tap(self, on_frame: Callable, can_filters: Optional[list] = None) -> Callable[[], None]:
         """Every frame on the bus to ``on_frame`` for frame capture; returns what stops it.
 
         Behind the hub a listener on its forwarding, on SocketCAN a socket of
         its own: neither changes what Cynitor sends or receives. Stopping a
-        socket waits for its thread, so that happens off the event loop.
+        socket waits for its thread, so that happens off the event loop. On
+        SocketCAN, ``can_filters`` has the kernel pass only the frames they
+        accept; behind the hub every frame comes.
         """
         hub = self.hub
         if hub is not None:
@@ -420,7 +435,8 @@ class CANSession:
             return lambda: hub.remove_listener(on_frame)
         if not self.can_interface:
             raise RuntimeError("CAN is still connecting")
-        tap = SocketcanTap(socketcan_device(self.can_interface), self.can_fd, on_frame, name="capture")
+        tap = SocketcanTap(socketcan_device(self.can_interface), self.can_fd, on_frame,
+                           can_filters=can_filters, name="capture")
         return lambda: threading.Thread(target=tap.stop, name="capture-stop", daemon=True).start()
 
     def _own_node_ids(self) -> set[int]:
@@ -766,6 +782,10 @@ class CANSession:
         """Internal cleanup — caller must hold self._lock."""
         logger.info("Tearing down CAN session...")
 
+        # Before the event logger it writes to, and the hub its tap listens to.
+        if self.service_calls is not None:
+            self.service_calls.stop()
+        self.service_calls = None
         self.stop_raw_log()
         for task in self._tasks:
             if not task.done():

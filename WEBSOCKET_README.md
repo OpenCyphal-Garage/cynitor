@@ -1097,6 +1097,19 @@ Snapshots matching events from the global buffer in `[now - last_seconds, now]` 
 
 An event matches if it satisfies **any** dimension (subject in `subject_ids` OR node in `node_ids` OR service in `service_ids` OR type in `message_types`). Empty/missing keys impose no restriction on that dimension. Empty filter overall = capture everything. Unknown keys are ignored. Invalid types are dropped silently (non-integer ids, non-string types). `service_ids` matches `service_call` rows; it has no effect against the global `events` table for legacy bookmarks.
 
+#### Service calls
+
+A live recording takes every service call on the bus that its filter matches, between any two nodes, Cynitor's own among them. A Cyphal service call goes from one node to another, so Cynitor's own node hears only the calls made to it: the recordings take the calls from a listen-only tap on the bus instead (on SocketCAN a socket the kernel passes only service frames, behind the CAN hub a listener on its forwarding). Each request and response is rebuilt from its frames, and the two are paired by client, server, service-ID and transfer-ID. A call matches `service_ids` by its service-ID, and `node_ids` by its server or its client.
+
+A call is stored as a `service_call` event: `service_id`; `publisher_node_id`, the server's node-ID; `message_type`, the service's type when Cynitor knows it (from the server's registers, or a standard fixed service-ID), else `null`; and its fields in `attributes`:
+
+- `client_node_id` — the node that made the call.
+- `status` — `ok`, or `timeout` when no response came within 5 seconds.
+- `latency_ms` — from the request to the response, as heard on the bus; `null` for a timeout, or for a response whose request the recording did not hear.
+- `request`, `response` — the transfer's fields as JSON text when Cynitor knows the type, else its bytes in hex; `null` when not heard.
+
+Quick save holds no service calls: the global buffer it copies from holds subject events only. A call made from the Services panel is also kept in its node's history, as event type `service_call`.
+
 #### Export
 
 ```http
@@ -1104,7 +1117,7 @@ GET    /api/recordings/{rec_id}/export?format=csv      → text/csv stream
 GET    /api/recordings/{rec_id}/export?format=jsonl    → application/x-ndjson stream
 ```
 
-CSV columns: `recording_id, timestamp_unix, timestamp, subject_id, service_id, publisher_node_id, unique_id, message_type, rate, attribute, value, unit`. One row per attribute (events with N attributes → N rows). A service call fills `service_id` instead of `subject_id`, gives its server's node-ID as `publisher_node_id` and its type as `message_type`, and takes a row per field of the call (`status`, `latency_ms`, `response`), the field's name in `attribute`.
+CSV columns: `recording_id, timestamp_unix, timestamp, subject_id, service_id, publisher_node_id, unique_id, message_type, rate, attribute, value, unit`. One row per attribute (events with N attributes → N rows). A service call fills `service_id` instead of `subject_id`, gives its server's node-ID as `publisher_node_id` and its type as `message_type`, and takes a row per field of the call (`client_node_id`, `status`, `latency_ms`, `request`, `response`; see Service calls), the field's name in `attribute`.
 
 JSONL (JSON Lines) streams one JSON object per line. The first line is a header: `{ "recording": {...}, "exported_at_unix": float }`. Every subsequent line is a single event object with `kind`, `subject_id`/`service_id`, `timestamp_unix`, `attributes`, etc. Streamed with the same pagination as CSV — no hard event cap.
 
