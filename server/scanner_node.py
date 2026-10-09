@@ -60,6 +60,8 @@ class ScannerNode:
     PUBLISHING_MIN_SECONDS = 2.0
     MAX_SUBJECT_ID = 8191
     MAX_SERVICE_ID = 511
+    # A port-ID register's "unset" (register/384.Access): the port is inactive.
+    UNSET_PORT_ID = 65535
     MAX_REGISTERS = 256
     INFO_REFRESH_S = 60.0   # GetInfo refresh period once a node has answered
     INFO_RETRY_S = 10.0     # retry period while it has not
@@ -263,6 +265,9 @@ class ScannerNode:
             port_id = int(value[0])  # Natural16 is an array with one element
         except (TypeError, ValueError, IndexError) as e:
             logging.warning(f"Invalid {label}-ID in register '{reg_name}': {value}, error: {e}")
+            return None
+        if port_id == self.UNSET_PORT_ID:  # a port the node has but does not use, as the standard allows
+            logging.debug(f"Register '{reg_name}' of node {node_id} is unset: the port is inactive")
             return None
         if not (0 <= port_id <= max_port_id):
             logging.warning(f"Invalid {label}-ID {port_id} in register '{reg_name}' for node {node_id}")

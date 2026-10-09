@@ -89,6 +89,15 @@ class TestResolvePortRegister:
         assert fake.reads == ["uavcan.pub.bad.id"]
 
     @pytest.mark.asyncio
+    async def test_unset_id_is_an_inactive_port_not_a_warning(self, caplog):
+        # 65535 is the standard's "unset": a port the node has but does not use.
+        node, fake = make_node({"uavcan.pub.uavcan.node.heartbeat.id": ("natural16", [65535])})
+        with caplog.at_level("WARNING"):
+            assert await resolve(node, "uavcan.pub.uavcan.node.heartbeat.id") is None
+        assert caplog.text == ""
+        assert fake.reads == ["uavcan.pub.uavcan.node.heartbeat.id"]
+
+    @pytest.mark.asyncio
     async def test_rejects_service_id_above_service_range(self):
         # 1000 is a valid subject-ID but not a valid service-ID.
         node, _ = make_node({
