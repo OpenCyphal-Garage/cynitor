@@ -5166,6 +5166,26 @@ async def _(page):
         await debug_close(page, server)
 
 
+@test("Debug: each frame says how long after the frame shown before it it came, to the µs: with a filter, a subject's period")
+async def _(page):
+    server = _DebugServer()
+    await debug_open(page, server)
+    try:
+        await debug_start_capture(page)
+        # 1 ms apart (see _can_frame), node 42's every 10 ms.
+        server.capture([dict(_can_frame(n, src=42 if n % 10 == 0 else 7), t=1000 + n / 1000 + 0.000003 * (n == 20))
+                        for n in range(21)])
+        server.flush()
+        await page.wait_for_timeout(300)
+        gaps = [row.get("Δ ms") for row in await page.evaluate(DEBUG_CELLS)]
+        await page.locator("#fmFilter").fill("src:42")
+        periods = [row.get("Δ ms") for row in await page.evaluate(DEBUG_CELLS)]
+        assert gaps[:3] == ["1.003", "1.000", "1.000"] and gaps[-1] == "" and periods == ["10.003", "10.000", ""], \
+            f"Δ ms, newest first: {gaps[:3]}…{gaps[-1:]}; with only node 42's frames: {periods}"
+    finally:
+        await debug_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

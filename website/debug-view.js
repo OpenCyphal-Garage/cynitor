@@ -61,19 +61,20 @@ const DebugView = (() => {
           <div id="fmWrap" class="fm-table-wrap">
             <table id="fmTable" class="fm-table" aria-rowcount="1">
               <colgroup>
-                <col class="fm-col-time"><col class="fm-col-dir"><col class="fm-col-id"><col class="fm-col-prio">
+                <col class="fm-col-time"><col class="fm-col-delta"><col class="fm-col-dir"><col class="fm-col-id"><col class="fm-col-prio">
                 <col class="fm-col-transfer"><col class="fm-col-tid"><col class="fm-col-flags"><col class="fm-col-len">
                 <col>
               </colgroup>
               <thead><tr>
-                <th>Time</th><th>Dir</th><th>CAN ID</th><th>Prio</th><th>Transfer</th>
+                <th>Time</th><th title="Milliseconds since the frame below it, the one shown before">Δ <span class="fm-unit">ms</span></th>
+                <th>Dir</th><th>CAN ID</th><th>Prio</th><th>Transfer</th>
                 <th title="Transfer-ID">TID</th>
                 <th title="Start of transfer, end of transfer, toggle bit; - where clear">Flags</th>
                 <th>Len</th><th>Data</th>
               </tr></thead>
-              <tbody class="fm-pad" aria-hidden="true"><tr><td colspan="9"></td></tr></tbody>
+              <tbody class="fm-pad" aria-hidden="true"><tr><td colspan="10"></td></tr></tbody>
               <tbody id="fmRows"></tbody>
-              <tbody class="fm-pad fm-pad-below" aria-hidden="true"><tr><td colspan="9"></td></tr></tbody>
+              <tbody class="fm-pad fm-pad-below" aria-hidden="true"><tr><td colspan="10"></td></tr></tbody>
             </table>
             <div id="fmEmpty" class="fm-empty"></div>
           </div>
@@ -314,6 +315,10 @@ const DebugView = (() => {
 
   // ── Section 2: frame monitor ───────────────────────────────────────────
 
+  // The time from the frame shown before `f` (the row below it), in ms to
+  // the µs: with a filter, one subject's period. From `t`, the precise clock.
+  const fmtDelta = (f, before) => (before ? ((f.t - before.t) * 1000).toFixed(3) : '');
+
   const fmtTime = (ts) => {
     if (ts == null) return '—';
     const d = new Date(ts * 1000);
@@ -387,6 +392,7 @@ const DebugView = (() => {
     const cyphal = (value) => (f.cyphal ? escapeHtml(String(value ?? '')) : '');
     return `<tr class="fm-row${f.cyphal ? '' : ' fm-foreign'}" aria-rowindex="${index + 2}">
       <td class="fm-time">${escapeHtml(fmtTime(f.ts))}</td>
+      <td class="fm-delta">${escapeHtml(fmtDelta(f, shown[index + 1]))}</td>
       <td><span class="fm-dir ${dirCls}">${f.dir === 'tx' ? 'TX' : 'RX'}</span></td>
       <td class="fm-id">${escapeHtml(fmtId(f))}</td>
       <td class="fm-prio">${cyphal(f.priority?.toLowerCase())}</td>
