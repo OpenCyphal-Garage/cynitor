@@ -132,12 +132,14 @@ const updateSemaphores = () => {
     }
   }
 
-  // Lock fields when connected
+  // Lock fields when connected; the CAN form needs the server, whose list it shows.
   el('apiBase').disabled = state.dashboardConnected || Boolean(state.dashboardRetry);
-  el('interfacesSelect').disabled = state.canConnected || state.canConnecting;
-  el('canSpecInput').disabled = state.canConnecting;
-  el('canBitrateSelect').disabled = state.canConnecting;
-  el('canBitrateCustom').disabled = state.canConnecting;
+  const canFormOff = !state.dashboardConnected || state.canConnecting;
+  el('interfacesSelect').disabled = canFormOff || state.canConnected;
+  el('canSpecInput').disabled = canFormOff;
+  el('canBitrateSelect').disabled = canFormOff;
+  el('canBitrateCustom').disabled = canFormOff;
+  el('canDataBitrateSelect').disabled = canFormOff;
   renderRecordStart();  // the Record tab's Start needs both connections
   DebugView.renderControls();  // so does the Debug tab's Start capture, and its socket
 
@@ -209,8 +211,10 @@ const updateCanConnectButton = () => {
   button.textContent = state.canConnecting ? 'Connecting…' : state.canDisconnecting ? 'Disconnecting…'
     : state.canConnected ? 'Disconnect' : 'Connect';
   const incomplete = !state.canConnected && !canFormReady();
-  button.disabled = state.canConnecting || state.canDisconnecting || incomplete;
-  button.title = incomplete && selectedCanTarget().interface ? 'Choose the bus bitrate first' : '';
+  const serverOff = !state.dashboardConnected;
+  button.disabled = serverOff || state.canConnecting || state.canDisconnecting || incomplete;
+  button.title = serverOff ? (state.dashboardRetry ? 'Waiting for the server to answer' : 'Connect to the server first')
+    : incomplete && selectedCanTarget().interface ? 'Choose the bus bitrate first' : '';
   updateSemaphores();
 };
 

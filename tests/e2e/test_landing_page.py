@@ -5626,6 +5626,27 @@ async def _(page):
         await sidebar_close(page, server)
 
 
+@test("Sidebar: with the server not connected, the CAN form is off, saying to connect the server first")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    can_form = """() => ({list: el('interfacesSelect').disabled, button: el('connectCanBtn').disabled,
+        title: el('connectCanBtn').title})"""
+    try:
+        fresh = await page.evaluate(can_form)
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("el('interfacesSelect').options.length > 1", timeout=WAIT_MS)
+        connected = await page.evaluate(can_form)
+        await page.locator("#connectDashboardBtn").click()  # Disconnect: the list stays, from the last session
+        await page.wait_for_function("!state.dashboardConnected", timeout=WAIT_MS)
+        left = await page.evaluate(can_form)
+        off = {"list": True, "button": True, "title": "Connect to the server first"}
+        assert fresh == off and left == off and connected == {"list": False, "button": False, "title": ""}, \
+            f"The CAN form on a fresh page: {fresh}; connected: {connected}; after the server's Disconnect: {left}"
+    finally:
+        await sidebar_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
