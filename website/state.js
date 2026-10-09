@@ -611,13 +611,15 @@ const withSmartJsonHeaders = (options = {}) => {
 
 const REQUEST_TIMEOUT_MS = 15000;
 
+// `timeoutMs` in the options gives a request longer than REQUEST_TIMEOUT_MS.
 const requestJson = async (path, options = {}) => {
+  const { timeoutMs = REQUEST_TIMEOUT_MS, ...fetchOptions } = options;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let response;
   try {
     response = await fetch(`${apiBase()}${path}`, {
-      ...withSmartJsonHeaders(options),
+      ...withSmartJsonHeaders(fetchOptions),
       signal: controller.signal,
     });
   } catch (error) {

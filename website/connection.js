@@ -206,7 +206,8 @@ const updateCanConnectButton = () => {
   if (!button) {
     return;
   }
-  button.textContent = state.canConnected ? 'Disconnect' : 'Connect';
+  button.textContent = state.canConnecting ? 'Connecting…' : state.canDisconnecting ? 'Disconnecting…'
+    : state.canConnected ? 'Disconnect' : 'Connect';
   const incomplete = !state.canConnected && !canFormReady();
   button.disabled = state.canConnecting || state.canDisconnecting || incomplete;
   button.title = incomplete && selectedCanTarget().interface ? 'Choose the bus bitrate first' : '';
@@ -564,6 +565,10 @@ const stopInterfacePolling = () => {
   }
 };
 
+// A first connect compiles the DSDL, and every connect listens for heartbeats
+// to pick a node-ID: it can take well over the 15 s other requests get.
+const CAN_CONNECT_TIMEOUT_MS = 120000;
+
 const selectInterface = async () => {
   const target = selectedCanTarget();
   if (!target.interface) {
@@ -586,6 +591,7 @@ const selectInterface = async () => {
     const data = await requestJson('/api/can/connect', {
       method: 'POST',
       body: JSON.stringify(body),
+      timeoutMs: CAN_CONNECT_TIMEOUT_MS,
     });
     state.preferredCanInterface = el('interfacesSelect').value;
     if (body.bitrate) {

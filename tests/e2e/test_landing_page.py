@@ -5324,6 +5324,7 @@ class _SidebarServer:
         self.connect_error = None  # what a CAN connect fails with, if it does
         self.last_error = None     # why the backend last ended a CAN session itself
         self.token = None          # the CYNITOR_AUTH_TOKEN it wants, if any
+        self.connect_delay = 0     # seconds a CAN connect takes
 
     async def handle(self, route):
         if self.down:
@@ -5346,6 +5347,7 @@ class _SidebarServer:
                                 headers={"Access-Control-Allow-Origin": "*"})
             return
         elif path == "/api/can/connect":
+            await asyncio.sleep(self.connect_delay)
             self.can = request.post_data_json["interface"]
             answer = {"status": "running", "can_interface": self.can, "can_fd": False}
         elif path == "/api/can/disconnect":
@@ -5357,7 +5359,10 @@ class _SidebarServer:
             answer = {"/api/nodes": {"node_count": 0, "nodes": {}}, "/api/replay/status": {"active": False},
                       "/api/recordings": {"recordings": []}, "/api/rawlogs": {"active": None, "logs": []},
                       "/api/logs": {"logs": []}}.get(path, {})
-        await route.fulfill(json=answer, headers={"Access-Control-Allow-Origin": "*"})
+        try:
+            await route.fulfill(json=answer, headers={"Access-Control-Allow-Origin": "*"})
+        except Exception:  # the page gave up on the request meanwhile
+            pass
 
     def on_socket(self, ws):
         self.ws = ws
@@ -5599,6 +5604,25 @@ async def _(page):
             f"typed 's3c', then asked again: {kept!r}; the token saved connects: {connected}"
     finally:
         await page.evaluate("setAuthToken(''); hideAuthModal()")
+        await sidebar_close(page, server)
+
+
+@test("Sidebar: a CAN connect slower than other requests is waited for, its button saying Connecting…")
+async def _(page):
+    server = _SidebarServer()
+    server.connect_delay = 16  # a first connect compiles the DSDL; other requests give up after 15 s
+    await sidebar_open(page, server)
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("!el('connectCanBtn').disabled", timeout=WAIT_MS)
+        await page.locator("#connectCanBtn").click()
+        await page.wait_for_timeout(500)
+        said = await page.locator("#connectCanBtn").text_content()
+        connected = await wait_until(page, "state.canState === 'connected'", 18)
+        toasts = await page.locator("#toastContainer .toast").all_inner_texts()
+        assert said == "Connecting…" and connected and not toasts, \
+            f"While connecting the button said {said!r}; connected after 16 s: {connected}; toasts: {toasts}"
+    finally:
         await sidebar_close(page, server)
 
 
