@@ -446,7 +446,9 @@ const initNodesTable = () => {
     selectable: 1,
     rowFormatter: focusableRow,
     keybindings: false,  // its Home/End move the focus off the rows; see bindRowKeys
-    placeholder: tablePlaceholder(),
+    // A function: Tabulator builds its placeholder anew each time it shows
+    // it, so it says what is true then, not what was at build.
+    placeholder: tablePlaceholder,
     initialSort,
     columns: [
       { title: '', field: '_fav', responsive: 0, formatter: favFormatter, width: 36, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-fav', cellClick: (_e, cell) => { toggleFavourite(cell.getRow().getData().id); } },

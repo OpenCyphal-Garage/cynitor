@@ -374,7 +374,7 @@ const initSubjectsTable = () => {
     layout: 'fitColumns',
     rowFormatter: focusableRow,
     keybindings: false,  // its Home/End move the focus off the rows; see bindRowKeys
-    placeholder: subjectsPlaceholder(),
+    placeholder: subjectsPlaceholder,  // a function: see the Nodes table's
     initialSort,
     columns: [
       { title: '', field: '_fav', formatter: subjectFavFormatter, width: 36, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-fav', cellClick: (_e, cell) => { toggleSubjectFavourite(cell.getRow().getData()); } },

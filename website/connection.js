@@ -599,13 +599,22 @@ const selectInterface = async () => {
   }
 };
 
-const disconnectAll = ({ persist = true } = {}) => {
-  state.dashboardConnected = false;
-  state.canConnected = false;
+// The bus's nodes and load curve go with its CAN session, however it ends,
+// rather than stay on screen looking live.
+const clearCanSession = () => {
+  state.latestNodesPayload = { node_count: 0, nodes: {} };
   state.busUtilization = null;
   state.droppedEvents = null;
   state.busLoadHistory.length = 0;
   drawBusLoadSparkline();
+  renderNodesTable();
+  refreshSubjectsTable();
+  renderSelectedNodeContent();
+};
+
+const disconnectAll = ({ persist = true } = {}) => {
+  state.dashboardConnected = false;
+  state.canConnected = false;
   state.latestBySubject.clear();
   state.latestByNode.clear();
   state.subjectHistory.clear();
@@ -632,8 +641,7 @@ const disconnectAll = ({ persist = true } = {}) => {
   disconnectWs();
   updateDashboardConnectButton();
   updateCanConnectButton();
-  renderNodesTable();
-  renderSelectedNodeContent();
+  clearCanSession();
   updateSemaphores();
   if (persist) saveSettings();
 };
@@ -671,15 +679,13 @@ const pollStatus = async () => {
   } else if (!backendCanRunning && state.canConnected) {
     // CAN disconnected (by another client or due to error)
     state.canConnected = false;
-    state.busUtilization = null;
-    state.droppedEvents = null;
     REG_CACHE.clear();
     updateCanConnectButton();
     stopCanStartupDelay();
     stopNodesPolling();
     stopThroughputTimer();
     disconnectWs();
-    renderNodesTable();
+    clearCanSession();
     saveSettings();
     await loadInterfaces();
     startInterfacePolling();
@@ -847,7 +853,7 @@ const connectCan = async () => {
     stopNodesPolling();
     stopThroughputTimer();
     disconnectWs();
-    renderNodesTable();
+    clearCanSession();
     saveSettings();
 
     // Reload available interfaces

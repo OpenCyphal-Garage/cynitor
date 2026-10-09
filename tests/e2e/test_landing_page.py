@@ -5308,6 +5308,103 @@ async def _(page):
         f"the toggle's aria-expanded collapsed/open: {collapsed}/{expanded}"
 
 
+class _SidebarServer:
+    """The backend the sidebar talks to: status, CAN connect and disconnect, the nodes on the bus."""
+
+    def __init__(self):
+        self.can = None     # the interface CAN is connected to, or None
+        self.down = False   # every request refused, as by a backend that is not running
+        self.ws = None      # the server end of the dashboard's socket
+
+    async def handle(self, route):
+        if self.down:
+            await route.abort("connectionrefused")
+            return
+        request = route.request
+        path = unquote(urlparse(request.url).path)
+        if path == "/api/status":
+            answer = {"status": "running" if self.can else "idle", "can_interface": self.can,
+                      "can_bitrate": None, "can_data_bitrate": None, "can_fd": False,
+                      "available_interfaces": ["vcan0"], "available_adapters": [
+                          {"interface": "vcan0", "label": "vcan0", "needs_bitrate": False, "supports_fd": False}],
+                      "bus_utilization": 30.0 if self.can else None, "dropped": None, "last_error": None,
+                      "cyphal_v11": None}
+        elif path == "/api/can/connect":
+            self.can = request.post_data_json["interface"]
+            answer = {"status": "running", "can_interface": self.can, "can_fd": False}
+        elif path == "/api/can/disconnect":
+            self.can, answer = None, {"status": "idle"}
+        elif path == "/api/nodes" and self.can:
+            answer = {"node_count": 2, "nodes": {"10": _graph_node(10, "org.example.imu", [100], [], uid_byte=1),
+                                                 "11": _graph_node(11, "org.example.esc", [101], [], uid_byte=2)}}
+        else:
+            answer = {"/api/nodes": {"node_count": 0, "nodes": {}}, "/api/replay/status": {"active": False},
+                      "/api/recordings": {"recordings": []}, "/api/rawlogs": {"active": None, "logs": []},
+                      "/api/logs": {"logs": []}}.get(path, {})
+        await route.fulfill(json=answer, headers={"Access-Control-Allow-Origin": "*"})
+
+    def on_socket(self, ws):
+        self.ws = ws
+
+
+async def sidebar_open(page, server, saved_connected=False):
+    """A freshly loaded page on the Nodes tab whose backend, socket too, is
+    `server`, with a connected dashboard saved or not. The socket route is the
+    Debug tests' (a page takes one), pointed at `server`."""
+    global _debug_server, _debug_socket_routed
+    _debug_server = server
+    if not _debug_socket_routed:
+        _debug_socket_routed = True
+        await page.route_web_socket("**/ws**", lambda ws: _debug_server and _debug_server.on_socket(ws))
+    await page.route("**/api/**", server.handle)
+    await page.evaluate(f"""() => {{ state.dashboardConnected = {json.dumps(saved_connected)};
+        state.activeView = 'nodes'; _writeSettingsNow(); }}""")
+    await page.reload(wait_until="load")
+
+
+async def sidebar_close(page, server):
+    global _debug_server
+    server.down = False
+    await page.evaluate("disconnectAll()")
+    _debug_server = None
+    await page.unroute("**/api/**", server.handle)
+
+
+async def wait_until(page, expression, seconds):
+    """Whether `expression` became true in the page within `seconds`."""
+    for _ in range(int(seconds * 5)):
+        if await page.evaluate(expression):
+            return True
+        await page.wait_for_timeout(200)
+    return False
+
+
+@test("Sidebar: CAN Disconnect takes the bus's nodes and load curve with it, rather than leave them looking live")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.ws?.readyState === 1", timeout=5000)
+        await page.locator("#connectCanBtn").click()
+        await page.wait_for_function("state.canState === 'connected'", timeout=WAIT_MS)
+        for load in (20, 35, 30):  # the backend's metrics, once a second
+            server.ws.send(json.dumps({"type": "metrics", "bus_utilization": load}))
+        await page.evaluate("getAllNodes()")
+        await page.wait_for_function("nodesTabulator.getRows().length === 2", timeout=WAIT_MS)
+        shown = await page.evaluate("!el('busLoadSparkline').classList.contains('hidden')")
+        await page.locator("#connectCanBtn").click()
+        await page.wait_for_function("state.canState === 'idle'", timeout=WAIT_MS)
+        await page.wait_for_timeout(300)
+        after = await page.evaluate("""() => ({rows: nodesTabulator.getRows().length,
+            curve: !el('busLoadSparkline').classList.contains('hidden'),
+            says: document.querySelector('#nodesTable .tabulator-placeholder')?.innerText || ''})""")
+        assert shown and after["rows"] == 0 and not after["curve"] and "CAN bus not connected" in after["says"], \
+            f"Connected, the curve was shown: {shown}; after CAN Disconnect: {after}"
+    finally:
+        await sidebar_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
