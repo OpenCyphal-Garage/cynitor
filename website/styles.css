@@ -8209,6 +8209,21 @@ body.dsdl-resizing-row {
   color: var(--on-accent);
 }
 
+/* Trace or By ID: the sidebar's segmented buttons, the one shown raised. */
+.fm-views {
+  flex: none;
+}
+
+.fm-views .view-seg-btn {
+  flex: none;
+  padding: 0.25rem 0.625rem;
+}
+
+.fm-views .view-seg-btn[aria-pressed="true"] {
+  color: var(--text-bright);
+  background: var(--surface);
+}
+
 .fm-filter {
   flex: 1;
   min-width: 8rem;
@@ -8282,6 +8297,8 @@ body.dsdl-resizing-row {
 .fm-col-tid { width: 2.5rem; }
 .fm-col-flags { width: 3.5rem; }
 .fm-col-len { width: 2.5rem; }
+.fm-col-count { width: 4.75rem; }
+.fm-col-age { width: 3.75rem; }
 
 .fm-pad td {
   height: calc(var(--fm-above, 0) * var(--fm-row-h));
@@ -8333,6 +8350,10 @@ body.dsdl-resizing-row {
 .fm-id { color: var(--text-bright); }
 .fm-prio { color: var(--muted); }
 .fm-delta { color: var(--muted); text-align: right; }
+.fm-count { text-align: right; }
+.fm-age { color: var(--muted); text-align: right; }
+.fm-age.fm-quiet { color: var(--warn); }
+.fm-ids-full { color: var(--muted); font-family: var(--sans); }
 .fm-tid,
 .fm-len { text-align: right; }
 

@@ -5186,6 +5186,44 @@ async def _(page):
         await debug_close(page, server)
 
 
+# Each row of the By ID table as {column heading: cell text}, with whether its age is marked quiet.
+DEBUG_ID_ROWS = """(() => { const heads = [...document.querySelectorAll('#fmIdTable thead th')].map(th => th.textContent);
+    return [...document.querySelectorAll('#fmIdRows tr')].map(row => Object.assign(
+        Object.fromEntries([...row.cells].map((cell, i) => [heads[i], cell.textContent.trim()])),
+        {quiet: row.querySelector('.fm-quiet') !== null})); })()"""
+
+
+@test("Debug: By ID gives each CAN ID a row, with its count, cycle and last data, and marks one gone quiet")
+async def _(page):
+    server = _DebugServer()
+    await debug_open(page, server)
+    heartbeat = lambda n, src: dict(_can_frame(n, src=src), id=f"0x107D55{src:02X}", t=1000 + n * 0.1,
+                                    data=f"0{n % 10} 00 00 00 00 00 00 E5")  # every 100 ms
+    try:
+        await debug_start_capture(page)
+        if not await page.locator('[data-fm-view="ids"]').count():
+            raise AssertionError("The frame monitor has no By ID view")
+        await page.locator('[data-fm-view="ids"]').click()
+        server.capture([heartbeat(n, 42) for n in range(10)] + [heartbeat(n, 7) for n in range(3)])
+        server.flush()
+        await page.wait_for_timeout(700)  # By ID is redrawn twice a second at most
+        rows = await page.evaluate(DEBUG_ID_ROWS)
+        await page.wait_for_timeout(2200)
+        server.capture([heartbeat(n, 42) for n in range(10, 12)])  # node 42 goes on; node 7 has stopped
+        server.flush()
+        await page.wait_for_timeout(700)
+        later = {row["CAN ID"]: row["quiet"] for row in await page.evaluate(DEBUG_ID_ROWS)}
+        await page.locator("#fmFilter").fill("src:7")
+        filtered = [row["CAN ID"] for row in await page.evaluate(DEBUG_ID_ROWS)]
+        shown = [(row["CAN ID"], row["Count"], row["Cycle ms"], row["Last data"]) for row in rows]
+        assert shown == [("0x107D5507", "3", "100.0", "02 00 00 00 00 00 00 E5"),
+                         ("0x107D552A", "10", "100.0", "09 00 00 00 00 00 00 E5")] \
+            and later == {"0x107D5507": True, "0x107D552A": False} and filtered == ["0x107D5507"], \
+            f"(CAN ID, Count, Cycle, Last data): {shown}; quiet, 3 s on: {later}; filtered on src:7: {filtered}"
+    finally:
+        await debug_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

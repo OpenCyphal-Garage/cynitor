@@ -16,6 +16,8 @@ const DebugView = (() => {
   const POLL_MS = 1000;
   const MAX_KEPT = 5000; // frames kept for the filter, so a rare frame is still found
   const OVERSCAN = 10;   // rows drawn beyond each edge of the view, so a scroll finds them drawn
+  const MAX_IDS = 1000;  // CAN IDs By ID lists: a bus of random IDs must not make it slow
+  const IDS_EVERY_MS = 500; // By ID is redrawn this often at most as frames come
 
   let pollTimer = null;
   let prev = null;        // the previous sample, for rates: {stats, link, at: performance.now()}
@@ -31,6 +33,11 @@ const DebugView = (() => {
   let drawn = { first: 0, key: '' };  // the rows of `shown` in the page now (see draw)
   let pending = [];       // frames that came while paused, newest first: shown on Resume
   let lastSeq = 0;        // frames are numbered as they come, for trimming the table
+  let view = 'trace';     // 'trace': every frame; 'ids': a row per CAN ID
+  let byId = new Map();   // CAN ID as shown -> {f: its last frame, num: the ID, count, cycle: ms, at: Date.now()}
+  let idsShown = 0;       // rows the By ID table shows
+  let idsDrawnAt = 0;     // performance.now() of the last By ID redraw
+  let idsTimer = null;    // a By ID redraw waiting for its turn
   let captureStats = null;
   let busCapturing = false; // the backend's capture is on, for whichever dashboard started it
 
@@ -51,6 +58,10 @@ const DebugView = (() => {
             <button id="fmToggle" class="fm-btn fm-btn-primary" type="button">Start capture</button>
             <button id="fmPause" class="fm-btn" type="button" aria-pressed="false">Pause</button>
             <button id="fmClear" class="fm-btn" type="button">Clear</button>
+            <div class="view-segmented fm-views" role="group" aria-label="Frames shown">
+              <button class="view-seg-btn" type="button" data-fm-view="trace" aria-pressed="true">Trace</button>
+              <button class="view-seg-btn" type="button" data-fm-view="ids" aria-pressed="false">By ID</button>
+            </div>
             <input id="fmFilter" class="fm-filter" type="text" placeholder="Filter: node:42 port:7509 -dir:tx, or any text"
                    aria-label="Filter captured frames"
                    title="node: src: dst: port: kind: prio: dir: tid: len: id: match that field (id: by its first digits); a leading - leaves out what a term matches; other words match the row's text as typed. All must match." />
@@ -75,6 +86,21 @@ const DebugView = (() => {
               <tbody class="fm-pad" aria-hidden="true"><tr><td colspan="10"></td></tr></tbody>
               <tbody id="fmRows"></tbody>
               <tbody class="fm-pad fm-pad-below" aria-hidden="true"><tr><td colspan="10"></td></tr></tbody>
+            </table>
+            <table id="fmIdTable" class="fm-table hidden">
+              <colgroup>
+                <col class="fm-col-id"><col class="fm-col-dir"><col class="fm-col-prio"><col class="fm-col-transfer">
+                <col class="fm-col-count"><col class="fm-col-delta"><col class="fm-col-age"><col class="fm-col-len">
+                <col>
+              </colgroup>
+              <thead><tr>
+                <th>CAN ID</th><th>Dir</th><th>Prio</th><th>Transfer</th>
+                <th title="Frames with this ID since capture started, or since Clear">Count</th>
+                <th title="The time between its frames, averaged over the last few">Cycle <span class="fm-unit">ms</span></th>
+                <th title="Seconds since its last frame; amber once it has been quiet for three cycles, two seconds at least">Age <span class="fm-unit">s</span></th>
+                <th>Len</th><th>Last data</th>
+              </tr></thead>
+              <tbody id="fmIdRows"></tbody>
             </table>
             <div id="fmEmpty" class="fm-empty"></div>
           </div>
@@ -179,10 +205,11 @@ const DebugView = (() => {
   };
 
   // In place, so a value being selected or read out is not redrawn under it.
+  // A template parses table rows too, which a div would strip of their cells.
   const patchHtml = (target, html) => {
-    const fresh = document.createElement('div');
+    const fresh = document.createElement('template');
     fresh.innerHTML = html;
-    patchChildren(target, fresh);
+    patchChildren(target, fresh.content);
   };
 
   const renderDiagnostics = (data) => {
@@ -253,8 +280,8 @@ const DebugView = (() => {
       statRow('Adapter error frames', link.adapter_error_frames, link.adapter_error_frames > 0 ? 'warn' : null),
     ]);
 
-    // A CAN FD frame's 64 data bytes need a wider frame table.
-    el('fmTable')?.classList.toggle('fm-fd', proto.is_fd === true);
+    // A CAN FD frame's 64 data bytes need wider frame tables.
+    document.querySelectorAll('.fm-table').forEach((table) => table.classList.toggle('fm-fd', proto.is_fd === true));
     if (!el('debugHealth')) renderFrame(target);
     target.querySelector('.debug-stale-note')?.remove();
     target.classList.remove('debug-stale');
@@ -308,6 +335,7 @@ const DebugView = (() => {
       busCapturing = data?.capture_active === true;
       updateEmpty();
       if (state.activeView === 'debug') renderDiagnostics(data);
+      if (!paused) drawIds();  // the IDs' ages follow the clock
     } catch (err) {
       if (state.activeView === 'debug') renderDiagError(err && err.message);
     }
@@ -380,25 +408,47 @@ const DebugView = (() => {
 
   const matchesFilter = (f) => filterTests.every((test) => test(f));
 
+  // Cells both tables draw alike.
+  const dirCell = (f) => `<td><span class="fm-dir ${f.dir === 'tx' ? 'fm-tx' : 'fm-rx'}">${f.dir === 'tx' ? 'TX' : 'RX'}</span></td>`;
+  // Transport fields only a Cyphal frame has.
+  const cyphalCell = (cls, f, value) => `<td class="${cls}">${f.cyphal ? escapeHtml(String(value ?? '')) : ''}</td>`;
+  const transferCell = (f) => `<td class="fm-transfer">${f.cyphal
+    ? `<span class="fm-kind fm-kind-${escapeHtml(f.kind || 'x')}">${escapeHtml(f.kind || '?')}</span> `
+      + `${escapeHtml(String(f.port ?? ''))} · ${escapeHtml(`n${f.src ?? '?'}${f.dst != null ? `→n${f.dst}` : ''}`)}`
+    : '<span class="fm-foreign-tag">foreign</span>'}</td>`;
+  const rowClass = (f) => `fm-row${f.cyphal ? '' : ' fm-foreign'}`;
+
   // Row `index` of `shown`; aria-rowindex tells screen readers where it is
   // among all the rows, few of which are drawn.
-  const rowHtml = (f, index) => {
-    const dirCls = f.dir === 'tx' ? 'fm-tx' : 'fm-rx';
-    const transfer = f.cyphal
-      ? `<span class="fm-kind fm-kind-${escapeHtml(f.kind || 'x')}">${escapeHtml(f.kind || '?')}</span> `
-        + `${escapeHtml(String(f.port ?? ''))} · ${escapeHtml(`n${f.src ?? '?'}${f.dst != null ? `→n${f.dst}` : ''}`)}`
-      : '<span class="fm-foreign-tag">foreign</span>';
-    // Transport fields only a Cyphal frame has.
-    const cyphal = (value) => (f.cyphal ? escapeHtml(String(value ?? '')) : '');
-    return `<tr class="fm-row${f.cyphal ? '' : ' fm-foreign'}" aria-rowindex="${index + 2}">
+  const rowHtml = (f, index) => `<tr class="${rowClass(f)}" aria-rowindex="${index + 2}">
       <td class="fm-time">${escapeHtml(fmtTime(f.ts))}</td>
       <td class="fm-delta">${escapeHtml(fmtDelta(f, shown[index + 1]))}</td>
-      <td><span class="fm-dir ${dirCls}">${f.dir === 'tx' ? 'TX' : 'RX'}</span></td>
+      ${dirCell(f)}
       <td class="fm-id">${escapeHtml(fmtId(f))}</td>
-      <td class="fm-prio">${cyphal(f.priority?.toLowerCase())}</td>
-      <td class="fm-transfer">${transfer}</td>
-      <td class="fm-tid">${cyphal(f.transfer_id)}</td>
-      <td class="fm-flags">${cyphal(fmtFlags(f))}</td>
+      ${cyphalCell('fm-prio', f, f.priority?.toLowerCase())}
+      ${transferCell(f)}
+      ${cyphalCell('fm-tid', f, f.transfer_id)}
+      ${cyphalCell('fm-flags', f, fmtFlags(f))}
+      <td class="fm-len">${escapeHtml(String(f.dlc))}</td>
+      <td class="fm-data">${escapeHtml(f.data)}</td>
+    </tr>`;
+
+  // A CAN ID gone quiet: none of its frames for three cycles, two seconds at
+  // least (the rule by which the dashboard calls a subject silent).
+  const quiet = (entry, age) => age > Math.max(2, (3 * (entry.cycle ?? 0)) / 1000);
+
+  // A row of the By ID table: an ID, how often it comes, and its last frame.
+  const idRowHtml = (entry) => {
+    const f = entry.f;
+    const age = (Date.now() - entry.at) / 1000;
+    return `<tr class="${rowClass(f)}">
+      <td class="fm-id">${escapeHtml(fmtId(f))}</td>
+      ${dirCell(f)}
+      ${cyphalCell('fm-prio', f, f.priority?.toLowerCase())}
+      ${transferCell(f)}
+      <td class="fm-count">${entry.count.toLocaleString()}</td>
+      <td class="fm-delta">${entry.cycle != null ? entry.cycle.toFixed(1) : ''}</td>
+      <td class="fm-age${quiet(entry, age) ? ' fm-quiet' : ''}">${age.toFixed(1)}</td>
       <td class="fm-len">${escapeHtml(String(f.dlc))}</td>
       <td class="fm-data">${escapeHtml(f.data)}</td>
     </tr>`;
@@ -415,10 +465,10 @@ const DebugView = (() => {
   const updateEmpty = () => {
     const empty = el('fmEmpty');
     if (!empty) return;
-    const hasRows = shown.length > 0;
+    const hasRows = view === 'ids' ? idsShown > 0 : shown.length > 0;
     empty.classList.toggle('hidden', hasRows);
     if (!hasRows) {
-      const text = rows.length ? 'No frames match the filter.'
+      const text = (view === 'ids' ? byId.size : rows.length) ? 'No frames match the filter.'
         : captureOn ? 'Waiting for frames…'
           : startBlockedBy() || (busCapturing
             ? 'Capture runs on this bus until CAN disconnects: "Start capture" shows its frames.'
@@ -474,7 +524,7 @@ const DebugView = (() => {
   const draw = () => {
     const wrap = el('fmWrap');
     const table = el('fmTable');
-    if (!wrap) return;
+    if (!wrap || view !== 'trace') return;
     const height = rowHeight();
     const first = Math.min(shown.length, Math.max(0, Math.floor(wrap.scrollTop / height) - OVERSCAN));
     const last = Math.min(shown.length, Math.ceil((wrap.scrollTop + wrap.clientHeight) / height) + OVERSCAN);
@@ -502,6 +552,60 @@ const DebugView = (() => {
     requestAnimationFrame(() => { drawQueued = false; draw(); });
   };
 
+  // Every CAN ID's count, cycle and last frame, from frames oldest first.
+  // Counted as they come, paused or not, so Resume shows them up to date.
+  const countIds = (frames) => {
+    const now = Date.now();
+    for (const f of frames) {
+      const entry = byId.get(fmtId(f));
+      if (!entry) {
+        if (byId.size < MAX_IDS) byId.set(fmtId(f), { f, num: parseInt(f.id, 16), count: 1, cycle: null, at: now });
+        continue;
+      }
+      const gap = (f.t - entry.f.t) * 1000;
+      entry.cycle = entry.cycle == null ? gap : entry.cycle + (gap - entry.cycle) / 8;
+      Object.assign(entry, { f, count: entry.count + 1, at: now });
+    }
+  };
+
+  // The By ID table: the IDs the filter lets through, by CAN ID, patched in
+  // place so the rows hold still and a selection in them too.
+  const drawIds = () => {
+    if (view !== 'ids' || !el('fmIdRows')) return;
+    idsDrawnAt = performance.now();
+    const entries = [...byId.values()].filter((entry) => matchesFilter(entry.f)).sort((a, b) => a.num - b.num);
+    idsShown = entries.length;
+    const full = byId.size >= MAX_IDS
+      ? `<tr class="fm-row"><td class="fm-ids-full" colspan="9">Only the first ${MAX_IDS.toLocaleString()} CAN IDs seen are listed; Clear starts again.</td></tr>`
+      : '';
+    patchHtml(el('fmIdRows'), entries.map(idRowHtml).join('') + full);
+    updateEmpty();
+  };
+
+  // As frames come, By ID is redrawn twice a second at most: a summary gains
+  // nothing from more, and each redraw patches every row, whose age moved.
+  const drawIdsSoon = () => {
+    if (idsTimer) return;
+    idsTimer = setTimeout(() => {
+      idsTimer = null;
+      if (!paused) drawIds();
+    }, Math.max(0, idsDrawnAt + IDS_EVERY_MS - performance.now()));
+  };
+
+  const drawView = () => (view === 'ids' ? drawIds() : draw());
+
+  const setView = (next) => {
+    view = next;
+    el('fmTable').classList.toggle('hidden', view !== 'trace');
+    el('fmIdTable').classList.toggle('hidden', view !== 'ids');
+    document.querySelectorAll('[data-fm-view]').forEach((btn) => {
+      btn.setAttribute('aria-pressed', String(btn.dataset.fmView === view));
+    });
+    el('fmWrap').scrollTop = 0;
+    drawn = { first: 0, key: '' };  // the trace's rows are drawn anew when it is shown again
+    drawView();
+  };
+
   // `shown` anew from the frames kept, as after the filter, Clear or Resume,
   // with the newest frames in view.
   const showRows = () => {
@@ -509,7 +613,7 @@ const DebugView = (() => {
     shownChanged += 1;
     const wrap = el('fmWrap');
     if (wrap) wrap.scrollTop = 0;
-    draw();
+    drawView();
   };
 
   // Frames as the server sends them (oldest first), numbered, newest first.
@@ -521,6 +625,7 @@ const DebugView = (() => {
   const appendBatch = (frames) => {
     const wrap = el('fmWrap');
     if (!wrap || !frames || !frames.length) return;
+    countIds(frames);
     const newest = numbered(frames);
     if (paused || state.activeView !== 'debug') {  // kept for Resume, or for the tab's return
       pending = newest.concat(pending).slice(0, MAX_KEPT);
@@ -534,6 +639,10 @@ const DebugView = (() => {
     while (shown.length && shown[shown.length - 1].seq < oldestKept) shown.pop();
     // Scrolled down to older frames: they stay in view as frames come above
     // them. The pad above grows first, so the scroll has room to follow.
+    if (view === 'ids') {
+      drawIdsSoon();
+      return;
+    }
     if (wrap.scrollTop > 0 && added.length) {
       el('fmTable').style.setProperty('--fm-above', drawn.first + added.length);
       wrap.scrollTop += added.length * rowHeight();
@@ -583,6 +692,7 @@ const DebugView = (() => {
     // The frames caught before this client subscribed come with the reply
     // (oldest first); the live stream carries on from there.
     if (captureOn && event.frames?.length && rows.length === 0) {
+      countIds(event.frames);
       rows = numbered(event.frames);
       showRows();
     }
@@ -617,7 +727,11 @@ const DebugView = (() => {
     el('fmClear').addEventListener('click', () => {
       rows = [];
       pending = [];
+      byId = new Map();
       showRows();
+    });
+    document.querySelectorAll('[data-fm-view]').forEach((btn) => {
+      btn.addEventListener('click', () => setView(btn.dataset.fmView));
     });
     el('fmFilter').addEventListener('input', (e) => {
       filterTests = parseFilter(e.target.value);
