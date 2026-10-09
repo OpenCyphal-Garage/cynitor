@@ -8253,13 +8253,6 @@ body.dsdl-resizing-row {
   color: var(--warn);
 }
 
-.fm-note {
-  margin-left: auto;
-  font-size: 0.625rem;
-  color: var(--muted);
-  font-style: italic;
-}
-
 .fm-table-wrap {
   flex: 1;
   min-height: 0;

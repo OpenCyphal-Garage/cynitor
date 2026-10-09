@@ -6,12 +6,11 @@
 //      params (MTU / CAN-FD), pycyphal frame statistics and the controller's
 //      counters folded away beneath it. Polls GET /api/can/transport at 1 Hz
 //      while active.
-//   2. Frame Monitor (Phase 2) — raw frame/transfer inspection via pycyphal's
-//      capture API. OPT-IN and sticky: starting it reconfigures the bus
-//      (accept-all filter + forced loopback) and cannot be stopped without a
-//      CAN disconnect, so the user starts it explicitly. The frames caught
-//      before come with the `capture_status` reply; live ones arrive on the
-//      WebSocket `can_frame` stream (batched).
+//   2. Frame Monitor — every frame on the bus, error frames included, from a
+//      listen-only tap the backend opens while a dashboard captures: it
+//      changes nothing Cynitor sends or receives. The frames caught before
+//      (for another dashboard) come with the `capture_status` reply; live
+//      ones arrive on the WebSocket `can_frame` stream (batched).
 const DebugView = (() => {
   const POLL_MS = 1000;
   const MAX_KEPT = 5000; // frames kept for the filter, so a rare frame is still found
@@ -39,7 +38,6 @@ const DebugView = (() => {
   let idsDrawnAt = 0;     // performance.now() of the last By ID redraw
   let idsTimer = null;    // a By ID redraw waiting for its turn
   let captureStats = null;
-  let busCapturing = false; // the backend's capture is on, for whichever dashboard started it
 
   const body = () => el('debugBody');
 
@@ -67,7 +65,6 @@ const DebugView = (() => {
                    title="node: src: dst: port: kind: prio: dir: tid: len: id: match that field (id: by its first digits); a leading - leaves out what a term matches; other words match the row's text as typed. All must match." />
             <span id="fmCounters" class="fm-counters"></span>
             <span id="fmStatus" class="fm-status" role="status" aria-live="polite"></span>
-            <span class="fm-note">Capture forces loopback + accept-all filtering and stays on until CAN disconnect.</span>
           </div>
           <div id="fmWrap" class="fm-table-wrap">
             <table id="fmTable" class="fm-table" aria-rowcount="1">
@@ -325,15 +322,12 @@ const DebugView = (() => {
     const problem = connectionPlaceholder('inspect the CAN transport');
     if (problem) {
       prev = null;
-      busCapturing = false;
       renderProblem(problem);
       return;
     }
     shownProblem = null;
     try {
       const data = await requestJson('/api/can/transport');
-      busCapturing = data?.capture_active === true;
-      updateEmpty();
       if (state.activeView === 'debug') renderDiagnostics(data);
       if (!paused) drawIds();  // the IDs' ages follow the clock
     } catch (err) {
@@ -470,9 +464,7 @@ const DebugView = (() => {
     if (!hasRows) {
       const text = (view === 'ids' ? byId.size : rows.length) ? 'No frames match the filter.'
         : captureOn ? 'Waiting for frames…'
-          : startBlockedBy() || (busCapturing
-            ? 'Capture runs on this bus until CAN disconnects: "Start capture" shows its frames.'
-            : 'Capture is off — click "Start capture" to inspect raw frames.');
+          : startBlockedBy() || 'Capture is off — click "Start capture" to inspect raw frames.';
       if (empty.textContent !== text) empty.textContent = text;  // runs every second
     }
   };
@@ -685,7 +677,6 @@ const DebugView = (() => {
     }
     // `active` is how backends from before `forwarding` and `capturing` said it.
     captureOn = Boolean(event.forwarding ?? event.active);
-    busCapturing = event.capturing ?? (busCapturing || captureOn);  // on until CAN disconnects
     if (event.stats) { captureStats = event.stats; renderCounters(); }
     setStatus('');
     setToggleLabel();

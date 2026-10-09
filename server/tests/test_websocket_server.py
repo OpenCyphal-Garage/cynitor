@@ -10,6 +10,8 @@ from aiohttp import web
 from aiohttp.test_utils import AioHTTPTestCase, TestClient, TestServer
 from websocket_server import WebSocketServer
 from dsdl_manager import DsdlManager
+import can
+
 from frame_capture import FrameCaptureManager
 from log_store import InMemoryLogStore
 import logging
@@ -32,6 +34,7 @@ def _make_session(is_running=False, can_interface=None):
     session.can_fd = False
     session.replay = None
     session.event_logger = None
+    session.frame_capture = None
     session.connect = AsyncMock()
     session.disconnect = AsyncMock()
     return session
@@ -833,20 +836,23 @@ class TestTransportDiagnostics:
         diagnostics.assert_called_once_with("vcan0")
 
 
-class _CaptureScanner:
-    """The ScannerNode side of FrameCaptureManager: it hands captured frames over."""
-    handler = None
-    capture_active = False
+class _CaptureTap:
+    """The tap on the bus CANSession opens for FrameCaptureManager."""
 
-    def begin_frame_capture(self, handler):
-        self.handler, self.capture_active = handler, True
+    def __init__(self):
+        self.on_frame, self.open_now = None, False
+
+    def open(self, on_frame):
+        self.on_frame, self.open_now = on_frame, True
+        return self.close
+
+    def close(self):
+        self.open_now = False
 
 
 def _captured(can_id):
-    """A pycyphal CANCapture of a non-Cyphal frame with this CAN ID, duck-typed."""
-    frame = SimpleNamespace(identifier=can_id, data=b"\x00", format=SimpleNamespace(name="EXTENDED"))
-    stamp = SimpleNamespace(monotonic=Decimal(can_id), system=Decimal(can_id))
-    return SimpleNamespace(frame=frame, timestamp=stamp, own=False, parse=lambda: None)
+    """A non-Cyphal frame with this CAN ID, as a tap hands it over."""
+    return can.Message(arbitration_id=can_id, data=b"\x00", timestamp=1_700_000_000.0 + can_id)
 
 
 class TestFrameCaptureAPI:
@@ -893,7 +899,6 @@ class TestFrameCaptureAPI:
         q = asyncio.Queue()
         mgr = MagicMock()
         mgr.active = True
-        mgr.start = MagicMock()
         mgr.subscribe = MagicMock(return_value=q)
         mgr.unsubscribe = MagicMock()
         mgr.stats = MagicMock(return_value={"captured": 0})
@@ -902,7 +907,6 @@ class TestFrameCaptureAPI:
         ws.send_json = AsyncMock()
 
         await server._handle_capture_message(ws, enabled=True)
-        mgr.start.assert_called_once()
         mgr.subscribe.assert_called_once()
         assert server.capture_clients.get(ws) is q
 
@@ -912,17 +916,21 @@ class TestFrameCaptureAPI:
 
     @pytest.mark.asyncio
     async def test_capture_enable_sends_earlier_frames_once(self, server, session):
-        # The frames caught before the client subscribed come with the reply,
-        # and its queue holds only later ones: the client gets each frame once.
-        scanner = _CaptureScanner()
-        session.frame_capture = mgr = FrameCaptureManager(scanner)
-        mgr.start()
-        scanner.handler(_captured(1))
-        scanner.handler(_captured(2))
+        # The frames caught before the client subscribed (for another one) come
+        # with the reply, and its queue holds only later ones: the client gets
+        # each frame once.
+        tap = _CaptureTap()
+        session.frame_capture = mgr = FrameCaptureManager(tap.open)
+        other = mgr.subscribe()
+        tap.on_frame(_captured(1))
+        tap.on_frame(_captured(2))
+        mgr.drain()
         ws = MagicMock()
         ws.send_json = AsyncMock()
         await server._handle_capture_message(ws, enabled=True)
-        scanner.handler(_captured(3))
+        tap.on_frame(_captured(3))
+        mgr.drain()
+        mgr.unsubscribe(other)
         queue = server.capture_clients[ws]
         streamed = [queue.get_nowait()["id"] for _ in range(queue.qsize())]
         reply = ws.send_json.await_args.args[0]
@@ -951,19 +959,35 @@ class TestFrameCaptureAPI:
         assert [len(message["frames"]) for message in sent] == [1000]
 
     @pytest.mark.asyncio
-    async def test_capture_replies_say_what_captures_and_what_is_forwarded(self, server, session):
-        # Capture stays on for the bus until CAN disconnects; a connection's
-        # stop ends only the frames sent to it. Each reply says both.
-        session.frame_capture = FrameCaptureManager(_CaptureScanner())
+    async def test_capture_stops_with_the_last_connection(self, server, session):
+        # Capture runs while any connection captures: one's stop ends only the
+        # frames sent to it, the last one's ends capture. Each reply says both.
+        tap = _CaptureTap()
+        session.frame_capture = FrameCaptureManager(tap.open)
+        first, second = MagicMock(), MagicMock()
+        first.send_json, second.send_json = AsyncMock(), AsyncMock()
+        said = []
+        for ws, enabled in ((first, True), (second, True), (first, False), (second, False)):
+            await server._handle_capture_message(ws, enabled=enabled)
+            reply = ws.send_json.await_args.args[0]
+            said.append((reply.get("capturing"), reply.get("forwarding"), tap.open_now))
+        session.frame_capture = None
+        await server._handle_capture_message(first, enabled=True)
+        no_can = first.send_json.await_args.args[0]
+        assert said == [(True, True, True), (True, True, True), (True, False, True), (False, False, False)]
+        assert (no_can.get("capturing"), no_can.get("forwarding")) == (False, False)
+
+    @pytest.mark.asyncio
+    async def test_capture_that_cannot_start_says_why(self, server, session):
+        def refuse(on_frame):
+            raise OSError("No such device")
+        session.frame_capture = FrameCaptureManager(refuse)
         ws = MagicMock()
         ws.send_json = AsyncMock()
-        replies = []
-        for frame_capture, enabled in ((session.frame_capture, True), (session.frame_capture, False), (None, True)):
-            session.frame_capture = frame_capture
-            await server._handle_capture_message(ws, enabled=enabled)
-            replies.append(ws.send_json.await_args.args[0])
-        said = [(reply.get("capturing"), reply.get("forwarding")) for reply in replies]
-        assert said == [(True, True), (True, False), (False, False)]  # started, stopped, no CAN
+        await server._handle_capture_message(ws, enabled=True)
+        reply = ws.send_json.await_args.args[0]
+        assert reply["forwarding"] is False and "No such device" in reply["error"]
+        assert ws not in server.capture_clients
 
 
 class TestAdapterListing:

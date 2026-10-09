@@ -568,11 +568,11 @@ class TestHealth:
 
 
 class TestFrameCallback:
-    """on_frame sees every frame on the wire, as a raw log needs."""
+    """A listener sees every frame on the wire, as a raw log and frame capture need."""
 
     def test_both_directions_with_cynitors_own_marked_sent(self, hub, other_node):
         seen = []
-        hub.on_frame = seen.append
+        hub.add_listener(seen.append)
         a = _component(hub)
         try:
             other_node.send(_frame(0xA00))
@@ -590,7 +590,7 @@ class TestFrameCallback:
         adapter = StubAdapter(incoming=[can.Message(arbitration_id=0x600, is_error_frame=True), _frame(0x601)])
         seen = []
         h = CANHub("stub:0", 500_000, open_bus=lambda spec, bitrate, data_bitrate: adapter)
-        h.on_frame = seen.append  # before the first frame is forwarded
+        h.add_listener(seen.append)  # before the first frame is forwarded
         a = _component(h)
         h.start()
         try:
@@ -599,6 +599,21 @@ class TestFrameCallback:
         finally:
             a.shutdown()
             h.stop()
+
+    def test_listeners_come_and_go(self, hub, other_node):
+        # A raw log and a capture listen at once; either can stop on its own.
+        log, capture = [], []
+        hub.add_listener(log.append)
+        hub.add_listener(capture.append)
+        hub.remove_listener(capture.append)
+        a = _component(hub)
+        try:
+            other_node.send(_frame(0xA02))
+            assert _recv_matching(a, 0xA02) is not None
+            _wait_for_frames(hub, 1)
+            assert [m.arbitration_id for m in log] == [0xA02] and capture == []
+        finally:
+            a.shutdown()
 
 
 class TestNoFiltersOnVirtualChannels:

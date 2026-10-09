@@ -172,25 +172,9 @@ class ScannerNode:
                 "media_acceptance_filtering_efficiency": st.media_acceptance_filtering_efficiency,
                 "lost_loopback_frames": st.lost_loopback_frames,
             }
-            info["capture_active"] = transport.capture_active
         except Exception:
             pass
         return info
-
-    def begin_frame_capture(self, handler) -> None:
-        """Enable transport-level frame capture, routing every frame to handler.
-
-        Sticky: pycyphal cannot stop capture without closing the transport, and
-        it forces loopback + accept-all filtering. Used by FrameCaptureManager.
-        """
-        self._node.presentation.transport.begin_capture(handler)
-
-    @property
-    def capture_active(self) -> bool:
-        try:
-            return self._node.presentation.transport.capture_active
-        except Exception:
-            return False
 
     @staticmethod
     def _dsdl_type_to_module_name(dsdl_type: str) -> str:

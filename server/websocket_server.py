@@ -660,6 +660,7 @@ class WebSocketServer:
             return web.json_response({"connected": False})
 
         info = self.session.scanner.get_transport_info()
+        capture = self.session.frame_capture
         iface = self.session.can_interface
         # iproute2 only knows SocketCAN devices; an adapter behind the hub
         # reports what the hub knows about it instead.
@@ -675,17 +676,17 @@ class WebSocketServer:
             "interface": iface,
             "protocol": info.get("protocol"),
             "statistics": info.get("statistics"),
-            "capture_active": info.get("capture_active", False),
+            "capture_active": capture is not None and capture.active,
             "link": link,
             "bus_utilization": bus_load.utilization if bus_load else None,
         })
 
     async def _get_capture(self, request: web.Request) -> web.Response:
-        """Snapshot of the raw frame-capture ring buffer + counters.
+        """Snapshot of the raw frame-capture ring buffer + counters, for scripts.
 
-        Used by the Debugging view to backfill the frame monitor on open or
-        after a reconnect. Returns an inactive empty result when no CAN session
-        exists. Live frames arrive via the WebSocket ``can_frame`` stream.
+        The Debugging view gets the same frames with its ``capture_status``
+        reply. Returns an inactive empty result when no CAN session exists.
+        Live frames arrive via the WebSocket ``can_frame`` stream.
         """
         mgr = self.session.frame_capture
         if mgr is None:
@@ -1430,24 +1431,30 @@ class WebSocketServer:
             logger.debug(f"Capture loop ended: {e}")
 
     async def _handle_capture_message(self, ws: web.WebSocketResponse, enabled: bool) -> None:
-        """Enable/disable raw frame forwarding for this client. Enabling also
-        starts transport-level capture if it is not already active (sticky).
+        """Enable/disable raw frame forwarding for this client. The first client
+        to enable starts capture, and the last to disable (or leave) stops it.
 
-        Each reply says both: ``capturing`` (the transport capture, on until
-        CAN disconnects) and ``forwarding`` (frames sent to this client).
-        ``active`` stays for dashboards from before those two."""
+        Each reply says both: ``capturing`` (capture runs, for any client) and
+        ``forwarding`` (frames sent to this client). ``active`` stays for
+        dashboards from before those two."""
         mgr = self.session.frame_capture
         if enabled:
             if mgr is None:
                 await ws.send_json({"type": "capture_status", "active": False, "capturing": False,
                                     "forwarding": False, "error": "CAN not connected"})
                 return
-            mgr.start()
             earlier = []
             if ws not in self.capture_clients:
-                self.capture_clients[ws] = mgr.subscribe()
-                # Taken in the same step as subscribing: frames are captured on
-                # this event loop, so none falls between the two or comes twice.
+                try:
+                    self.capture_clients[ws] = mgr.subscribe()
+                except Exception as exc:  # the tap would not open
+                    logger.warning("Cannot capture CAN frames: %s", exc)
+                    await ws.send_json({"type": "capture_status", "active": False, "capturing": mgr.active,
+                                        "forwarding": False, "error": f"Cannot capture frames: {exc}"})
+                    return
+                # Taken in the same step as subscribing: frames reach the ring and
+                # the queues on this event loop, so none falls between the two or
+                # comes twice.
                 earlier = mgr.snapshot(self._CAPTURE_EARLIER)
             await ws.send_json({"type": "capture_status", "active": mgr.active, "capturing": mgr.active,
                                 "forwarding": True, "stats": mgr.stats(), "frames": earlier})
@@ -1455,8 +1462,6 @@ class WebSocketServer:
             q = self.capture_clients.pop(ws, None)
             if q is not None and mgr is not None:
                 mgr.unsubscribe(q)
-            # Note: transport capture itself cannot be stopped without a CAN
-            # disconnect; we only stop forwarding to this client.
             await ws.send_json({"type": "capture_status", "active": False,
                                 "capturing": mgr is not None and mgr.active, "forwarding": False})
 

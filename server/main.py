@@ -11,8 +11,9 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from can_config import (
     ALLOCATOR_NODE_ID,
@@ -350,11 +351,14 @@ class CANSession:
                 self.telemetry = TelemetryManager(self.scanner)
                 await self.telemetry.start()
 
-                # Frame-capture tap is created up front but stays dormant until a
-                # Debugging-view client explicitly starts it (it changes bus
-                # behaviour, so it is never auto-enabled).
+                # Frame capture for the Debugging view: its tap opens while a
+                # dashboard captures. Error frames read as SocketCAN reports
+                # them on SocketCAN, from candleLight (gs_usb) adapters and in
+                # raw logs (candump's format).
                 from frame_capture import FrameCaptureManager
-                self.frame_capture = FrameCaptureManager(self.scanner)
+                self.frame_capture = FrameCaptureManager(
+                    self._open_capture_tap, self._own_node_ids,
+                    decode_errors=hub is None or hub.spec.partition(":")[0] in ("gs_usb", "rawlog"))
 
                 logger.info("Initializing EventLogger...")
                 await self.ensure_event_logger()
@@ -402,6 +406,30 @@ class CANSession:
                 except Exception as cleanup_err:
                     logger.error("Cleanup error during failed connect: %s", cleanup_err)
                 raise
+
+    def _open_capture_tap(self, on_frame: Callable) -> Callable[[], None]:
+        """Every frame on the bus to ``on_frame`` for frame capture; returns what stops it.
+
+        Behind the hub a listener on its forwarding, on SocketCAN a socket of
+        its own: neither changes what Cynitor sends or receives. Stopping a
+        socket waits for its thread, so that happens off the event loop.
+        """
+        hub = self.hub
+        if hub is not None:
+            hub.add_listener(on_frame)
+            return lambda: hub.remove_listener(on_frame)
+        if not self.can_interface:
+            raise RuntimeError("CAN is still connecting")
+        tap = SocketcanTap(socketcan_device(self.can_interface), self.can_fd, on_frame, name="capture")
+        return lambda: threading.Thread(target=tap.stop, name="capture-stop", daemon=True).start()
+
+    def _own_node_ids(self) -> set[int]:
+        """The node-IDs Cynitor's own frames come from: its scanner's, and its allocator's."""
+        own = {ALLOCATOR_NODE_ID}
+        node = getattr(self.scanner, "node", None)
+        if getattr(node, "id", None) is not None:
+            own.add(node.id)
+        return own
 
     @staticmethod
     def _open_v11_tap(device: str, traffic: V11Traffic) -> Optional[SocketcanTap]:
@@ -581,7 +609,7 @@ class CANSession:
         path = self.raw_log_folder / new_log_name()
         if self.hub is not None:
             log = RawLog(path, channel="can0")
-            self.hub.on_frame = log.write
+            self.hub.add_listener(log.write)
         else:
             device = socketcan_device(self.can_interface)
             log = RawLog(path, channel=device)
@@ -601,7 +629,7 @@ class CANSession:
         if log is None:
             return None
         if self.hub is not None:
-            self.hub.on_frame = None
+            self.hub.remove_listener(log.write)
         if self._raw_tap is not None:
             self._raw_tap.stop()
             self._raw_tap = None
@@ -763,7 +791,9 @@ class CANSession:
         if self.allocator_manager:
             await self.allocator_manager.stop()
             self.allocator_manager = None
-        # Capture ends implicitly when the transport closes in scanner.close().
+        # Before the hub and the scanner, which its tap listens to.
+        if self.frame_capture is not None:
+            self.frame_capture.stop()
         self.frame_capture = None
         self.firmware = None  # its server closes with the scanner's node
         if self.scanner:

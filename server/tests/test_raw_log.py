@@ -79,13 +79,30 @@ class TestNames:
         assert list_logs(tmp_path / "raw") == []
 
 
+class _Hub:
+    """The CAN hub's listeners, without an adapter."""
+
+    def __init__(self):
+        self.listeners = []
+
+    def add_listener(self, listener):
+        self.listeners.append(listener)
+
+    def remove_listener(self, listener):
+        self.listeners.remove(listener)
+
+    def tell(self, msg):
+        for listener in self.listeners:
+            listener(msg)
+
+
 @pytest.fixture
 def running_session(tmp_path):
     """A CANSession connected through a (fake) hub."""
     from main import CANSession
     session = CANSession(data_dir=tmp_path)
     session.scanner = MagicMock()  # is_running
-    session.hub = SimpleNamespace(on_frame=None)
+    session.hub = _Hub()
     session.can_interface = "pcan:PCAN_USBBUS1"
     return session
 
@@ -98,10 +115,10 @@ class TestSessionRawLog:
 
     def test_hub_feeds_the_log_until_stopped(self, running_session):
         log = running_session.start_raw_log()
-        assert running_session.hub.on_frame == log.write
-        running_session.hub.on_frame(_frames()[0])
+        assert running_session.hub.listeners == [log.write]
+        running_session.hub.tell(_frames()[0])
         assert running_session.stop_raw_log() is log
-        assert running_session.hub.on_frame is None and running_session.raw_log is None
+        assert running_session.hub.listeners == [] and running_session.raw_log is None
         assert log.frames == 1 and log.path.parent == running_session.raw_log_folder
 
     def test_one_log_at_a_time(self, running_session):
@@ -127,7 +144,7 @@ class TestRawLogApi:
         started = await client.post("/api/rawlogs")
         assert started.status == 201
         name = (await started.json())["name"]
-        session.hub.on_frame(_frames()[0])
+        session.hub.tell(_frames()[0])
 
         listing = await (await client.get("/api/rawlogs")).json()
         assert listing["active"]["name"] == name and listing["active"]["frames"] == 1

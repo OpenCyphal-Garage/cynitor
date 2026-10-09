@@ -202,18 +202,16 @@ ws.send(JSON.stringify({
 ws.send(JSON.stringify({ type: 'ping' }));
 
 // Subscribe to the raw frame-capture stream (Debugging view). Off by default.
-// Enabling starts transport-level capture if not already active — see the note
-// below. Send enabled:false to stop receiving frames on this connection.
+// The first connection to enable it starts capture. Send enabled:false to stop
+// receiving frames on this connection; the last one to stop ends capture.
 ws.send(JSON.stringify({ type: 'capture', enabled: true }));
 ```
 
-> **Frame capture is sticky and changes bus behaviour.** pycyphal implements
-> capture by reconfiguring the acceptance filter to accept all frames and
-> forcing loopback on every outgoing frame. It cannot be stopped without closing
-> the transport (a CAN disconnect), and it adds bus/CPU overhead. It is therefore
-> opt-in: only clients that send `{type:'capture',enabled:true}` receive frames,
-> and `enabled:false` only stops *forwarding* to that client — the transport tap
-> stays active until disconnect.
+> **Frame capture only listens.** Its frames come from a listen-only tap: on
+> SocketCAN a socket of its own, for any other adapter a listener on the CAN
+> hub's forwarding. It changes nothing Cynitor sends or receives, and runs only
+> while at least one connection captures. Every frame on the bus comes through,
+> error frames included, which the Cyphal stack never sees.
 
 **Server Messages:**
 
@@ -270,21 +268,22 @@ Pong (sent in response to a client `ping` message):
 
 Capture status (sent in response to a client `capture` message):
 ```json
-{ "type": "capture_status", "active": true, "capturing": true, "forwarding": true, "stats": { "captured": 0, "rx": 0, "tx": 0, "cyphal": 0, "foreign": 0, "dropped": 0 }, "frames": [] }
+{ "type": "capture_status", "active": true, "capturing": true, "forwarding": true, "stats": { "captured": 0, "rx": 0, "tx": 0, "cyphal": 0, "foreign": 0, "errors": 0, "dropped": 0 }, "frames": [] }
 ```
-`capturing` says whether transport-level capture runs: once started, by any
-connection, it stays on until CAN disconnects. `forwarding` says whether this
-connection is sent the frames; a disable reply ends only that, so it carries
-`"forwarding": false` with `capturing` still `true`. When enabling fails because
-no CAN session exists, both are `false` and an `"error"` field says why. `active`
-is kept for dashboards from before these two: `capturing` in an enable reply,
-`false` in the others.
+`capturing` says whether capture runs, for any connection. `forwarding` says
+whether this connection is sent the frames. A disable reply carries
+`"forwarding": false`, and `capturing` stays `true` only while another
+connection captures. When enabling fails, both are `false` and an `"error"`
+field says why: no CAN session, or the tap could not open. `active` is kept for
+dashboards from before these two: `capturing` in an enable reply, `false` in
+the others.
 
 An enable reply's `frames` holds up to the 500 most recent frames captured
-before this connection subscribed (oldest first, shaped as in `can_frame`), taken
-in the same step as subscribing: the `can_frame` stream that follows carries the
-frames after them, none repeated and none skipped. It is empty when the
-connection was subscribed already.
+before this connection subscribed, while another one captured (oldest first,
+shaped as in `can_frame`). It is taken in the same step as subscribing: the
+`can_frame` stream that follows carries the frames after them, none repeated
+and none skipped. It is empty when the connection starts capture, or was
+subscribed already.
 
 Raw frame batch (sent only to clients that opted into capture; batched ~every
 120 ms to bound message rate, each with every frame queued since the last, up
@@ -292,20 +291,32 @@ to 2000):
 ```json
 {
     "type": "can_frame",
-    "stats": { "captured": 1024, "rx": 1000, "tx": 24, "cyphal": 1010, "foreign": 14, "dropped": 0 },
+    "stats": { "captured": 1024, "rx": 1000, "tx": 24, "cyphal": 1010, "foreign": 13, "errors": 1, "dropped": 0 },
     "frames": [
         {
-            "t": 12345.678, "ts": 1741949445.123, "dir": "rx",
+            "t": 1741949445.123451, "ts": 1741949445.123451, "dir": "rx",
             "id": "0x107D552A", "ext": true, "dlc": 8, "data": "01 02 03 04 05 06 07 E5",
             "cyphal": true, "priority": "NOMINAL", "src": 42, "dst": null,
             "kind": "msg", "port": 7509, "transfer_id": 5, "start": true, "end": true, "toggle": true
         },
-        { "t": 12345.679, "ts": 1741949445.124, "dir": "rx", "id": "0x00000123", "ext": false, "dlc": 2, "data": "AA BB", "cyphal": false }
+        { "t": 1741949445.124002, "ts": 1741949445.124002, "dir": "rx", "id": "0x00000123", "ext": false, "dlc": 2, "data": "AA BB", "cyphal": false },
+        { "t": 1741949445.125130, "ts": 1741949445.125130, "dir": "rx", "id": "0x000000A8", "ext": false, "dlc": 8,
+          "data": "00 00 04 00 00 00 00 00", "cyphal": false, "error": ["protocol violation: stuff", "no ACK", "bus error"] }
     ]
 }
 ```
-`dir` is `tx`/`rx` (TX = forced-loopback of our own frames). `dlc` is the data
-length in bytes (0–64), not the DLC code. For Cyphal frames,
+`t` and `ts` are the time the frame was received, in Unix seconds (on SocketCAN
+the kernel's timestamp; from an adapter whose clock counts from its power-up,
+the time the frame reached Cynitor). `dir` is `tx` for a frame Cynitor sent: one
+sent from this computer that, if it is a Cyphal frame, comes from Cynitor's
+node-ID or its allocator's (on SocketCAN the tap also hears the computer's other
+programs, such as every node on a vcan, which stay `rx`). `dlc` is the data
+length in bytes (0–64), not the DLC code. An error frame has `"cyphal": false`
+and `error`: what it reports, in words, on SocketCAN, candleLight (`gs_usb`)
+adapters and raw logs (its `id` holds the error classes and `data` the
+details, as `linux/can/error.h` lays them out), else `["error frame"]`. A
+remote frame has `"rtr": true`, an empty `data` and the length it asks for as
+`dlc`. For Cyphal frames,
 `kind` is `msg`/`req`/`resp` and `port` is the subject- or service-ID, and
 `start`, `end` and `toggle` are the tail byte's start-of-transfer,
 end-of-transfer and toggle bits; non-Cyphal ("foreign") frames carry only the
@@ -439,7 +450,8 @@ Response (connected):
 ```
 
 `protocol` / `statistics` come from pycyphal's transport (`mtu` is the
-single-frame payload limit: 7 = Classic CAN, up to 63 = CAN FD). `link` is
+single-frame payload limit: 7 = Classic CAN, up to 63 = CAN FD).
+`capture_active` says whether frame capture runs, for any connection. `link` is
 best-effort controller state parsed from `ip -details -statistics link show`;
 fields are `null` on virtual interfaces (vcan) or where the controller does not
 report them. For an adapter Cynitor opens itself, `link` holds what the CAN hub
@@ -453,15 +465,16 @@ The Debugging view polls this endpoint at ~1 Hz while active.
 curl 'http://localhost:8080/api/can/capture?limit=500'
 ```
 
-Returns the recent-frame ring buffer plus capture counters, for scripts. The
-dashboard does not use it: the reply to its `capture` message carries the same
-frames without overlapping the stream (see above). Live frames stream over the
-WebSocket `can_frame` message; this endpoint does not start capture.
+Returns the recent-frame ring buffer plus capture counters, for scripts: the
+frames of the capture running, or of the last one. The dashboard does not use
+it: the reply to its `capture` message carries the same frames without
+overlapping the stream (see above). Live frames stream over the WebSocket
+`can_frame` message; this endpoint does not start capture.
 
 ```json
 {
   "active": true,
-  "stats": {"captured": 1024, "rx": 1000, "tx": 24, "cyphal": 1010, "foreign": 14, "dropped": 0},
+  "stats": {"captured": 1024, "rx": 1000, "tx": 24, "cyphal": 1010, "foreign": 13, "errors": 1, "dropped": 0},
   "frames": [ /* same per-frame shape as the can_frame stream, oldest→newest */ ]
 }
 ```

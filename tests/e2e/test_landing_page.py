@@ -4933,18 +4933,24 @@ async def _(page):
         await debug_close(page, server)
 
 
-@test("Debug: the frame table says when the bus is in capture mode already, and its stop button reads Stop")
+@test("Debug: capture changes nothing on the bus: Stop ends it, and nothing says the bus stays in capture mode")
 async def _(page):
     server = _DebugServer()
-    server.capturing = True  # started from another dashboard: it stays on until CAN disconnects
+    server.capturing = True  # another dashboard captures, which leaves this one as it was
     await debug_open(page, server)
     try:
         await page.wait_for_timeout(1200)  # the diagnostics have answered
-        said = await page.locator("#fmEmpty").inner_text()
+        idle = await page.locator("#fmEmpty").inner_text()
         await debug_start_capture(page)
         label = await page.locator("#fmToggle").inner_text()
-        assert "until CAN disconnects" in said and label == "Stop", \
-            f"With the bus capturing already, the table says {said!r}; capturing, the button reads {label!r}"
+        await page.locator("#fmToggle").click()  # Stop
+        await page.wait_for_function("!el('fmToggle').classList.contains('active')", timeout=WAIT_MS)
+        stopped = await page.locator("#fmToggle").inner_text()
+        monitor = await page.locator(".frame-monitor").inner_text()
+        assert idle.startswith("Capture is off") and label == "Stop" and stopped == "Start capture" \
+            and "until CAN disconnect" not in monitor, \
+            f"Before Start the table says {idle!r}; capturing, the button reads {label!r}, stopped {stopped!r}; " \
+            f"the monitor says: {monitor[:200]!r}"
     finally:
         await debug_close(page, server)
 
