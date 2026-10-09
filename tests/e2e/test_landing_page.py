@@ -5554,6 +5554,16 @@ async def _(page):
         await sidebar_close(page, server)
 
 
+@test("Sidebar: screen readers hear what its fields are, and which Connect is the server's and which is CAN's")
+async def _(page):
+    connect = re.compile("connect", re.IGNORECASE)
+    found = {"url": await page.get_by_role("textbox", name="Backend URL", exact=True).count(),
+             "list": await page.get_by_role("combobox", name="CAN interface", exact=True).count(),
+             "server": await page.get_by_role("group", name="Server").get_by_role("button", name=connect).count(),
+             "can": await page.get_by_role("group", name="CAN").get_by_role("button", name=connect).count()}
+    assert found == {"url": 1, "list": 1, "server": 1, "can": 1}, f"Found by their names: {found}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

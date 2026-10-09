@@ -21,7 +21,7 @@
         <button class="theme-toggle" id="themeToggle" role="switch" aria-checked="false" aria-label="Dark mode"></button>
       </div>
 
-      <div class="sidebar-section">
+      <div class="sidebar-section" role="group" aria-label="Server">
         <div class="sidebar-group-header">
           <div class="sidebar-group-label">
             <span class="semaphore" id="serverSemaphore"></span>
@@ -30,12 +30,13 @@
           <span class="throughput-value hidden" id="serverThroughput"></span>
         </div>
         <div class="sidebar-connect">
-          <input id="apiBase" type="text" value="http://localhost:8080" placeholder="http://localhost:8080" />
+          <input id="apiBase" type="text" value="http://localhost:8080" placeholder="http://localhost:8080"
+                 aria-label="Backend URL" />
           <button id="connectDashboardBtn" class="sidebar-action btn-primary">Connect</button>
         </div>
       </div>
 
-      <div class="sidebar-section">
+      <div class="sidebar-section" role="group" aria-label="CAN">
         <div class="sidebar-group-header">
           <div class="sidebar-group-label">
             <span class="semaphore" id="canSemaphore"></span>
@@ -46,7 +47,7 @@
         <div class="can-v11-notice hidden" id="canV11Notice" role="status"></div>
         <div class="sidebar-connect">
           <div class="sparkline-wrap">
-            <select id="interfacesSelect"></select>
+            <select id="interfacesSelect" aria-label="CAN interface"></select>
             <canvas id="busLoadSparkline" class="bus-load-sparkline hidden" role="img"
                     aria-label="Bus load over the last minute"
                     title="Bus load over the last minute; the numbers mark its peaks"></canvas>
@@ -56,7 +57,7 @@
             </div>
           </div>
           <input id="canSpecInput" type="text" class="hidden" spellcheck="false" autocomplete="off"
-                 placeholder="e.g. pcan:PCAN_USBBUS1, slcan:COM5" aria-label="CAN interface" />
+                 placeholder="e.g. pcan:PCAN_USBBUS1, slcan:COM5" aria-label="CAN interface spec" />
           <div id="canBitrateRow" class="can-bitrate-row hidden">
             <select id="canBitrateSelect" aria-label="CAN bitrate">
               <option value="">Bitrate…</option>
