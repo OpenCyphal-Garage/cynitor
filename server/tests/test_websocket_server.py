@@ -1031,6 +1031,17 @@ class TestAdapterListing:
         assert data["dropped"] == {"scanner": 0, "logger": 4, "clients": 1}
 
     @pytest.mark.asyncio
+    async def test_status_reports_bus_errors(self, listing_client, session):
+        from bus_errors import BusErrors
+        with patch("main.discover_can_interfaces", return_value=[]):
+            none_yet = (await (await listing_client.get("/api/status")).json())["bus_errors"]
+            session.bus_errors = BusErrors("can0")
+            session.bus_errors.observe({"state": "ERROR-PASSIVE", "berr_tx": 0, "berr_rx": 128}, now=100.0)
+            data = await (await listing_client.get("/api/status")).json()
+        assert none_yet is None
+        assert data["bus_errors"] == {"state": "ERROR-PASSIVE", "tx_errors": 0, "rx_errors": 128, "since_unix": 100.0}
+
+    @pytest.mark.asyncio
     async def test_refresh_query_forces_a_rescan(self, listing_client, catalog):
         resp = await listing_client.get("/api/can/adapters?refresh=1")
         assert resp.status == 200

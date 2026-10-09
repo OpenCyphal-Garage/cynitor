@@ -28,6 +28,7 @@ from can_config import (
     validate_bitrate,
     validate_data_bitrate,
 )
+from bus_errors import BusErrors
 from can_discovery import AdapterCatalog, discover_adapters
 from can_hub import CANHub, HubBusLoad, pick_free_node_id
 from cyphal_v11 import SOCKETCAN_FILTER, V11Traffic
@@ -244,6 +245,8 @@ class CANSession:
         # from a filtered listen-only socket, behind the hub from the hub.
         self.v11: Optional[V11Traffic] = None
         self._v11_tap: Optional[SocketcanTap] = None
+        # Errors on the bus, as the health check samples them (see bus_errors).
+        self.bus_errors: Optional[BusErrors] = None
         # Serves firmware files to nodes being updated; None when Cynitor has
         # no node-ID or plays a raw log, since nothing can be sent then.
         self.firmware: Optional[FirmwareServer] = None
@@ -395,6 +398,7 @@ class CANSession:
                     self._v11_tap = self._open_v11_tap(socketcan_device(can_iface), self.v11)
                 else:
                     self.v11 = hub.v11
+                self.bus_errors = BusErrors(can_iface)
 
                 self.can_interface = can_iface
                 self.can_bitrate = bitrate
@@ -823,6 +827,7 @@ class CANSession:
             self._v11_tap.stop()
             self._v11_tap = None
         self.v11 = None
+        self.bus_errors = None
         # Last: everything above talks to the adapter through it.
         if self.hub:
             await asyncio.to_thread(self.hub.stop)
@@ -1011,7 +1016,9 @@ def _check_can_health(iface: str) -> Optional[str]:
             match = _CAN_STATE.search(result.stdout)
             if match:
                 can_state = match.group(1)
-                if can_state in ("BUS-OFF", "STOPPED", "ERROR-PASSIVE"):
+                # Off the bus. ERROR-WARNING and ERROR-PASSIVE still pass
+                # frames: BusErrors shows them instead.
+                if can_state in ("BUS-OFF", "STOPPED"):
                     return f"Interface {iface}: CAN state is {can_state}"
     except Exception:
         pass
@@ -1040,6 +1047,20 @@ async def _session_health_error(session: 'CANSession') -> Optional[str]:
     return error
 
 
+async def _sample_bus_errors(session: 'CANSession') -> None:
+    """Give the session's BusErrors the link's error state now: the hub's counters, or SocketCAN's."""
+    if session.bus_errors is None:
+        return
+    try:
+        if session.hub is not None:
+            link = session.hub.link_diagnostics()
+        else:
+            link = await asyncio.to_thread(get_can_link_diagnostics, socketcan_device(session.can_interface))
+        session.bus_errors.observe(link)
+    except Exception as exc:  # a sample missed must not stop the register loop
+        logger.debug("Bus error sample failed: %s", exc)
+
+
 async def _register_loop(scanner, registered_nodes: set[int], session: 'CANSession' = None) -> None:
     health_check_counter = 0
     registration_retry_at: dict[int, float] = {}
@@ -1056,6 +1077,7 @@ async def _register_loop(scanner, registered_nodes: set[int], session: 'CANSessi
                 if error:
                     session.schedule_fatal_disconnect(error)
                     return
+                await _sample_bus_errors(session)
 
             try:
                 for node in scanner.all_nodes.values():

@@ -140,8 +140,9 @@ Open in browser:
   - `GET /api/recordings/{id}/export?format={csv,json}` — export a recording
   - `GET /api/recordings/buffer` — global buffer stats (size, byte estimate, oldest-event timestamp)
 - CAN error handling:
-  - Auto-disconnect on bus faults (BUS-OFF, ERROR-PASSIVE, interface disappearance)
+  - Auto-disconnect on bus faults (BUS-OFF, interface disappearance)
   - Alert shown to user with error details
+  - Errors on a bus still in use (ERROR-WARNING, ERROR-PASSIVE, error counters growing): an amber notice under the CAN status, and the CAN dot amber, until they stop (`bus_errors` in `/api/status`)
 
 ## Configuration
 

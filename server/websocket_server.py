@@ -13,6 +13,7 @@ from aiohttp import web, WSCloseCode
 
 from can_config import is_explicit_spec, is_socketcan, resolve_bitrate, resolve_data_bitrate, socketcan_device
 from version import __version__
+from bus_errors import BusErrors
 from cyphal_v11 import V11Traffic
 from firmware import MAX_FIRMWARE_BYTES, firmware_path, list_firmware
 from raw_log import list_logs, log_path, sidecar_path
@@ -400,6 +401,8 @@ class WebSocketServer:
             "dropped": self.session.dropped_events(),
             "last_error": self.session.last_error,
             "cyphal_v11": v11.status() if isinstance(v11 := getattr(self.session, "v11", None), V11Traffic) else None,
+            "bus_errors": (errors.status() if isinstance(errors := getattr(self.session, "bus_errors", None), BusErrors)
+                           else None),
         })
 
     async def _get_adapters(self, request: web.Request) -> web.Response:
