@@ -5130,6 +5130,42 @@ async def _(page):
         await debug_close(page, server)
 
 
+# The data of the frame rows fully in view (under the table's heading), top to bottom.
+DEBUG_IN_VIEW = """(() => { const wrap = document.querySelector('.fm-table-wrap').getBoundingClientRect();
+    const top = document.querySelector('.fm-table thead').getBoundingClientRect().bottom;
+    return [...document.querySelectorAll('#fmRows tr')].filter((row) => { const box = row.getBoundingClientRect();
+        return box.top >= top - 0.5 && box.bottom <= wrap.bottom + 0.5; }).map((row) => row.querySelector('.fm-data').textContent); })()"""
+
+
+@test("Debug: every frame kept can be scrolled to, the page drawing only the rows in view, which hold still as frames come")
+async def _(page):
+    server = _DebugServer()
+    await debug_open(page, server)
+    numbered = lambda n: dict(_can_frame(n), dlc=2, data=f"{n >> 8:02X} {n & 255:02X}")  # its number in its data
+    try:
+        await debug_start_capture(page)
+        for first in range(0, 5000, 1000):  # as many as the table keeps
+            server.capture([numbered(n) for n in range(first, first + 1000)])
+            server.flush()
+        await page.wait_for_timeout(500)
+        drawn = await page.evaluate("document.querySelectorAll('#fmRows tr').length")
+        await page.evaluate("document.querySelector('.fm-table-wrap').scrollTop = 1e9")
+        await page.wait_for_timeout(300)
+        oldest = (await page.evaluate(DEBUG_IN_VIEW))[-1:]
+        await page.evaluate("document.querySelector('.fm-table-wrap').scrollTop = 30000")  # among older frames
+        await page.wait_for_timeout(300)
+        reading = await page.evaluate(DEBUG_IN_VIEW)
+        server.capture([numbered(n) for n in range(5000, 5100)])
+        server.flush()
+        await page.wait_for_timeout(300)
+        still = await page.evaluate(DEBUG_IN_VIEW)
+        assert drawn < 100 and oldest == ["00 00"] and reading and still == reading, \
+            f"With 5,000 frames kept, the page holds {drawn} rows; scrolled to the bottom, the last row is {oldest}; " \
+            f"frames coming while older ones are read move them from {reading[:2]}… to {still[:2]}…"
+    finally:
+        await debug_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

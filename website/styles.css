@@ -8250,13 +8250,46 @@ body.dsdl-resizing-row {
   min-height: 0;
   overflow: auto;
   position: relative;
+  /* The table keeps the reader's place itself (debug-view.js appendBatch). */
+  overflow-anchor: none;
 }
 
+/* Only the rows in view are drawn (debug-view.js draw): every row is
+   --fm-row-h tall, the pads above and below count rows in it, and the
+   columns keep their widths whichever rows are drawn. */
 .fm-table {
+  --fm-row-h: 1.5rem;
   width: 100%;
-  border-collapse: collapse;
+  min-width: 50.75rem;  /* the columns, and 8 data bytes */
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
   font-family: var(--mono);
   font-size: 0.6875rem;
+}
+
+/* A CAN FD frame's 64 data bytes. */
+.fm-table.fm-fd {
+  min-width: 125rem;
+}
+
+.fm-col-time { width: 6.5rem; }
+.fm-col-dir { width: 2.75rem; }
+.fm-col-id { width: 5.75rem; }
+.fm-col-prio { width: 5.5rem; }  /* "immediate"; the rare "exceptional" is cut */
+.fm-col-transfer { width: 10.5rem; }
+.fm-col-tid { width: 2.5rem; }
+.fm-col-flags { width: 3.5rem; }
+.fm-col-len { width: 2.5rem; }
+
+.fm-pad td {
+  height: calc(var(--fm-above, 0) * var(--fm-row-h));
+  padding: 0;
+  border: 0;
+}
+
+.fm-pad-below td {
+  height: calc(var(--fm-below, 0) * var(--fm-row-h));
 }
 
 .fm-table thead th {
@@ -8264,7 +8297,7 @@ body.dsdl-resizing-row {
   top: 0;
   z-index: 1;
   text-align: left;
-  padding: 0.375rem 0.625rem;
+  padding: 0.375rem 0.5rem;
   font-family: var(--sans);
   font-size: 0.625rem;
   font-weight: 600;
@@ -8276,10 +8309,14 @@ body.dsdl-resizing-row {
 }
 
 .fm-row td {
-  padding: 0.1875rem 0.625rem;
+  box-sizing: border-box;
+  height: var(--fm-row-h);
+  padding: 0 0.5rem;
   color: var(--text);
   border-bottom: 1px solid var(--border-subtle);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .fm-row.fm-foreign td {

@@ -14,8 +14,8 @@
 //      WebSocket `can_frame` stream (batched).
 const DebugView = (() => {
   const POLL_MS = 1000;
-  const MAX_ROWS = 1000; // cap rendered frame rows to bound DOM size
   const MAX_KEPT = 5000; // frames kept for the filter, so a rare frame is still found
+  const OVERSCAN = 10;   // rows drawn beyond each edge of the view, so a scroll finds them drawn
 
   let pollTimer = null;
   let prev = null;        // the previous sample, for rates: {stats, link, at: performance.now()}
@@ -26,6 +26,9 @@ const DebugView = (() => {
   let paused = false;     // freeze the table without unsubscribing
   let filterTests = [];   // one test per filter term, all to pass (parseFilter)
   let rows = [];          // recent frames, newest first
+  let shown = [];         // the frames of `rows` the filter lets through: the table's rows
+  let shownChanged = 0;   // counts changes to `shown` other than frames coming and going at its ends
+  let drawn = { first: 0, key: '' };  // the rows of `shown` in the page now (see draw)
   let pending = [];       // frames that came while paused, newest first: shown on Resume
   let lastSeq = 0;        // frames are numbered as they come, for trimming the table
   let captureStats = null;
@@ -55,15 +58,22 @@ const DebugView = (() => {
             <span id="fmStatus" class="fm-status" role="status" aria-live="polite"></span>
             <span class="fm-note">Capture forces loopback + accept-all filtering and stays on until CAN disconnect.</span>
           </div>
-          <div class="fm-table-wrap">
-            <table class="fm-table">
+          <div id="fmWrap" class="fm-table-wrap">
+            <table id="fmTable" class="fm-table" aria-rowcount="1">
+              <colgroup>
+                <col class="fm-col-time"><col class="fm-col-dir"><col class="fm-col-id"><col class="fm-col-prio">
+                <col class="fm-col-transfer"><col class="fm-col-tid"><col class="fm-col-flags"><col class="fm-col-len">
+                <col>
+              </colgroup>
               <thead><tr>
                 <th>Time</th><th>Dir</th><th>CAN ID</th><th>Prio</th><th>Transfer</th>
                 <th title="Transfer-ID">TID</th>
                 <th title="Start of transfer, end of transfer, toggle bit; - where clear">Flags</th>
                 <th>Len</th><th>Data</th>
               </tr></thead>
+              <tbody class="fm-pad" aria-hidden="true"><tr><td colspan="9"></td></tr></tbody>
               <tbody id="fmRows"></tbody>
+              <tbody class="fm-pad fm-pad-below" aria-hidden="true"><tr><td colspan="9"></td></tr></tbody>
             </table>
             <div id="fmEmpty" class="fm-empty"></div>
           </div>
@@ -242,6 +252,8 @@ const DebugView = (() => {
       statRow('Adapter error frames', link.adapter_error_frames, link.adapter_error_frames > 0 ? 'warn' : null),
     ]);
 
+    // A CAN FD frame's 64 data bytes need a wider frame table.
+    el('fmTable')?.classList.toggle('fm-fd', proto.is_fd === true);
     if (!el('debugHealth')) renderFrame(target);
     target.querySelector('.debug-stale-note')?.remove();
     target.classList.remove('debug-stale');
@@ -363,7 +375,9 @@ const DebugView = (() => {
 
   const matchesFilter = (f) => filterTests.every((test) => test(f));
 
-  const rowHtml = (f) => {
+  // Row `index` of `shown`; aria-rowindex tells screen readers where it is
+  // among all the rows, few of which are drawn.
+  const rowHtml = (f, index) => {
     const dirCls = f.dir === 'tx' ? 'fm-tx' : 'fm-rx';
     const transfer = f.cyphal
       ? `<span class="fm-kind fm-kind-${escapeHtml(f.kind || 'x')}">${escapeHtml(f.kind || '?')}</span> `
@@ -371,7 +385,7 @@ const DebugView = (() => {
       : '<span class="fm-foreign-tag">foreign</span>';
     // Transport fields only a Cyphal frame has.
     const cyphal = (value) => (f.cyphal ? escapeHtml(String(value ?? '')) : '');
-    return `<tr class="fm-row${f.cyphal ? '' : ' fm-foreign'}" data-seq="${f.seq}">
+    return `<tr class="fm-row${f.cyphal ? '' : ' fm-foreign'}" aria-rowindex="${index + 2}">
       <td class="fm-time">${escapeHtml(fmtTime(f.ts))}</td>
       <td><span class="fm-dir ${dirCls}">${f.dir === 'tx' ? 'TX' : 'RX'}</span></td>
       <td class="fm-id">${escapeHtml(fmtId(f))}</td>
@@ -394,9 +408,8 @@ const DebugView = (() => {
 
   const updateEmpty = () => {
     const empty = el('fmEmpty');
-    const tbody = el('fmRows');
-    if (!empty || !tbody) return;
-    const hasRows = tbody.children.length > 0;
+    if (!empty) return;
+    const hasRows = shown.length > 0;
     empty.classList.toggle('hidden', hasRows);
     if (!hasRows) {
       const text = rows.length ? 'No frames match the filter.'
@@ -444,13 +457,53 @@ const DebugView = (() => {
     updateEmpty();
   };
 
-  // Full rebuild from the rows array — used on filter change / clear / backfill.
-  const renderTableFromRows = () => {
+  // The height of a drawn row in px: --fm-row-h (in rem), which the pads
+  // above and below the drawn rows count in too.
+  const rowHeight = () => parseFloat(getComputedStyle(el('fmTable')).getPropertyValue('--fm-row-h'))
+    * parseFloat(getComputedStyle(document.documentElement).fontSize);
+
+  // Only the rows in view, and OVERSCAN more each way, are in the page; the
+  // pads above and below stand in for the others. Rows the page has already
+  // are left alone, so a selection in them holds while frames come.
+  const draw = () => {
+    const wrap = el('fmWrap');
+    const table = el('fmTable');
+    if (!wrap) return;
+    const height = rowHeight();
+    const first = Math.min(shown.length, Math.max(0, Math.floor(wrap.scrollTop / height) - OVERSCAN));
+    const last = Math.min(shown.length, Math.ceil((wrap.scrollTop + wrap.clientHeight) / height) + OVERSCAN);
+    table.style.setProperty('--fm-above', first);
+    table.style.setProperty('--fm-below', Math.max(0, shown.length - last));
+    table.setAttribute('aria-rowcount', shown.length + 1);
+    // `shown` only gains frames at its top and loses them at its bottom
+    // between its other changes, so its first and last frame drawn say
+    // which frames lie between.
+    const key = first < last ? `${shownChanged}:${shown[first].seq}:${shown[last - 1].seq}` : '';
     const tbody = el('fmRows');
-    if (!tbody) return;
-    const visible = rows.filter(matchesFilter).slice(0, MAX_ROWS);
-    tbody.innerHTML = visible.map(rowHtml).join('');
+    if (key !== drawn.key) {
+      tbody.innerHTML = shown.slice(first, last).map((f, i) => rowHtml(f, first + i)).join('');
+    } else if (first !== drawn.first) {  // the same frames, moved down by frames come above them
+      [...tbody.rows].forEach((row, i) => row.setAttribute('aria-rowindex', first + i + 2));
+    }
+    drawn = { first, key };
     updateEmpty();
+  };
+
+  let drawQueued = false;
+  const queueDraw = () => {
+    if (drawQueued) return;
+    drawQueued = true;
+    requestAnimationFrame(() => { drawQueued = false; draw(); });
+  };
+
+  // `shown` anew from the frames kept, as after the filter, Clear or Resume,
+  // with the newest frames in view.
+  const showRows = () => {
+    shown = rows.filter(matchesFilter);
+    shownChanged += 1;
+    const wrap = el('fmWrap');
+    if (wrap) wrap.scrollTop = 0;
+    draw();
   };
 
   // Frames as the server sends them (oldest first), numbered, newest first.
@@ -460,23 +513,26 @@ const DebugView = (() => {
   };
 
   const appendBatch = (frames) => {
-    const tbody = el('fmRows');
-    if (!tbody || !frames || !frames.length) return;
+    const wrap = el('fmWrap');
+    if (!wrap || !frames || !frames.length) return;
     const newest = numbered(frames);
     if (paused || state.activeView !== 'debug') {  // kept for Resume, or for the tab's return
       pending = newest.concat(pending).slice(0, MAX_KEPT);
       return;
     }
     rows = newest.concat(rows).slice(0, MAX_KEPT);
-    const html = newest.filter(matchesFilter).slice(0, MAX_ROWS).map(rowHtml).join('');
-    if (html) tbody.insertAdjacentHTML('afterbegin', html);
-    // What a rebuild would show: the newest matches among the frames kept.
+    const added = newest.filter(matchesFilter);
+    // The newest matches among the frames kept, as a filter typed now would show.
     const oldestKept = rows[rows.length - 1].seq;
-    while (tbody.lastChild && (tbody.children.length > MAX_ROWS
-        || Number(tbody.lastChild.dataset.seq) < oldestKept)) {
-      tbody.lastChild.remove();
+    shown = added.concat(shown);
+    while (shown.length && shown[shown.length - 1].seq < oldestKept) shown.pop();
+    // Scrolled down to older frames: they stay in view as frames come above
+    // them. The pad above grows first, so the scroll has room to follow.
+    if (wrap.scrollTop > 0 && added.length) {
+      el('fmTable').style.setProperty('--fm-above', drawn.first + added.length);
+      wrap.scrollTop += added.length * rowHeight();
     }
-    updateEmpty();
+    draw();
   };
 
   // The frames that came while paused or while another tab was shown.
@@ -484,7 +540,7 @@ const DebugView = (() => {
     if (!pending.length) return;
     rows = pending.concat(rows).slice(0, MAX_KEPT);
     pending = [];
-    renderTableFromRows();
+    showRows();
   };
 
   const sendWs = (obj) => {
@@ -522,7 +578,7 @@ const DebugView = (() => {
     // (oldest first); the live stream carries on from there.
     if (captureOn && event.frames?.length && rows.length === 0) {
       rows = numbered(event.frames);
-      renderTableFromRows();
+      showRows();
     }
     updateEmpty();
   };
@@ -555,14 +611,15 @@ const DebugView = (() => {
     el('fmClear').addEventListener('click', () => {
       rows = [];
       pending = [];
-      const tbody = el('fmRows');
-      if (tbody) tbody.innerHTML = '';
-      updateEmpty();
+      showRows();
     });
     el('fmFilter').addEventListener('input', (e) => {
       filterTests = parseFilter(e.target.value);
-      renderTableFromRows();
+      showRows();
     });
+    // The rows in view change as the table scrolls and as its room changes.
+    el('fmWrap').addEventListener('scroll', queueDraw, { passive: true });
+    new ResizeObserver(queueDraw).observe(el('fmWrap'));
   };
 
   // ── Lifecycle ──────────────────────────────────────────────────────────
