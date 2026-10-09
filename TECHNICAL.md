@@ -155,15 +155,15 @@ Top-level `const`/`let` declarations are shared globals across script tags (no m
 ```
 Page load → loadSettings() → bind() → updateSemaphores()
             ↓ (auto-reconnect from saved state)
-            connectDashboard() → /api/status
-                ↓
+            connectDashboard() → openDashboard() → /api/status
+                ↓ (no answer: retryDashboard() after 2, 4, 8, 16, then every 30 s)
             startStatusPolling() (5s) + startInterfacePolling() (3s while not yet on CAN)
                 ↓
             User clicks CAN Connect (or another client did) → connectCan()
                 ↓
             schedulePostCanStartup(5s) — wait for backend pipeline to come up
                 ↓
-            getAllNodes() (one-shot) + startNodesPolling() (slider 1-60s)
+            getAllNodes() (one-shot) + startNodesPolling() (1s)
             startThroughputTimer() (1s) + connectWs()
                 ↓
             ws.onmessage → cacheEvent() → scheduleDetailRefresh() (100ms debounce)
@@ -172,13 +172,14 @@ Page load → loadSettings() → bind() → updateSemaphores()
 
 The frontend never blocks on a single source. WebSocket is for live events; REST is for structural snapshots and connection metadata.
 
-Six views share the same WebSocket and REST data:
+Seven views share the same WebSocket and REST data:
 - **Nodes view** — Tabulator table of nodes (with ghost rows for displaced identities pinned to bottom), detail panel below with tabs (Publishers, Subscribers, Servers, Clients, Registers, History).
 - **Subjects view** — Tabulator table of all subjects and services across the network. Services can be expanded inline with a node selector and request form. Both views use `services-panel.js` for service interaction but maintain isolated state via the `forSubjects` parameter pattern.
 - **Graph view** — D3 force-directed graph showing device nodes (circles) and subject nodes (diamonds) with directional pub/sub links and animated live-traffic indicators. Three view modes (nodes only / node-centric / subject-centric), drag-to-pin with persistent positions, zoom/pan, adjacency highlighting, hide-system / hide-offline / per-node-or-subject hide with a restore badge, inline device rename, gravity bias by total links / channels / rate / payload.
 - **Compare view** — independent graphs for side-by-side multi-series comparison.
 - **DSDL view** — namespace tree of loaded types with bus-activity badges, custom-type editor.
 - **Record view** — capture filtered events into per-recording SQLite stores with limits.
+- **Debug view** — the bus's health and transport diagnostics, and a raw CAN frame monitor (Trace, By ID).
 
 Independent of the views, the **Right log panel** (toggled from the right edge) is a unified timeline of Cyphal diagnostic messages, user-picked text subjects, and the backend's `/api/logs` stream.
 

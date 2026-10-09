@@ -58,12 +58,11 @@ Open in browser:
 ## Dashboard Layout
 
 - Sidebar:
-  - Server connection (API base URL + Connect button)
-  - CAN interface dropdown + Connect button
-  - Refresh interval slider
-  - Node/event counters
+  - Server connection (API base URL + Connect button). A backend that stops answering is tried again until it answers: the dot pulses and the section says `reconnecting…`; Disconnect stops trying
+  - CAN interface dropdown + Connect button, off until the server is connected (its tooltip says so). Adapters other than SocketCAN take a bitrate, and CAN FD ones a data bitrate, remembered per adapter; the pick is kept while an adapter is missing from the list for a moment. Why the last connect failed, or why the backend ended the session (`last_error`), stays under the form until the next try
+  - Load reading: messages per second, bus load and dropped messages, with a curve of the last minute over the interface list
   - Theme toggle (dark/light)
-  - Collapsible (half-hidden toggle button)
+  - Collapsible (half-hidden toggle button); collapsed, its controls leave the Tab order
 - Main area (nodes table):
   - Sortable columns (ID, Name, State, Rate, Uptime); Health and State sort by severity, and offline nodes that lost their node-ID stay at the bottom in either direction. When a sorted value changes, the table sorts again (every 3 s at most), but not while the pointer is over it
   - Rate: messages per second the node sends now. A subject counts while its messages flow, by the Graph's rule (three message periods, two seconds at least); one that stopped counts for nothing
@@ -148,8 +147,8 @@ Open in browser:
 
 - API base URL is editable in the UI (default: `http://localhost:8080`).
 - WebSocket URL is derived automatically from API base (`ws://.../ws`).
-- All settings persisted in localStorage: API URL, CAN interface, filters, sort state, column widths, theme, sidebar state, refresh interval, selected node, detail panel split ratio, detail panel height, active view, favourite/hidden subjects, compare graphs with markers and drawings.
-- Node list refresh interval is configurable via sidebar slider (1–60 seconds, default: 3s).
+- All settings persisted in localStorage: API URL, CAN interface, filters, sort state, column widths, theme, sidebar state, selected node, detail panel split ratio, detail panel height, active view, favourite/hidden subjects, compare graphs with markers and drawings.
+- The node list is asked for every second.
 - Selected node, active view, and detail panel layout are restored on page reload.
 
 ## Compare View
