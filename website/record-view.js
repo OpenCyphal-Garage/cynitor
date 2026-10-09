@@ -66,9 +66,9 @@ const _formatRetention = (seconds) => {
 
 // ── Picker data builders ────────────────────────────────────────────
 
-// What selecting a service records: Cynitor sees the calls it makes itself
-// (from the Services panel), not those between other nodes.
-const SERVICE_RECORDED = 'only service calls sent from Cynitor';
+// What selecting a service records: the server hears every call on the bus,
+// between any two nodes, Cynitor's own among them (server/service_calls.py).
+const SERVICE_RECORDED = 'all its calls on the bus';
 
 // Port-ID → IDs of the nodes whose port lists named in `lists` hold it.
 const _portNodes = (lists) => {

@@ -4228,12 +4228,12 @@ RECORD_SERVICE = """() => {
 }"""
 
 
-@test("Record: a service says it records only service calls sent from Cynitor")
+@test("Record: a service says it records all its calls on the bus")
 async def _(page):
     server = _RecordServer()
     await record_open(page, server, setup=RECORD_SERVICE)
     try:
-        said = "only service calls sent from Cynitor"
+        said = "all its calls on the bus"
         picked = await page.evaluate("_subjectsPicker.getRow('service-384').getCell('label').getElement().title")
         selected = await page.evaluate("_selectionPicker.getRow('service-384').getData().label")
         heading = await page.evaluate("el('recSubjectsPicker').previousElementSibling.textContent")
