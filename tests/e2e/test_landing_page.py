@@ -5671,6 +5671,25 @@ async def _(page):
         f"Served by the backend, the overlay says: {backend!r}; served on {dev_host}: {dev!r}"
 
 
+@test("Sidebar: it needs no scrollbar of its own, its version reads, and its logos show in both themes")
+async def _(page):
+    # A footer logo hung below it: on Linux and Windows a scrollbar showed at
+    # every window size, wrapping the brand row, and below 80rem a second one.
+    seen = await page.evaluate("""() => { const sb = document.querySelector('nav.sidebar');
+        const html = document.documentElement, theme = html.getAttribute('data-theme');
+        html.setAttribute('data-theme', 'dark');
+        const hammer = getComputedStyle(document.querySelector('.cordicor-logo')).filter;
+        if (theme) html.setAttribute('data-theme', theme); else html.removeAttribute('data-theme');
+        const version = el('versionTag'), was = version.textContent;
+        version.textContent = 'v0.12.10';  // as the backend serving the page has it
+        const over = [sb.scrollHeight - sb.clientHeight, sb.scrollWidth - sb.clientWidth];
+        version.textContent = was;
+        return {over, darkHammer: hammer, version: parseFloat(getComputedStyle(version).fontSize)}; }""")
+    assert seen["over"] == [0, 0] and "invert" in seen["darkHammer"] and seen["version"] >= 9, \
+        f"Sidebar overflow (px, down and across): {seen['over']}; the hammer's filter in dark: " \
+        f"{seen['darkHammer']!r}; the version's font size: {seen['version']} px"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

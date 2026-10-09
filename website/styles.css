@@ -951,11 +951,16 @@ body {
   line-height: 1.2;
 }
 
+/* The image's lower third is transparent: cut off the box (2.8rem of its
+   4rem shown, at the same scale), it no longer hangs below the sidebar, which
+   then took a scrollbar. The wordmark stays where it was. */
 .cyphal-logo {
-  height: 4rem;
+  width: 8rem;
+  height: 2.8rem;
+  object-fit: cover;
+  object-position: top;
   margin-left: 1.0rem;
-  margin-bottom: -1.7rem;
-  width: auto;
+  margin-bottom: -0.5rem;
   opacity: 0.6;
   align-self: flex-end;
 }
@@ -973,12 +978,16 @@ body {
   align-self: flex-end;
 }
 
+/* Big enough to read off for a bug report, clear of the hammer; it takes no
+   width of the column, over whose free space it reads. */
 .version-tag {
+  width: 0;
+  white-space: nowrap;
   font-family: var(--mono);
-  font-size: 0.4rem;
+  font-size: 0.5625rem;
   font-weight: 600;
   margin-bottom: -2.1rem;
-  margin-left: 1.5rem;
+  margin-left: 2.4rem;
   color: var(--muted);
   letter-spacing: 0.1em;
 }
@@ -988,6 +997,11 @@ body {
 [data-theme="dark"] .cyphal-logo {
   filter: invert(1) hue-rotate(180deg);
   opacity: 0.85;
+}
+
+/* The hammer is black, lost on the dark sidebar too: white there. */
+[data-theme="dark"] .cordicor-logo {
+  filter: invert(1);
 }
 
 .powered-by-label {
@@ -4519,6 +4533,13 @@ details.svc-history-entry[open] > summary::before {
 
   .log-panel.collapsed ~ .log-panel-collapse-btn {
     right: -0.5rem;
+  }
+
+  /* The narrower sidebar takes a smaller Cyphal logo, beside Cordicor's. */
+  .cyphal-logo {
+    width: 7rem;
+    height: 2.45rem;
+    margin-bottom: -0.4375rem;
   }
 }
 
