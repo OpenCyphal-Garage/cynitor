@@ -914,6 +914,11 @@ async def register_nodes(scanner, registered_nodes_set: set[int],
 # Background tasks
 # ---------------------------------------------------------------------------
 
+# The controller's state in `ip -details link show`: "can state ERROR-ACTIVE",
+# or with the controller's modes between, as "can <FD> state ERROR-WARNING".
+_CAN_STATE = re.compile(r"\bcan\s+(?:<[^>]*>\s+)?state\s+(\S+)")
+
+
 def get_can_link_diagnostics(iface: str) -> dict:
     """Best-effort controller/bus diagnostics for a CAN interface.
 
@@ -953,7 +958,7 @@ def get_can_link_diagnostics(iface: str) -> dict:
         m = re.search(pattern, out)
         return int(m.group(group)) if m else None
 
-    m = re.search(r"can state\s+(\S+)", out)
+    m = _CAN_STATE.search(out)
     if m:
         result["state"] = m.group(1)
     result["bitrate"] = _int(r"\bbitrate\s+(\d+)")
@@ -1003,7 +1008,7 @@ def _check_can_health(iface: str) -> Optional[str]:
             check=False, capture_output=True, text=True, timeout=3,
         )
         if result.returncode == 0:
-            match = re.search(r"can state\s+(\S+)", result.stdout)
+            match = _CAN_STATE.search(result.stdout)
             if match:
                 can_state = match.group(1)
                 if can_state in ("BUS-OFF", "STOPPED", "ERROR-PASSIVE"):

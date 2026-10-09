@@ -299,6 +299,38 @@ class TestSessionHealth:
         assert await main._session_health_error(s) == said
 
 
+class TestControllerState:
+    """The controller's state as `ip` prints it."""
+
+    @pytest.fixture
+    def ip_says(self, monkeypatch, tmp_path):
+        import types
+        import main
+        (tmp_path / "can0").mkdir()
+        (tmp_path / "can0" / "operstate").write_text("up\n")
+        real_path = main.Path
+        monkeypatch.setattr(main, "Path", lambda p: tmp_path if p == "/sys/class/net" else real_path(p))
+        monkeypatch.setattr(main, "IS_LINUX", True)
+
+        def say(line):
+            out = ("141: can0: <NOARP,UP,LOWER_UP,ECHO> mtu 72 qdisc pfifo_fast state UP mode DEFAULT\n"
+                   f"    link/can  promiscuity 0 minmtu 0 maxmtu 0\n    {line}\n")
+            monkeypatch.setattr(main.subprocess, "run",
+                                lambda *args, **kwargs: types.SimpleNamespace(returncode=0, stdout=out))
+        return say
+
+    @pytest.mark.parametrize("line, state", [
+        ("can state ERROR-ACTIVE restart-ms 0", "ERROR-ACTIVE"),
+        # A CAN FD interface: its modes come between, and the state went unread.
+        ("can <FD> state ERROR-WARNING (berr-counter tx 0 rx 126) restart-ms 0", "ERROR-WARNING"),
+        ("can <LISTEN-ONLY,FD> state ERROR-PASSIVE (berr-counter tx 0 rx 135) restart-ms 0", "ERROR-PASSIVE"),
+    ])
+    def test_state_is_read_with_the_controllers_modes_between(self, ip_says, line, state):
+        import main
+        ip_says(line)
+        assert main.get_can_link_diagnostics("can0")["state"] == state
+
+
 class TestQuietCompletionOfCancelledFutures:
     """pycyphal completing a send whose task was cancelled is not an error worth a traceback."""
 
