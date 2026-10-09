@@ -50,7 +50,7 @@ const DebugView = (() => {
             <button id="fmClear" class="fm-btn" type="button">Clear</button>
             <input id="fmFilter" class="fm-filter" type="text" placeholder="Filter: node:42 port:7509 -dir:tx, or any text"
                    aria-label="Filter captured frames"
-                   title="Every word must match. node: src: dst: port: kind: prio: dir: tid: len: id: match that field (id: by its first digits); a leading - leaves out what the rest matches; any other word matches the row's text." />
+                   title="node: src: dst: port: kind: prio: dir: tid: len: id: match that field (id: by its first digits); a leading - leaves out what a term matches; other words match the row's text as typed. All must match." />
             <span id="fmCounters" class="fm-counters"></span>
             <span id="fmStatus" class="fm-status" role="status" aria-live="polite"></span>
             <span class="fm-note">Capture forces loopback + accept-all filtering and stays on until CAN disconnect.</span>
