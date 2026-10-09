@@ -1019,11 +1019,17 @@ async def _session_health_error(session: 'CANSession') -> Optional[str]:
 
     An adapter behind the hub reports through the hub, which also notices a
     CANable being unplugged; SocketCAN is checked through the kernel, by
-    device name rather than spec.
+    device name rather than spec. The session's CAN FD or Classic MTU is
+    fixed when it connects, so an interface switched under it has to be
+    connected again.
     """
     if session.hub is not None:
         return await asyncio.to_thread(session.hub.health)
-    error = await asyncio.to_thread(_check_can_health, socketcan_device(session.can_interface))
+    device = socketcan_device(session.can_interface)
+    error = await asyncio.to_thread(_check_can_health, device)
+    if not error and socketcan_supports_fd(device) != session.can_fd:
+        mode = "Classic CAN" if session.can_fd else "CAN FD"
+        error = f"Interface {device} was switched to {mode}; connect again to use it"
     if not error and session.bus_load and not session.bus_load.is_alive:
         error = "CAN bus monitor process exited unexpectedly"
     return error

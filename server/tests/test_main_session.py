@@ -272,10 +272,31 @@ class TestSessionHealth:
         import main
         checked = []
         monkeypatch.setattr(main, "_check_can_health", lambda iface: checked.append(iface))
+        monkeypatch.setattr(main, "socketcan_supports_fd", lambda device: False)
         s = main.CANSession()
         s.can_interface = "socketcan:vcan0"
         assert await main._session_health_error(s) is None
         assert checked == ["vcan0"]
+
+    @pytest.mark.parametrize("connected_fd, now_fd, said", [
+        (True, False, "Interface vcan0 was switched to Classic CAN; connect again to use it"),
+        (False, True, "Interface vcan0 was switched to CAN FD; connect again to use it"),
+        (True, True, None),
+        (False, False, None),
+    ])
+    async def test_socketcan_switched_between_fd_and_classic_ends_the_session(
+            self, monkeypatch, connected_fd, now_fd, said):
+        # The session's MTU is fixed when it connects. An interface switched
+        # under it (`ip link set can0 down; ... fd off; ... up`, quicker than
+        # the watchdog's look at it being down) went unnoticed: the session
+        # kept the other MTU and the dashboard said CAN FD.
+        import main
+        monkeypatch.setattr(main, "_check_can_health", lambda iface: None)
+        monkeypatch.setattr(main, "socketcan_supports_fd", lambda device: now_fd)
+        s = main.CANSession()
+        s.can_interface = "vcan0"
+        s.can_fd = connected_fd
+        assert await main._session_health_error(s) == said
 
 
 class TestQuietCompletionOfCancelledFutures:
