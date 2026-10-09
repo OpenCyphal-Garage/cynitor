@@ -65,6 +65,8 @@ const DebugView = (() => {
                    title="node: src: dst: port: kind: prio: dir: tid: len: id: match that field (id: by its first digits); a leading - leaves out what a term matches; other words match the row's text as typed. All must match." />
             <span id="fmCounters" class="fm-counters"></span>
             <span id="fmStatus" class="fm-status" role="status" aria-live="polite"></span>
+            <button id="fmRawLog" class="fm-link" type="button"
+                    title="The table keeps the last ${MAX_KEPT.toLocaleString()} frames. A raw log saves every frame to a candump .log file; the Record tab starts one.">Save to a raw log ›</button>
           </div>
           <div id="fmWrap" class="fm-table-wrap">
             <table id="fmTable" class="fm-table" aria-rowcount="1">
@@ -736,6 +738,10 @@ const DebugView = (() => {
     el('fmFilter').addEventListener('input', (e) => {
       filterTests = parseFilter(e.target.value);
       showRows();
+    });
+    el('fmRawLog').addEventListener('click', () => {
+      switchView('record');
+      el('rawLogPanel')?.scrollIntoView({ block: 'nearest' });
     });
     // The rows in view change as the table scrolls and as its room changes.
     el('fmWrap').addEventListener('scroll', queueDraw, { passive: true });

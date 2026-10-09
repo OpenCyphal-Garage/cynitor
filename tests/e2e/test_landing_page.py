@@ -5266,6 +5266,23 @@ async def _(page):
         await debug_close(page, server)
 
 
+@test("Debug: Save to a raw log opens the Record tab at its raw log, which keeps every frame")
+async def _(page):
+    server = _DebugServer()
+    await debug_open(page, server)
+    try:
+        link = page.locator("#fmRawLog")
+        if not await link.count():
+            raise AssertionError("The frame monitor has no way to a raw log")
+        await link.click()
+        await page.wait_for_timeout(300)
+        seen = await page.evaluate("""() => { const box = el('rawLogPanel')?.getBoundingClientRect();
+            return {view: state.activeView, inView: !!box && box.top >= 0 && box.top < innerHeight}; }""")
+        assert seen == {"view": "record", "inView": True}, f"After the link: {seen}"
+    finally:
+        await debug_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
