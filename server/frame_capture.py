@@ -30,8 +30,9 @@ def serialize_capture(cap) -> dict:
 
     Always returns the raw frame fields. When the frame parses as a valid Cyphal
     frame, transport-layer detail (source/dest node, port, priority, transfer-ID,
-    start/end flags) is added; otherwise ``cyphal`` stays False — those are the
-    foreign frames worth flagging during below-DSDL debugging.
+    and the tail byte's start/end/toggle bits) is added; otherwise ``cyphal``
+    stays False — those are the foreign frames worth flagging during below-DSDL
+    debugging.
     """
     frame = cap.frame
     data = bytes(frame.data)
@@ -62,6 +63,7 @@ def serialize_capture(cap) -> dict:
             "transfer_id": uf.transfer_id,
             "start": uf.start_of_transfer,
             "end": uf.end_of_transfer,
+            "toggle": uf.toggle_bit,
         })
         if isinstance(ds, MessageDataSpecifier):
             row["kind"] = "msg"

@@ -4804,7 +4804,8 @@ def _can_frame(n, src=42):
     """Captured frame n, as serialize_capture makes it: a message from node src, n ms into the capture."""
     return {"t": 1000 + n / 1000, "ts": 1.76e9 + n / 1000, "dir": "rx", "id": f"0x{0x107D5500 + n % 256:08X}",
             "ext": True, "dlc": 8, "data": "01 02 03 04 05 06 07 E5", "cyphal": True, "priority": "NOMINAL",
-            "src": src, "dst": None, "transfer_id": n % 32, "start": True, "end": True, "kind": "msg", "port": 7509}
+            "src": src, "dst": None, "transfer_id": n % 32, "start": True, "end": True, "toggle": True, "kind": "msg",
+            "port": 7509}
 
 
 # The frames the table shows, newest first, known by their time (each is a different millisecond).
@@ -5070,6 +5071,36 @@ async def _(page):
             and health.get("Bus-off") == ["1", "error"] and (health.get("Bus errors") or ["", ""])[1] == "warn" \
             and re.fullmatch(r"(9\d|10\d|110)/s", frames_in) and folded is True and table_at < 0.4, \
             f"The strip shows {health}; the details folded: {folded}; the frame table starts {table_at:.0%} down the window"
+    finally:
+        await debug_close(page, server)
+
+
+# Each row of the frame table, newest first, as {column heading: cell text}.
+DEBUG_CELLS = """(() => { const heads = [...document.querySelectorAll('.fm-table thead th')].map(th => th.textContent);
+    return [...document.querySelectorAll('#fmRows tr')].map(row =>
+        Object.fromEntries([...row.cells].map((cell, i) => [heads[i], cell.textContent.trim()]))); })()"""
+
+
+@test("Debug: the frame table writes a standard ID in three digits, and gives a Cyphal frame's priority, transfer-ID and tail bits")
+async def _(page):
+    server = _DebugServer()
+    await debug_open(page, server)
+    try:
+        await debug_start_capture(page)
+        first = dict(_can_frame(1), priority="FAST", transfer_id=5, end=False)                # a transfer's first frame
+        last = dict(_can_frame(2), priority="FAST", transfer_id=5, start=False, toggle=False)  # and its last
+        standard = {"t": 1000.003, "ts": 1.76e9 + 0.003, "dir": "rx", "id": "0x00000123", "ext": False, "dlc": 2,
+                    "data": "AA BB", "cyphal": False}
+        server.capture([first, last, standard])
+        server.flush()
+        await page.wait_for_timeout(300)
+        shown = [(row.get("CAN ID"), row.get("Prio"), row.get("TID"), row.get("Flags"))
+                 for row in await page.evaluate(DEBUG_CELLS)]
+        await page.locator("#fmFilter").fill("0x123")
+        found = [row.get("CAN ID") for row in await page.evaluate(DEBUG_CELLS)]
+        assert shown == [("0x123", "", "", ""), ("0x107D5502", "fast", "5", "-E-"), ("0x107D5501", "fast", "5", "S-T")] \
+            and found == ["0x123"], \
+            f"(CAN ID, Prio, TID, Flags) of each row, newest first: {shown}; filtered on 0x123: {found}"
     finally:
         await debug_close(page, server)
 

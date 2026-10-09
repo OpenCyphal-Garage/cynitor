@@ -298,7 +298,7 @@ to 2000):
             "t": 12345.678, "ts": 1741949445.123, "dir": "rx",
             "id": "0x107D552A", "ext": true, "dlc": 8, "data": "01 02 03 04 05 06 07 E5",
             "cyphal": true, "priority": "NOMINAL", "src": 42, "dst": null,
-            "kind": "msg", "port": 7509, "transfer_id": 5, "start": true, "end": true
+            "kind": "msg", "port": 7509, "transfer_id": 5, "start": true, "end": true, "toggle": true
         },
         { "t": 12345.679, "ts": 1741949445.124, "dir": "rx", "id": "0x00000123", "ext": false, "dlc": 2, "data": "AA BB", "cyphal": false }
     ]
@@ -306,8 +306,10 @@ to 2000):
 ```
 `dir` is `tx`/`rx` (TX = forced-loopback of our own frames). `dlc` is the data
 length in bytes (0–64), not the DLC code. For Cyphal frames,
-`kind` is `msg`/`req`/`resp` and `port` is the subject- or service-ID; non-Cyphal
-("foreign") frames carry only the raw fields with `cyphal: false`.
+`kind` is `msg`/`req`/`resp` and `port` is the subject- or service-ID, and
+`start`, `end` and `toggle` are the tail byte's start-of-transfer,
+end-of-transfer and toggle bits; non-Cyphal ("foreign") frames carry only the
+raw fields with `cyphal: false`.
 
 Protocol errors (sent when the client sends a frame the server cannot parse):
 ```json

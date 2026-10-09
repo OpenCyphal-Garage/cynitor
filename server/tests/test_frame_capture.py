@@ -43,12 +43,12 @@ class _Cap:
         return self._parsed
 
 
-def _msg_parsed(src=42, subject=7509, tid=5):
+def _msg_parsed(src=42, subject=7509, tid=5, start=True, end=True, toggle=True):
     ss = types.SimpleNamespace(
         source_node_id=src, destination_node_id=None,
         data_specifier=MessageDataSpecifier(subject),
     )
-    uf = types.SimpleNamespace(transfer_id=tid, start_of_transfer=True, end_of_transfer=True)
+    uf = types.SimpleNamespace(transfer_id=tid, start_of_transfer=start, end_of_transfer=end, toggle_bit=toggle)
     return (ss, Priority.NOMINAL, uf)
 
 
@@ -79,12 +79,20 @@ class TestSerializeCapture:
         assert row["transfer_id"] == 5
         assert row["priority"] == "NOMINAL"
 
+    def test_tail_byte_bits(self):
+        # The second frame of a multi-frame transfer: neither start nor end, toggle clear.
+        row = serialize_capture(_Cap(0x1, b"\x01\x05", own=False,
+                                     parsed=_msg_parsed(start=False, end=False, toggle=False)))
+        assert (row["start"], row["end"], row["toggle"]) == (False, False, False)
+        row = serialize_capture(_Cap(0x1, b"\x01\xe5", own=False, parsed=_msg_parsed()))
+        assert (row["start"], row["end"], row["toggle"]) == (True, True, True)
+
     def test_cyphal_service_request(self):
         ss = types.SimpleNamespace(
             source_node_id=10, destination_node_id=20,
             data_specifier=ServiceDataSpecifier(384, ServiceDataSpecifier.Role.REQUEST),
         )
-        uf = types.SimpleNamespace(transfer_id=1, start_of_transfer=True, end_of_transfer=True)
+        uf = types.SimpleNamespace(transfer_id=1, start_of_transfer=True, end_of_transfer=True, toggle_bit=True)
         row = serialize_capture(_Cap(0x1, b"", own=False, parsed=(ss, Priority.HIGH, uf)))
         assert row["kind"] == "req"
         assert row["port"] == 384

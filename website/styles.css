@@ -8288,6 +8288,8 @@ body.dsdl-resizing-row {
 
 .fm-time { color: var(--muted); }
 .fm-id { color: var(--text-bright); }
+.fm-prio { color: var(--muted); }
+.fm-tid,
 .fm-len { text-align: right; }
 
 .fm-data {

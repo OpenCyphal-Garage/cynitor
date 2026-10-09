@@ -56,7 +56,10 @@ const DebugView = (() => {
           <div class="fm-table-wrap">
             <table class="fm-table">
               <thead><tr>
-                <th>Time</th><th>Dir</th><th>CAN ID</th><th>Len</th><th>Transfer</th><th>Data</th>
+                <th>Time</th><th>Dir</th><th>CAN ID</th><th>Prio</th><th>Transfer</th>
+                <th title="Transfer-ID">TID</th>
+                <th title="Start of transfer, end of transfer, toggle bit; - where clear">Flags</th>
+                <th>Len</th><th>Data</th>
               </tr></thead>
               <tbody id="fmRows"></tbody>
             </table>
@@ -304,32 +307,39 @@ const DebugView = (() => {
     return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
   };
 
-  const matchesFilter = (f) => {
-    if (!filterText) return true;
+  // A standard (11-bit) ID in three hex digits, as candump writes it; an extended one in eight.
+  const fmtId = (f) => (f.ext === false ? `0x${parseInt(f.id, 16).toString(16).toUpperCase().padStart(3, '0')}` : f.id);
+
+  // The tail byte's start-of-transfer, end-of-transfer and toggle bits, '-' where clear.
+  const fmtFlags = (f) => `${f.start ? 'S' : '-'}${f.end ? 'E' : '-'}${f.toggle ? 'T' : '-'}`;
+
+  // What the free-text filter looks through: the row as shown.
+  const frameText = (f) => {
     const decoded = f.cyphal
-      ? `${f.kind} ${f.port} n${f.src} n${f.dst} tid${f.transfer_id}`
+      ? `${f.kind} ${f.port} n${f.src} n${f.dst} tid${f.transfer_id} ${f.priority}`
       : 'foreign';
-    return `${f.id} ${f.dir} ${f.dlc} ${decoded} ${f.data}`.toLowerCase().includes(filterText);
+    return `${fmtId(f)} ${f.dir} ${f.dlc} ${decoded} ${f.data}`.toLowerCase();
   };
+
+  const matchesFilter = (f) => !filterText || frameText(f).includes(filterText);
 
   const rowHtml = (f) => {
     const dirCls = f.dir === 'tx' ? 'fm-tx' : 'fm-rx';
-    let transfer;
-    if (f.cyphal) {
-      const route = `n${f.src ?? '?'}` + (f.dst != null ? `→n${f.dst}` : '');
-      const flags = `${f.start ? 'S' : ''}${f.end ? 'E' : ''}`;
-      transfer = `<span class="fm-kind fm-kind-${escapeHtml(f.kind || 'x')}">${escapeHtml(f.kind || '?')}</span> `
-        + `${escapeHtml(String(f.port ?? ''))} · ${escapeHtml(route)} · TID${escapeHtml(String(f.transfer_id))}`
-        + (flags ? ` · ${escapeHtml(flags)}` : '');
-    } else {
-      transfer = '<span class="fm-foreign-tag">foreign</span>';
-    }
+    const transfer = f.cyphal
+      ? `<span class="fm-kind fm-kind-${escapeHtml(f.kind || 'x')}">${escapeHtml(f.kind || '?')}</span> `
+        + `${escapeHtml(String(f.port ?? ''))} · ${escapeHtml(`n${f.src ?? '?'}${f.dst != null ? `→n${f.dst}` : ''}`)}`
+      : '<span class="fm-foreign-tag">foreign</span>';
+    // Transport fields only a Cyphal frame has.
+    const cyphal = (value) => (f.cyphal ? escapeHtml(String(value ?? '')) : '');
     return `<tr class="fm-row${f.cyphal ? '' : ' fm-foreign'}" data-seq="${f.seq}">
       <td class="fm-time">${escapeHtml(fmtTime(f.ts))}</td>
       <td><span class="fm-dir ${dirCls}">${f.dir === 'tx' ? 'TX' : 'RX'}</span></td>
-      <td class="fm-id">${escapeHtml(f.id)}</td>
-      <td class="fm-len">${escapeHtml(String(f.dlc))}</td>
+      <td class="fm-id">${escapeHtml(fmtId(f))}</td>
+      <td class="fm-prio">${cyphal(f.priority?.toLowerCase())}</td>
       <td class="fm-transfer">${transfer}</td>
+      <td class="fm-tid">${cyphal(f.transfer_id)}</td>
+      <td class="fm-flags">${cyphal(fmtFlags(f))}</td>
+      <td class="fm-len">${escapeHtml(String(f.dlc))}</td>
       <td class="fm-data">${escapeHtml(f.data)}</td>
     </tr>`;
   };
