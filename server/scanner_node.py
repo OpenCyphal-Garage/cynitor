@@ -1125,6 +1125,13 @@ class ScannerNode:
         # DSDL strings arrive as uint8 arrays; any other array is numbers.
         elif isinstance(val, np.ndarray) and val.dtype == np.uint8:
             results.append({"attribute": name, "value": bytes(val).decode("utf-8", errors="ignore")})
+        # An array of composites (port.List's SubjectID[]) holds DSDL objects:
+        # each as builtins, a one-field type (an ID) as its value alone.
+        elif isinstance(val, np.ndarray) and val.dtype == object:
+            items = [to_builtin(item) for item in val]
+            results.append({"attribute": name, "value": [
+                next(iter(item.values())) if isinstance(item, dict) and len(item) == 1 else item for item in items
+            ]})
         elif isinstance(val, np.ndarray):
             results.append({"attribute": name, "value": val.tolist()})
         # Primitives

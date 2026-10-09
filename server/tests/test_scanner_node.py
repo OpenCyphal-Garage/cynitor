@@ -537,3 +537,17 @@ class TestArrayAttributes:
         assert results == [{"attribute": "meter_per_second", "value": [1.0, 2.0, 3.5]},
                            {"attribute": "counts", "value": [1, 300]},
                            {"attribute": "text", "value": "hello"}]
+
+    def test_array_of_composites_is_json_an_id_as_its_value(self):
+        """port.List's SubjectID[] holds DSDL objects, which broke the event log and the dashboard's socket."""
+        import numpy as np
+        node = ScannerNode.__new__(ScannerNode)
+        ids = np.array([types.SimpleNamespace(value=7509), types.SimpleNamespace(value=7510)], dtype=object)
+        pairs = np.array([types.SimpleNamespace(a=1, b=2)], dtype=object)
+        results = []
+        with patch.object(scanner_node, "to_builtin", side_effect=vars):  # a DSDL object's fields, as a dict
+            node._extract_value("publishers.sparse_list", ids, results)
+            node._extract_value("pairs", pairs, results)
+        assert results == [{"attribute": "publishers.sparse_list", "value": [7509, 7510]},
+                           {"attribute": "pairs", "value": [{"a": 1, "b": 2}]}]
+        json.dumps(results)
