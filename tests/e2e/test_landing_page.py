@@ -4612,7 +4612,7 @@ class _DebugServer:
         self.right_after = []       # frames the bus carries the moment the dashboard subscribes
         self.can = True             # a CAN session is up
         self.capturing = False      # its transport capture is on (it stays on until CAN disconnects)
-        self.link = VCAN_LINK       # what the transport diagnostics say of the controller
+        self.link = VCAN_LINK       # what the transport diagnostics say of the controller (or a function giving it)
         self.dropped = 0            # frames the stream lost to a full queue
 
     def _transport(self):
@@ -4622,7 +4622,7 @@ class _DebugServer:
                  "out_frames_loopback": 0, "media_acceptance_filtering_efficiency": 1.0, "lost_loopback_frames": 0}
         return {"connected": True, "interface": "vcan0", "statistics": stats, "capture_active": self.capturing,
                 "protocol": {"mtu": 7, "transfer_id_modulo": 32, "max_nodes": 128, "is_fd": False},
-                "link": self.link, "bus_utilization": 12.0}
+                "link": self.link() if callable(self.link) else self.link, "bus_utilization": 12.0}
 
     def _answer(self, path):
         if path in self.answers:
@@ -4742,7 +4742,7 @@ async def _(page):
     server = _DebugServer()
     await debug_open(page, server, restore=True)
     try:
-        await page.wait_for_selector("#debugBody .debug-card", timeout=WAIT_MS)
+        await page.wait_for_selector("#debugBody .debug-card", state="attached", timeout=WAIT_MS)
         await page.wait_for_timeout(500)  # the connect that follows the reload has run
         since, read = time.monotonic(), []
         for _ in range(10):
@@ -4783,7 +4783,8 @@ async def _(page):
     await page.set_viewport_size({"width": 1024, "height": 800})
     await debug_open(page, server)
     try:
-        await page.wait_for_selector("#debugBody .debug-card", timeout=WAIT_MS)
+        await page.wait_for_selector("#debugBody .debug-card", state="attached", timeout=WAIT_MS)
+        await page.locator("#debugDetails summary").click()  # folded beneath the health strip
         cut = await page.evaluate("""[...document.querySelectorAll('#debugBody .debug-card')]
             .map(card => card.scrollHeight - card.clientHeight)""")
         panel = await page.evaluate("[el('debugBody').scrollHeight, el('debugBody').clientHeight]")
@@ -4981,7 +4982,7 @@ async def _(page):
                    "adapter_send_failures": 0, "adapter_error_frames": 17}  # what the hub knows of an adapter
     await debug_open(page, server)
     try:
-        await page.wait_for_selector("#debugBody .debug-card", timeout=WAIT_MS)
+        await page.wait_for_selector("#debugBody .debug-card", state="attached", timeout=WAIT_MS)
         shown = await page.evaluate(DEBUG_STATS)
         blank = [label for label, value in shown.items() if value == "—"]
         assert not blank and shown.get("Arbitration bitrate") == "500 kbit/s" \
@@ -4997,7 +4998,8 @@ async def _(page):
     server = _DebugServer()
     await debug_open(page, server)
     try:
-        await page.wait_for_selector("#debugBody .debug-card", timeout=WAIT_MS)
+        await page.wait_for_selector("#debugBody .debug-card", state="attached", timeout=WAIT_MS)
+        await page.locator("#debugDetails summary").click()  # folded beneath the health strip
         await page.evaluate("""() => { const value = [...document.querySelectorAll('#debugBody .debug-stat')]
             .find(row => row.textContent.includes('Interface')).querySelector('.debug-stat-val');
             const range = document.createRange(); range.selectNodeContents(value);
@@ -5041,6 +5043,33 @@ async def _(page):
                 'dropped: warning': !!dropped && getComputedStyle(dropped).color === token('--warn'),
             }; }""")
         assert all(seen.values()), f"Each colour as it should be: {seen}"
+    finally:
+        await debug_close(page, server)
+
+
+# Each figure of the health strip, label: [value, colour].
+DEBUG_HEALTH = """Object.fromEntries([...document.querySelectorAll('#debugHealth .debug-tile')].map(tile => [
+    tile.querySelector('.debug-tile-label').textContent, [tile.querySelector('.debug-tile-val').textContent,
+    tile.classList.contains('debug-tile-error') ? 'error' : tile.classList.contains('debug-tile-warn') ? 'warn' : '']]))"""
+
+
+@test("Debug: the bus's health comes first, in one strip, with the details folded beneath it")
+async def _(page):
+    server = _DebugServer()
+    since = time.monotonic()
+    server.link = lambda: dict(VCAN_LINK, operstate="up", state="ERROR-PASSIVE", bitrate=1000000, berr_tx=136,
+                               berr_rx=5, bus_off=1, bus_errors=1200 + int(30 * (time.monotonic() - since)))
+    await debug_open(page, server)
+    try:
+        await page.wait_for_timeout(2300)  # two answers: the rates are known
+        health = await page.evaluate(DEBUG_HEALTH)
+        folded = await page.evaluate("el('debugDetails') ? !el('debugDetails').open : 'no fold'")
+        table_at = await page.evaluate("el('fmRows').closest('.frame-monitor').getBoundingClientRect().top / innerHeight")
+        frames_in = (health.get("Frames in") or [""])[0]
+        assert health.get("Controller") == ["ERROR-PASSIVE", "warn"] and health.get("Error counters") == ["136 / 5", "error"] \
+            and health.get("Bus-off") == ["1", "error"] and (health.get("Bus errors") or ["", ""])[1] == "warn" \
+            and re.fullmatch(r"(9\d|10\d|110)/s", frames_in) and folded is True and table_at < 0.4, \
+            f"The strip shows {health}; the details folded: {folded}; the frame table starts {table_at:.0%} down the window"
     finally:
         await debug_close(page, server)
 

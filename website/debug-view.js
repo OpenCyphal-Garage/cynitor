@@ -1,9 +1,11 @@
 // Debug view — transport-layer ("below the DSDL") diagnostics.
 //
 // Two sections:
-//   1. Transport Diagnostics (Phase 1) — read-only snapshot of protocol params
-//      (MTU / CAN-FD), pycyphal frame statistics, and controller/bus error
-//      state. Polls GET /api/can/transport at 1 Hz while active.
+//   1. Transport Diagnostics (Phase 1) — the bus's health in one strip
+//      (controller state, error counters, load, frame rates), with protocol
+//      params (MTU / CAN-FD), pycyphal frame statistics and the controller's
+//      counters folded away beneath it. Polls GET /api/can/transport at 1 Hz
+//      while active.
 //   2. Frame Monitor (Phase 2) — raw frame/transfer inspection via pycyphal's
 //      capture API. OPT-IN and sticky: starting it reconfigures the bus
 //      (accept-all filter + forced loopback) and cannot be stopped without a
@@ -17,6 +19,7 @@ const DebugView = (() => {
 
   let pollTimer = null;
   let prev = null;        // the previous sample, for rates: {stats, link, at: performance.now()}
+  let detailsOpen = false; // the folded diagnostics cards, opened by the user
 
   // Frame-monitor state
   let captureOn = false;  // are we currently forwarding frames to this client?
@@ -91,11 +94,79 @@ const DebugView = (() => {
     </section>`;
 
   // The counter's growth per second since the previous sample, which a
-  // late poll may have taken more than a second ago.
-  const rateSuffix = (cur, before, seconds) => {
-    if (before == null || cur == null || !(seconds > 0)) return '';
-    const d = cur - before;
-    return d < 0 ? '' : `  (+${Math.round(d / seconds)}/s)`;
+  // late poll may have taken more than a second ago; null while unknown.
+  const perSecond = (cur, before, seconds) => {
+    if (before == null || cur == null || !(seconds > 0) || cur < before) return null;
+    return Math.round((cur - before) / seconds);
+  };
+
+  // A health figure in the strip; none for what the interface does not report.
+  const tile = (label, value, { note = '', status = null } = {}) => {
+    if (value === null || value === undefined) return '';
+    const cls = status ? ` debug-tile-${status}` : '';
+    return `<div class="debug-tile${cls}">
+      <span class="debug-tile-label">${escapeHtml(label)}</span>
+      <span class="debug-tile-val">${escapeHtml(String(value))}</span>
+      ${note ? `<span class="debug-tile-note">${escapeHtml(note)}</span>` : ''}
+    </div>`;
+  };
+
+  // What to look at first when the bus misbehaves: the controller's state
+  // and error counters, errors as they happen, then how busy the bus is.
+  const healthTiles = (data, rate) => {
+    const proto = data.protocol || {};
+    const stats = data.statistics || {};
+    const link = data.link || {};
+    const worst = Math.max(link.berr_tx ?? 0, link.berr_rx ?? 0);
+    // An error count, coloured while it grows.
+    const errors = (label, value, before) => {
+      const growth = rate(value, before);
+      return tile(label, value?.toLocaleString(), {
+        note: growth != null ? `+${growth.toLocaleString()}/s` : '', status: growth > 0 ? 'warn' : null,
+      });
+    };
+    // A frame rate, with the total since the interface came up.
+    const frames = (label, value, before) => {
+      if (value == null) return '';
+      const perS = rate(value, before);
+      return tile(label, perS != null ? `${perS.toLocaleString()}/s` : '…', { note: `${value.toLocaleString()} total` });
+    };
+    return [
+      tile('Interface', data.interface, {
+        note: formatCanRates(link.bitrate, link.dbitrate, proto.is_fd) || (proto.is_fd === false ? 'Classic CAN' : ''),
+      }),
+      tile('Controller', link.state, { status: stateStatus(link.state) }),
+      tile('Error counters', link.berr_tx != null || link.berr_rx != null
+        ? `${link.berr_tx ?? '?'} / ${link.berr_rx ?? '?'}` : null,
+      { note: 'TX / RX', status: worst >= 128 ? 'error' : (worst > 0 ? 'warn' : null) }),
+      tile('Bus-off', link.bus_off, { status: link.bus_off > 0 ? 'error' : null }),
+      errors('Bus errors', link.bus_errors, prev?.link.bus_errors),
+      errors('Error frames', link.adapter_error_frames, prev?.link.adapter_error_frames),
+      errors('Send failures', link.adapter_send_failures, prev?.link.adapter_send_failures),
+      tile('Bus load', data.bus_utilization != null ? `${data.bus_utilization}%` : null),
+      frames('Frames in', stats.in_frames, prev?.stats.in_frames),
+      frames('Frames out', stats.out_frames, prev?.stats.out_frames),
+    ].join('');
+  };
+
+  // The strip, and the cards folded beneath it: drawn once, then patched,
+  // so the fold stays as the user left it.
+  const renderFrame = (target) => {
+    target.innerHTML = `
+      <div id="debugHealth" class="debug-health"></div>
+      <details id="debugDetails" class="debug-details"${detailsOpen ? ' open' : ''}>
+        <summary class="debug-details-summary">Details
+          <span class="debug-details-hint">MTU, frame statistics, controller and adapter counters</span></summary>
+        <div id="debugCards" class="debug-cards"></div>
+      </details>`;
+    el('debugDetails').addEventListener('toggle', (e) => { detailsOpen = e.target.open; });
+  };
+
+  // In place, so a value being selected or read out is not redrawn under it.
+  const patchHtml = (target, html) => {
+    const fresh = document.createElement('div');
+    fresh.innerHTML = html;
+    patchChildren(target, fresh);
   };
 
   const renderDiagnostics = (data) => {
@@ -113,8 +184,12 @@ const DebugView = (() => {
     const link = data.link || {};
     const now = performance.now();
     const seconds = prev ? (now - prev.at) / 1000 : 0;
+    const rate = (value, before) => perSecond(value, before, seconds);
     // A count, with its growth per second since the previous sample.
-    const counted = (value, before) => (value != null ? `${value}${rateSuffix(value, before, seconds)}` : null);
+    const counted = (value, before) => {
+      const growth = rate(value, before);
+      return growth != null ? `${value}  (+${growth}/s)` : value;
+    };
 
     const protoCard = card('Transport / MTU', [
       statRow('Interface', data.interface),
@@ -162,11 +237,11 @@ const DebugView = (() => {
       statRow('Adapter error frames', link.adapter_error_frames, link.adapter_error_frames > 0 ? 'warn' : null),
     ]);
 
-    // In place, so a value being selected or read out is not redrawn under it.
-    const fresh = document.createElement('div');
-    fresh.innerHTML = protoCard + statsCard + busCard;
+    if (!el('debugHealth')) renderFrame(target);
+    target.querySelector('.debug-stale-note')?.remove();
     target.classList.remove('debug-stale');
-    patchChildren(target, fresh);
+    patchHtml(el('debugHealth'), healthTiles(data, rate));
+    patchHtml(el('debugCards'), protoCard + statsCard + busCard);
     prev = { stats, link, at: now };
   };
 
@@ -175,7 +250,7 @@ const DebugView = (() => {
   const renderDiagError = (message) => {
     const target = body();
     if (!target) return;
-    if (!target.querySelector('.debug-card')) {
+    if (!el('debugHealth')) {
       target.innerHTML = `<div class="debug-error">${escapeHtml(message || 'Failed to load transport diagnostics')}</div>`;
       return;
     }
