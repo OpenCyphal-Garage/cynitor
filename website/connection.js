@@ -115,11 +115,9 @@ const updateSemaphores = () => {
   const canInfo = el('canUtilization');
 
   if (serverDot) {
-    if (state.dashboardConnected) {
-      serverDot.className = 'semaphore ok';
-    } else {
-      serverDot.className = 'semaphore';
-    }
+    // Pulsing while the backend is being reached, a lost one tried again too.
+    serverDot.className = state.dashboardConnected ? 'semaphore ok'
+      : state.dashboardConnecting || state.dashboardRetry ? 'semaphore connecting' : 'semaphore';
   }
 
   if (canDot) {
@@ -135,7 +133,7 @@ const updateSemaphores = () => {
   }
 
   // Lock fields when connected
-  el('apiBase').disabled = state.dashboardConnected;
+  el('apiBase').disabled = state.dashboardConnected || Boolean(state.dashboardRetry);
   el('interfacesSelect').disabled = state.canConnected || state.canConnecting;
   el('canSpecInput').disabled = state.canConnecting;
   el('canBitrateSelect').disabled = state.canConnecting;
@@ -149,6 +147,9 @@ const updateSemaphores = () => {
       serverInfo.classList.remove('hidden');
     } else if (state.dashboardConnected) {
       serverInfo.textContent = '0 B/s';
+      serverInfo.classList.remove('hidden');
+    } else if (state.dashboardRetry) {
+      serverInfo.textContent = 'reconnecting…';
       serverInfo.classList.remove('hidden');
     } else {
       serverInfo.classList.add('hidden');
@@ -193,7 +194,8 @@ const updateDashboardConnectButton = () => {
   if (state.dashboardConnecting) {
     button.textContent = 'Connecting…';
   } else {
-    button.textContent = state.dashboardConnected ? 'Disconnect' : 'Connect';
+    // A session waiting to reconnect is still on: Disconnect ends it.
+    button.textContent = state.dashboardConnected || state.dashboardRetry ? 'Disconnect' : 'Connect';
   }
   button.disabled = state.canConnecting || state.canDisconnecting || state.dashboardConnecting;
   updateSemaphores();
@@ -260,6 +262,10 @@ const stopThroughputTimer = () => {
   _updateStaleBanner();
 };
 
+// How long to wait after `attempts` failed tries to reconnect: 2 s, 4 s, 8 s,
+// 16 s, then every 30 s. The socket and the backend itself are tried so.
+const retryDelayMs = (attempts) => Math.min(30, 2 ** Math.min(attempts, 5)) * 1000;
+
 // ── WebSocket ──
 
 const scheduleReconnect = () => {
@@ -271,8 +277,7 @@ const scheduleReconnect = () => {
   }
 
   state.wsReconnectAttempts += 1;
-  const delaySeconds = Math.min(30, 2 ** Math.min(state.wsReconnectAttempts, 5));
-  state.wsReconnectTimer = window.setTimeout(() => connectWs(), delaySeconds * 1000);
+  state.wsReconnectTimer = window.setTimeout(() => connectWs(), retryDelayMs(state.wsReconnectAttempts));
 };
 
 const connectWs = () => {
@@ -613,6 +618,7 @@ const clearCanSession = () => {
 };
 
 const disconnectAll = ({ persist = true } = {}) => {
+  stopRetryingDashboard();
   state.dashboardConnected = false;
   state.canConnected = false;
   state.latestBySubject.clear();
@@ -654,9 +660,12 @@ const pollStatus = async () => {
   let data;
   try {
     data = await requestJson('/api/status');
-  } catch {
+  } catch (error) {
     if (state.dashboardConnected) {
-      disconnectAll();
+      // Still saved as connected, and tried again until it answers; a token
+      // it asks for is the prompt's to give.
+      disconnectAll({ persist: false });
+      if (error.status !== 401) retryDashboard();
     }
     return;
   }
@@ -772,13 +781,36 @@ const schedulePostCanStartup = (delayMs = 10000) => {
   }, delayMs);
 };
 
+// A backend that stops answering mid-session, or does not answer a page that
+// opens with a session saved, is tried again, less and less often, until it
+// answers or the user disconnects. The session stays saved meanwhile.
+const retryDashboard = () => {
+  const retry = state.dashboardRetry || { timer: null, attempts: 0 };
+  clearTimeout(retry.timer);
+  retry.attempts += 1;
+  retry.timer = setTimeout(openDashboard, retryDelayMs(retry.attempts));
+  state.dashboardRetry = retry;
+  updateDashboardConnectButton();
+  renderNodesTable();
+  renderSelectedNodeContent();
+};
+
+const stopRetryingDashboard = () => {
+  clearTimeout(state.dashboardRetry?.timer);
+  state.dashboardRetry = null;
+};
+
+// The Server button: connects, or ends the session, one waiting to reconnect too.
 const connectDashboard = async () => {
   if (state.canConnecting || state.canDisconnecting) return;
-  if (state.dashboardConnected) {
+  if (state.dashboardConnected || state.dashboardRetry) {
     disconnectAll();
     return;
   }
+  await openDashboard();
+};
 
+const openDashboard = async () => {
   state.dashboardConnecting = true;
   updateDashboardConnectButton();
   renderNodesTable();
@@ -789,6 +821,11 @@ const connectDashboard = async () => {
     statusData = await requestJson('/api/status');
   } catch (error) {
     state.dashboardConnecting = false;
+    if ((state.dashboardRetry || state.pendingReconnect) && error.status !== 401) {
+      retryDashboard();
+      return;
+    }
+    stopRetryingDashboard();
     updateDashboardConnectButton();
     renderNodesTable();
     renderSelectedNodeContent();
@@ -796,6 +833,7 @@ const connectDashboard = async () => {
     return;
   }
 
+  stopRetryingDashboard();
   state.dashboardConnecting = false;
   state.dashboardConnected = true;
   updateDashboardConnectButton();
@@ -891,6 +929,6 @@ const connectCan = async () => {
   schedulePostCanStartup(5000);
 
   if (!state.dashboardConnected) {
-    await connectDashboard();
+    await openDashboard();
   }
 };

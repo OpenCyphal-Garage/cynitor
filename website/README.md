@@ -103,13 +103,14 @@ Open in browser:
 - Server down overlay:
   - Detects when the frontend web server (port 5500) becomes unreachable
   - Shows full-screen overlay with reconnection status and startup instructions
-  - Automatically recovers when the server comes back online
+  - Automatically recovers when the server comes back online, reconnecting a session the page had
 
 ## What the Website Supports
 
 - CAN lifecycle via REST:
   - `GET /api/status` (connection state, available interfaces, bus utilization)
   - `POST /api/can/connect` / `POST /api/can/disconnect`
+  - A backend that stops answering mid-session, or is not answering when a page with a saved session opens, is tried again after 2 s, 4 s, 8 s, 16 s, then every 30 s, until it answers; meanwhile the Server dot pulses, the sidebar says `reconnecting…`, the session stays saved, and Disconnect stops trying
 - Live telemetry over WebSocket:
   - `ws://localhost:8080/ws`
   - Optional filters: `subject_ids`, `node_ids`, `message_types`

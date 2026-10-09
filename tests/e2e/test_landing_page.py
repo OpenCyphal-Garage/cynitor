@@ -5405,6 +5405,71 @@ async def _(page):
         await sidebar_close(page, server)
 
 
+@test("Sidebar: a backend that stops answering is reconnected once it is back, its session kept meanwhile")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        server.down = True
+        await page.evaluate("pollStatus()")  # the poll that finds it gone, without waiting the 5 s for it
+        await page.wait_for_timeout(600)
+        during = await page.evaluate("""() => ({button: el('connectDashboardBtn').textContent,
+            saved: JSON.parse(localStorage.getItem(STORAGE_KEY)).dashboardConnected})""")
+        server.down = False
+        back = await wait_until(page, "state.dashboardConnected", 6)
+        assert back and during == {"button": "Disconnect", "saved": True}, \
+            f"Back up, the dashboard reconnected within 6 s: {back}; while it was down: {during}"
+    finally:
+        await sidebar_close(page, server)
+
+
+@test("Sidebar: a page opened while the backend is down connects once it answers")
+async def _(page):
+    server = _SidebarServer()
+    server.down = True
+    await sidebar_open(page, server, saved_connected=True)
+    try:
+        await page.wait_for_timeout(800)
+        server.down = False
+        back = await wait_until(page, "state.dashboardConnected", 6)
+        toasts = await page.locator("#toastContainer .toast").all_inner_texts()
+        assert back, f"The backend answered again; 6 s later the dashboard is still not connected. Toasts: {toasts}"
+    finally:
+        await sidebar_close(page, server)
+
+
+@test("Sidebar: when the backend serving the page is gone a while, the page comes back connected after its reload")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+
+    async def page_server_down(route):  # the page's heartbeat asks its own server, with HEAD
+        if route.request.method == "HEAD":
+            await route.abort("connectionrefused")
+        else:
+            await route.fallback()
+    routed = False
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        server.down = True
+        await page.route(f"{BASE_URL}/**", page_server_down)
+        routed = True
+        shown = await wait_until(page, "!el('serverDownOverlay').classList.contains('hidden')", 26)
+        server.down = False
+        async with page.expect_event("load", timeout=8000):  # the heartbeat reloads it once its server answers
+            await page.unroute(f"{BASE_URL}/**", page_server_down)
+            routed = False
+        back = await wait_until(page, "state.dashboardConnected", 6)
+        assert shown and back, f"The outage overlay showed: {shown}; after the reload, connected again: {back}"
+    finally:
+        if routed:
+            await page.unroute(f"{BASE_URL}/**", page_server_down)
+        await sidebar_close(page, server)
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

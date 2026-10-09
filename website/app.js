@@ -275,7 +275,12 @@ updateSemaphores();
   let serverDown = false;
   let consecutiveFailures = 0;
 
-  const tearDown = () => disconnectAll({ persist: false });
+  // The page reloads once its server is back, and a session it had goes on then.
+  const tearDown = () => {
+    const wanted = state.dashboardConnected || Boolean(state.dashboardRetry);
+    disconnectAll({ persist: false });
+    if (wanted) state.pendingReconnect = true;
+  };
 
   const check = async () => {
     try {

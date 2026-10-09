@@ -19,6 +19,7 @@ const state = {
   throughputTimer: null,
   dashboardConnected: false,
   dashboardConnecting: false,
+  dashboardRetry: null,  // {timer, attempts} while a backend that stopped answering is tried again
   canState: CONN.IDLE,
   preferredCanInterface: '',
   // Adapters the backend offers (GET /api/status available_adapters).
@@ -289,6 +290,10 @@ const getHealthColor = (health) => HEALTH_CSS_COLOR[classifyHealth(health)] || '
 const connectionProblem = (context) => {
   const spinner = '<span class="svc-spinner"></span>';
   if (!state.dashboardConnected) {
+    if (state.dashboardRetry) {
+      return { icon: spinner, message: 'Reconnecting to backend…',
+        helper: 'It stopped answering; trying again until it does. Disconnect stops trying.' };
+    }
     if (state.dashboardConnecting) {
       return { icon: spinner, message: 'Connecting to backend…', helper: 'Reaching the backend server.' };
     }
@@ -739,7 +744,8 @@ const _writeSettingsNow = () => {
     canBitrates: state.canBitrates,
     canDataBitrates: state.canDataBitrates,
     customCanSpec: state.customCanSpec,
-    dashboardConnected: state.dashboardConnected,
+    // A session being restored or reconnected is still the user's: a reload meanwhile goes on with it.
+    dashboardConnected: state.dashboardConnected || Boolean(state.dashboardRetry || state.pendingReconnect),
     selectedDetailTab: state.selectedDetailTab,
     tableSort: state.tableSort,
     sidebarCollapsed: state.sidebarCollapsed,
