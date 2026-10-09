@@ -5308,6 +5308,11 @@ async def _(page):
         f"the toggle's aria-expanded collapsed/open: {collapsed}/{expanded}"
 
 
+SIDEBAR_VCAN = {"interface": "vcan0", "label": "vcan0", "needs_bitrate": False, "supports_fd": False}
+SIDEBAR_PEAK = {"interface": "pcan:PCAN_USBBUS1", "label": "PEAK PCAN-USB (PCAN_USBBUS1)",
+                "needs_bitrate": True, "supports_fd": True}
+
+
 class _SidebarServer:
     """The backend the sidebar talks to: status, CAN connect and disconnect, the nodes on the bus."""
 
@@ -5315,6 +5320,7 @@ class _SidebarServer:
         self.can = None     # the interface CAN is connected to, or None
         self.down = False   # every request refused, as by a backend that is not running
         self.ws = None      # the server end of the dashboard's socket
+        self.adapters = [SIDEBAR_VCAN, SIDEBAR_PEAK]  # what discovery lists
 
     async def handle(self, route):
         if self.down:
@@ -5325,8 +5331,7 @@ class _SidebarServer:
         if path == "/api/status":
             answer = {"status": "running" if self.can else "idle", "can_interface": self.can,
                       "can_bitrate": None, "can_data_bitrate": None, "can_fd": False,
-                      "available_interfaces": ["vcan0"], "available_adapters": [
-                          {"interface": "vcan0", "label": "vcan0", "needs_bitrate": False, "supports_fd": False}],
+                      "available_interfaces": ["vcan0"], "available_adapters": self.adapters,
                       "bus_utilization": 30.0 if self.can else None, "dropped": None, "last_error": None,
                       "cyphal_v11": None}
         elif path == "/api/can/connect":
@@ -5365,7 +5370,7 @@ async def sidebar_open(page, server, saved_connected=False):
 async def sidebar_close(page, server):
     global _debug_server
     server.down = False
-    await page.evaluate("disconnectAll()")
+    await page.evaluate("state.preferredCanInterface = ''; disconnectAll()")  # no CAN pick left for the next test
     _debug_server = None
     await page.unroute("**/api/**", server.handle)
 
@@ -5467,6 +5472,49 @@ async def _(page):
     finally:
         if routed:
             await page.unroute(f"{BASE_URL}/**", page_server_down)
+        await sidebar_close(page, server)
+
+
+@test("Sidebar: the CAN interface picked last is picked again, its bitrate too, though settings were saved before connecting")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    try:
+        # Saved from an earlier session: PEAK at 500 kbit/s.
+        await page.evaluate("""() => { clearTimeout(_saveSettingsPending); _saveSettingsPending = null;
+            const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+            saved.canInterface = 'pcan:PCAN_USBBUS1'; saved.canBitrates = {'pcan:PCAN_USBBUS1': 500000};
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(saved)); }""")
+        await page.reload(wait_until="load")
+        for _ in range(2):  # a setting changed before connecting saves them all
+            await page.locator("#themeToggle").click()
+        await page.wait_for_timeout(400)
+        await page.reload(wait_until="load")
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("el('interfacesSelect').options.length > 1", timeout=WAIT_MS)
+        picked = await page.evaluate("[el('interfacesSelect').value, el('canBitrateSelect').value]")
+        assert picked == ["pcan:PCAN_USBBUS1", "500000"], f"Connected, the CAN list and bitrate read {picked}"
+    finally:
+        await sidebar_close(page, server)
+
+
+@test("Sidebar: an adapter missing from the list for a moment is picked again once it is back")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("el('interfacesSelect').options.length > 1", timeout=WAIT_MS)
+        await page.select_option("#interfacesSelect", "pcan:PCAN_USBBUS1")
+        server.adapters = [SIDEBAR_VCAN]  # the USB adapter enumerating again
+        await page.evaluate("loadInterfaces()")  # the list's 3-second refresh
+        meanwhile = await page.evaluate("el('interfacesSelect').value")
+        server.adapters = [SIDEBAR_VCAN, SIDEBAR_PEAK]
+        await page.evaluate("loadInterfaces()")
+        back = await page.evaluate("selectedCanTarget().interface")
+        assert back == "pcan:PCAN_USBBUS1", \
+            f"PEAK picked, gone for a refresh ({meanwhile} shown), then back: Connect would open {back}"
+    finally:
         await sidebar_close(page, server)
 
 

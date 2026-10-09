@@ -507,7 +507,9 @@ const loadInterfaces = async () => {
       || (data.available_interfaces || []).map((name) => ({ interface: name, label: name, needs_bitrate: false }));
     const select = el('interfacesSelect');
     const previousValue = select.value;
-    const preferredValue = previousValue || state.preferredCanInterface;
+    // The user's pick, kept when it is not listed for a while (a USB adapter
+    // enumerating again), so that it is picked again once it is.
+    const preferredValue = state.preferredCanInterface || previousValue;
     select.innerHTML = '';
     for (const adapter of state.canAdapters) {
       const option = document.createElement('option');
@@ -531,7 +533,6 @@ const loadInterfaces = async () => {
       // only way forward is to name one.
       select.value = offered.length > 0 ? offered[0] : OTHER_CAN_INTERFACE;
     }
-    state.preferredCanInterface = select.value;
     updateCanForm({ restoreBitrate: select.value !== previousValue });
     saveSettings();
     return data;

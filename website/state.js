@@ -737,10 +737,10 @@ const getHeaderFilters = () => {
 };
 
 const _writeSettingsNow = () => {
-  const interfacesSelect = el('interfacesSelect');
   const persisted = {
     apiBase: el('apiBase').value.trim(),
-    canInterface: interfacesSelect ? interfacesSelect.value : '',
+    // The pick, not the list's value, which is empty until the backend is connected.
+    canInterface: state.preferredCanInterface,
     canBitrates: state.canBitrates,
     canDataBitrates: state.canDataBitrates,
     customCanSpec: state.customCanSpec,
