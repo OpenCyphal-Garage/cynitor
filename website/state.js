@@ -19,7 +19,9 @@ const state = {
   throughputTimer: null,
   dashboardConnected: false,
   dashboardConnecting: false,
+  dashboardRetry: null,  // {timer, attempts} while a backend that stopped answering is tried again
   canState: CONN.IDLE,
+  canError: null,        // why the last CAN connect failed or the session ended, until the next attempt
   preferredCanInterface: '',
   // Adapters the backend offers (GET /api/status available_adapters).
   canAdapters: [],
@@ -40,6 +42,7 @@ const state = {
   _nodesPlotSubject: null,
   subjectHistory: new Map(),
   hiddenPlotSeries: new Map(),
+  plotSeriesSeen: new Map(),  // subject-ID -> names of its series plotted so far (see renderPlot)
   plotTimer: null,
   plotPaused: false,
   plotPausedAt: null,
@@ -68,6 +71,9 @@ const state = {
   logSubjectIds: new Set(),
   logShowCyphal: true,
   logShowServer: false,
+  logTextFilter: '',
+  busErrors: null,          // errors on the bus (GET /api/status), or null while it has none
+  cyphalV11: null,          // Cyphal v1.1 traffic seen on the bus (GET /api/status), or null       // the log panel's filter box, lowercased; not persisted
   _logSeq: 0,
   detailPanelHeight: null,
   detailPanelCollapsed: false,
@@ -89,6 +95,10 @@ const state = {
   favouriteSubjectIds: new Set(),
   hiddenSubjectIds: new Set(),
   subjectsTableSort: { key: 'id', dir: 'asc' },
+  subjectsKind: 'all',   // what the Subjects table lists: 'all', 'Subject' or 'Service'
+  compactRows: false,    // the tables' rows at about 70% height (Compact, in their strips)
+  nodesFocus: null,      // the kind picked out in a table's status strip, or null
+  subjectsFocus: null,
   recordings: [],
   activeRecordingId: null,
   recordBuffer: null,
@@ -139,21 +149,26 @@ let _detailRefreshPending = null;
 
 const metricMaxLen = new Map();
 
-// Read plot colors from CSS custom properties. Resolved once at script load.
-const PLOT_COLORS = (() => {
+// Plot colours: the --plot-N tokens of the theme in use, read again whenever
+// the theme is set (loadSettings, the theme toggle).
+const PLOT_COLORS = [];
+const refreshPlotColors = () => {
   const root = getComputedStyle(document.documentElement);
   const fallback = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#bc8cff', '#39d2c0'];
-  return [1, 2, 3, 4, 5, 6].map((i) => {
-    return root.getPropertyValue(`--plot-${i}`).trim() || fallback[i - 1];
-  });
-})();
+  PLOT_COLORS.splice(0, PLOT_COLORS.length,
+    ...fallback.map((color, i) => root.getPropertyValue(`--plot-${i + 1}`).trim() || color));
+};
+refreshPlotColors();
 const PLOT_TICK_MS = 100;
 
 // ── Utility helpers ──
 
 const el = (id) => document.getElementById(id);
 
+// A unique-ID as hex: from its bytes, or as it is when already hex (an offline
+// node that lost its node-ID is known by its unique_id_hex).
 const uniqueIdKey = (uid) => {
+  if (typeof uid === 'string') return uid || null;
   if (!Array.isArray(uid) || !uid.length) return null;
   return uid.map((b) => b.toString(16).padStart(2, '0')).join('');
 };
@@ -219,22 +234,28 @@ const formatUptime = (seconds) => {
   if (seconds == null) return '-';
   const s = Number(seconds);
   if (!Number.isFinite(s) || s < 0) return '-';
-  const d = Math.floor(s / 86400);
-  const h = Math.floor((s % 86400) / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = Math.floor(s % 60);
-  return `${d}d ${h}h ${m}m ${sec}s`;
+  // The two largest units: enough to read at a glance, short enough to fit.
+  const parts = [[Math.floor(s / 86400), 'd'], [Math.floor((s % 86400) / 3600), 'h'],
+    [Math.floor((s % 3600) / 60), 'm'], [Math.floor(s % 60), 's']];
+  const first = parts.findIndex(([n]) => n > 0);
+  if (first < 0) return '0s';
+  return parts.slice(first, first + 2).map(([n, unit]) => `${n}${unit}`).join(' ');
+};
+
+// How long ago, at a glance: "12s ago", "3m ago", "2h ago", "4d ago".
+const formatAgo = (seconds) => {
+  const ago = Math.max(0, Math.floor(seconds));
+  if (ago < 60) return `${ago}s ago`;
+  if (ago < 3600) return `${Math.floor(ago / 60)}m ago`;
+  if (ago < 86400) return `${Math.floor(ago / 3600)}h ago`;
+  return `${Math.floor(ago / 86400)}d ago`;
 };
 
 const formatLastSeen = (lastSeen) => {
   if (!Array.isArray(lastSeen) || !lastSeen.length) return '-';
   const ts = new Date(lastSeen[lastSeen.length - 1]);
   if (Number.isNaN(ts.getTime())) return '-';
-  const ago = Math.floor((Date.now() - ts.getTime()) / 1000);
-  if (ago < 60) return `${ago}s ago`;
-  if (ago < 3600) return `${Math.floor(ago / 60)}m ago`;
-  if (ago < 86400) return `${Math.floor(ago / 3600)}h ago`;
-  return `${Math.floor(ago / 86400)}d ago`;
+  return formatAgo((Date.now() - ts.getTime()) / 1000);
 };
 
 const formatThroughput = (bytesPerSec) => {
@@ -267,23 +288,34 @@ const HEALTH_CSS_COLOR = { ok: 'var(--ok)', warn: 'var(--warn)', err: 'var(--err
 const getHealthCssClass = (health) => HEALTH_CSS_CLASS[classifyHealth(health)] || '';
 const getHealthColor = (health) => HEALTH_CSS_COLOR[classifyHealth(health)] || 'var(--muted)';
 
-const connectionPlaceholder = (context) => {
+// Why nothing can arrive from the bus, as svcStateMsg's parts; null when it can.
+const connectionProblem = (context) => {
+  const spinner = '<span class="svc-spinner"></span>';
   if (!state.dashboardConnected) {
+    if (state.dashboardRetry) {
+      return { icon: spinner, message: 'Reconnecting to backend…',
+        helper: 'It stopped answering; trying again until it does. Disconnect stops trying.' };
+    }
     if (state.dashboardConnecting) {
-      return svcStateMsg('<span class="svc-spinner"></span>', 'Connecting to backend…', 'Reaching the backend server.');
+      return { icon: spinner, message: 'Connecting to backend…', helper: 'Reaching the backend server.' };
     }
     if (state.pendingReconnect) {
-      return svcStateMsg('<span class="svc-spinner"></span>', 'Reconnecting to backend…', 'Restoring previous session.');
+      return { icon: spinner, message: 'Reconnecting to backend…', helper: 'Restoring previous session.' };
     }
-    return svcStateMsg('⏻', 'Not connected to backend', `Connect to the backend server to ${context}.`);
+    return { icon: '⏻', message: 'Not connected to backend', helper: `Connect to the backend server to ${context}.` };
   }
   if (state.canState === CONN.CONNECTING) {
-    return svcStateMsg('<span class="svc-spinner"></span>', 'Connecting to CAN interface…', 'Establishing CAN bus connection.');
+    return { icon: spinner, message: 'Connecting to CAN interface…', helper: 'Establishing CAN bus connection.' };
   }
   if (state.canState !== CONN.CONNECTED) {
-    return svcStateMsg('⛓', 'CAN bus not connected', `Connect a CAN interface to ${context}.`);
+    return { icon: '⛓', message: 'CAN bus not connected', helper: `Connect a CAN interface to ${context}.` };
   }
   return null;
+};
+
+const connectionPlaceholder = (context) => {
+  const problem = connectionProblem(context);
+  return problem ? svcStateMsg(problem.icon, problem.message, problem.helper) : null;
 };
 
 // Same as connectionPlaceholder but treats an active replay session as a
@@ -297,6 +329,7 @@ const eventSourcePlaceholder = (context) => {
   return connectionPlaceholder(context);
 };
 
+// Updates rows in place; returns the fields whose values changed in any row.
 const diffUpdateTable = (tabulator, data, keyField) => {
   const currentRowMap = new Map();
   for (const row of tabulator.getRows()) {
@@ -304,6 +337,7 @@ const diffUpdateTable = (tabulator, data, keyField) => {
   }
   const newRows = [];
   const newIds = new Set();
+  const changed = new Set();
   for (const d of data) {
     newIds.add(d[keyField]);
     const existing = currentRowMap.get(d[keyField]);
@@ -311,7 +345,7 @@ const diffUpdateTable = (tabulator, data, keyField) => {
     const cur = existing.getData();
     const diff = {};
     for (const k of Object.keys(d)) {
-      if (d[k] !== cur[k]) diff[k] = d[k];
+      if (d[k] !== cur[k]) { diff[k] = d[k]; changed.add(k); }
     }
     if (Object.keys(diff).length) existing.update(diff);
   }
@@ -319,6 +353,27 @@ const diffUpdateTable = (tabulator, data, keyField) => {
     if (!newIds.has(id)) row.delete();
   }
   if (newRows.length) tabulator.addData(newRows);
+  return changed;
+};
+
+// Tabulator sorts only when asked, so a row whose sorted value changed stays
+// where it was. A live table sorts again once that happened, every few seconds
+// at most, and not under the pointer: a row moving away takes a click with it.
+const RESORT_MIN_MS = 3000;
+const _resorts = new WeakMap();  // tabulator -> {last: ms, pending: bool}
+
+const resortChanged = (tabulator, changed) => {
+  const sorters = tabulator.getSorters();
+  const resort = _resorts.get(tabulator) || { last: 0, pending: false };
+  _resorts.set(tabulator, resort);
+  if (sorters.some((s) => changed.has(s.field))) resort.pending = true;
+  const now = Date.now();
+  // Nor while a row has the keyboard: it would move away from under it.
+  const busy = tabulator.element.matches(':hover') || tabulator.element.querySelector('.tabulator-row:focus-visible');
+  if (!resort.pending || now - resort.last < RESORT_MIN_MS || busy) return;
+  resort.last = now;
+  resort.pending = false;
+  tabulator.setSort(sorters.map((s) => ({ column: s.field, dir: s.dir })));
 };
 
 // Put fresh content into `target`, replacing only the nodes that changed and
@@ -347,6 +402,86 @@ const patchChildren = (target, fresh) => {
   });
 };
 
+// Rows by keyboard. Tab stops at the table; ↓/↑ go from row to row (into
+// the rows: the selected one, else the first), Home/End to the ends, Enter
+// or Space acts as a click on the row, Escape leaves the rows. `keys` maps
+// more keys to actions on the focused row. Rows need tabindex -1 (see
+// focusableRow) to take the focus.
+const focusableRow = (row) => { row.getElement().tabIndex = -1; };
+
+const bindRowKeys = (tabulator, activate, keys = {}) => {
+  // At once when the row is drawn, so a held or quick key goes on from it.
+  const focusRow = (row) => {
+    if (!row) return;
+    if (row.getElement().isConnected) row.getElement().focus();
+    tabulator.scrollToRow(row, 'nearest', false).then(() => row.getElement().focus());
+  };
+  // Drawing the table again (on a resize, say) takes its rows out of the
+  // page and puts them back, which loses the focus: the row that had it when
+  // the drawing began gets it back.
+  let focused = null;
+  tabulator.on('renderStarted', () => {
+    const active = document.activeElement;
+    focused = active.classList.contains('tabulator-row') && tabulator.element.contains(active) ? active : null;
+  });
+  tabulator.on('renderComplete', () => {
+    if (focused?.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true });
+    focused = null;
+  });
+  tabulator.element.addEventListener('keydown', (e) => {
+    const onRow = e.target.classList.contains('tabulator-row');
+    if (!onRow && !e.target.classList.contains('tabulator-tableholder')) return;  // a filter, an input
+    const rows = tabulator.getRows('active');
+    const selected = tabulator.element.querySelector('.tabulator-row.selected-row');
+    const row = onRow ? tabulator.getRow(e.target) : null;
+    const actions = {
+      ArrowDown: () => focusRow(row ? row.getNextRow() : (selected ? tabulator.getRow(selected) : rows[0])),
+      ArrowUp: () => focusRow(row ? row.getPrevRow() : (selected ? tabulator.getRow(selected) : rows[0])),
+      Home: () => focusRow(rows[0]),
+      End: () => focusRow(rows[rows.length - 1]),
+      Enter: () => row && activate(row),
+      ' ': () => row && activate(row),
+      Escape: () => row && e.target.closest('.tabulator-tableholder').focus(),
+      ...Object.fromEntries(Object.entries(keys).map(([key, act]) => [key, () => row && act(row)])),
+    };
+    if (!actions[e.key]) return;
+    e.preventDefault();
+    actions[e.key]();
+  });
+};
+
+// A strip over a table saying what needs a look: the total, then a count of
+// each kind of row that does, which, clicked, picks those rows out (see the
+// Graph's strip); last, the Compact toggle (see applyRowDensity). `before` is
+// markup to put first. Returns the kinds counted.
+const renderStatusStrip = (strip, total, kinds, rows, focus, before = '') => {
+  const counts = kinds.map((k) => ({ ...k, count: rows.filter(k.test).length })).filter((k) => k.count);
+  const fresh = document.createElement('div');
+  fresh.innerHTML = `${before}<span class="table-status-total">${escapeHtml(total)}</span>`
+    + (counts.length
+      ? counts.map((k) => `<button type="button" class="table-chip table-chip--${k.level}" data-focus="${k.key}"`
+        + ` aria-pressed="${focus === k.key}">${k.count} ${escapeHtml(k.label)}</button>`).join('')
+      : '<span class="table-status-usual">nothing unusual</span>')
+    + `<button type="button" class="table-kind-btn table-density-btn${state.compactRows ? ' active' : ''}"`
+    + ` data-density aria-pressed="${state.compactRows}">Compact</button>`;
+  patchChildren(strip, fresh);
+  return counts;
+};
+
+// The first IDs of a list that fit in a few characters, then how many more:
+// a long list reads at a glance, and its tooltip has it whole.
+const LIST_SHOWN_CHARS = 14;
+const shortIdList = (ids, render = (id) => escapeHtml(String(id))) => {
+  let shown = 1;
+  let chars = String(ids[0]).length;
+  while (shown < ids.length && chars + 2 + String(ids[shown]).length <= LIST_SHOWN_CHARS) {
+    chars += 2 + String(ids[shown]).length;
+    shown += 1;
+  }
+  const more = ids.length - shown;
+  return ids.slice(0, shown).map(render).join(', ') + (more ? `<span class="list-more"> +${more}</span>` : '');
+};
+
 const positionPopover = (popover, anchorEl) => {
   const rect = anchorEl.getBoundingClientRect();
   popover.style.top = (rect.bottom + 4) + 'px';
@@ -356,31 +491,36 @@ const positionPopover = (popover, anchorEl) => {
 const getStatusClass = (attr, value) => {
   const v = String(value).toUpperCase();
   switch (attr) {
+    // Only what is not the usual gets a colour, as in the node table.
     case 'health':
+      if (v === 'NOMINAL' || v === '0') return '';
+      if (v === 'ADVISORY' || v === '1') return 'status-warn';
       return getHealthCssClass(value);
     case 'mode':
-      if (v === 'OPERATIONAL' || v === '0') return 'status-ok';
-      if (v === 'INITIALIZATION' || v === '1') return 'status-init';
-      return '';
+      return v === 'OPERATIONAL' || v === '0' ? '' : 'status-warn';
     default:
       return '';
   }
 };
 
+// Favourites first and ghost rows last, whichever way the column sorts; empty
+// values last too. Tabulator hands a descending sort its rows swapped, so a
+// pinned order is flipped back for it.
 const makeFavPinSorter = ({ ghostField } = {}) => (baseSorter) =>
   (a, b, aRow, bRow, column, dir, sorterParams) => {
+    const pin = (order) => (dir === 'asc' ? order : -order);
     if (ghostField) {
       const aGhost = aRow.getData()[ghostField] ? 1 : 0;
       const bGhost = bRow.getData()[ghostField] ? 1 : 0;
-      if (aGhost !== bGhost) return aGhost - bGhost;
+      if (aGhost !== bGhost) return pin(aGhost - bGhost);
     }
     const aFav = aRow.getData()._fav ? 1 : 0;
     const bFav = bRow.getData()._fav ? 1 : 0;
-    if (aFav !== bFav) return dir === 'asc' ? bFav - aFav : aFav - bFav;
+    if (aFav !== bFav) return pin(bFav - aFav);
     if (typeof baseSorter === 'function') return baseSorter(a, b, aRow, bRow, column, dir, sorterParams);
     if (a == null && b == null) return 0;
-    if (a == null) return 1;
-    if (b == null) return -1;
+    if (a == null) return pin(1);
+    if (b == null) return pin(-1);
     if (baseSorter === 'number') {
       const aNum = Number(a), bNum = Number(b);
       const aNaN = isNaN(aNum), bNaN = isNaN(bNum);
@@ -472,13 +612,15 @@ const withSmartJsonHeaders = (options = {}) => {
 
 const REQUEST_TIMEOUT_MS = 15000;
 
+// `timeoutMs` in the options gives a request longer than REQUEST_TIMEOUT_MS.
 const requestJson = async (path, options = {}) => {
+  const { timeoutMs = REQUEST_TIMEOUT_MS, ...fetchOptions } = options;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let response;
   try {
     response = await fetch(`${apiBase()}${path}`, {
-      ...withSmartJsonHeaders(options),
+      ...withSmartJsonHeaders(fetchOptions),
       signal: controller.signal,
     });
   } catch (error) {
@@ -502,9 +644,8 @@ const requestJson = async (path, options = {}) => {
     throw err;
   }
   if (!response.ok) {
-    const detail = data.error
-      || (Array.isArray(data.errors) && data.errors.length ? data.errors.join('\n') : null);
-    const err = new Error(detail || `HTTP ${response.status} for ${path}`);
+    // Every route answers an error as {"error": message}, sometimes with more fields.
+    const err = new Error(data.error || `HTTP ${response.status} for ${path}`);
     // Attach the raw status and body so callers can distinguish e.g. a 504
     // service-call timeout (body carries {status: "timeout", latency_ms, error})
     // from a generic 500 with the same envelope.
@@ -519,11 +660,11 @@ const requestJson = async (path, options = {}) => {
 
 let _authModalResolver = null;
 
+let _authModalOpener = null;  // what had the focus: it gets it back on closing
+
 const showAuthModal = (errorMsg) => {
   const modal = el('authModal');
   if (!modal) return;
-  const apiBaseEl = el('authModalApiBase');
-  if (apiBaseEl) apiBaseEl.textContent = apiBase();
   const errEl = el('authModalError');
   if (errEl) {
     if (errorMsg) {
@@ -533,22 +674,31 @@ const showAuthModal = (errorMsg) => {
       errEl.classList.add('hidden');
     }
   }
+  // Every refused request asks again: while it is open, what is typed stays.
+  if (!modal.classList.contains('hidden')) return;
+  const apiBaseEl = el('authModalApiBase');
+  if (apiBaseEl) apiBaseEl.textContent = apiBase();
   const input = el('authModalInput');
   if (input) {
     input.value = '';
     setTimeout(() => input.focus(), 50);
   }
+  // The Connect clicked loses the focus while it is off, connecting: it gets it back.
+  _authModalOpener = document.activeElement === document.body ? el('connectDashboardBtn') : document.activeElement;
   modal.classList.remove('hidden');
 };
 
 const hideAuthModal = () => {
   const modal = el('authModal');
   if (modal) modal.classList.add('hidden');
+  if (_authModalOpener?.isConnected) _authModalOpener.focus();
+  _authModalOpener = null;
 };
 
 const _bindAuthModalOnce = () => {
   const btn = el('authModalSave');
   const input = el('authModalInput');
+  const modal = el('authModal');
   if (!btn || !input || btn.dataset.bound) return;
   btn.dataset.bound = '1';
   const commit = () => {
@@ -556,16 +706,27 @@ const _bindAuthModalOnce = () => {
     if (!token) return;
     setAuthToken(token);
     hideAuthModal();
-    // The caller decides what to retry — most paths will recover on the
-    // next status poll / WS reconnect tick.
-    if (typeof connectDashboard === 'function') {
-      // best-effort reconnect; safe to call even if already connected
-      try { connectDashboard(); } catch (_) {}
-    }
+    // Still connected (a request was refused before the status poll noticed),
+    // the next requests carry the token; otherwise connect with it.
+    if (!state.dashboardConnected && typeof openDashboard === 'function') openDashboard();
   };
   btn.addEventListener('click', commit);
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); commit(); }
+  });
+  // Cancel or Escape leaves the dashboard disconnected, its URL free to change.
+  el('authModalCancel').addEventListener('click', hideAuthModal);
+  document.addEventListener('keydown', (e) => {
+    if (modal.classList.contains('hidden')) return;
+    if (e.key === 'Escape') { hideAuthModal(); return; }
+    if (e.key !== 'Tab') return;
+    // Tab goes round the dialog's controls while it is open.
+    const controls = [...modal.querySelectorAll('input, button')];
+    const [first, last] = [controls[0], controls[controls.length - 1]];
+    if (!modal.contains(document.activeElement) || document.activeElement === (e.shiftKey ? first : last)) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus();
+    }
   });
 };
 
@@ -600,14 +761,15 @@ const getHeaderFilters = () => {
 };
 
 const _writeSettingsNow = () => {
-  const interfacesSelect = el('interfacesSelect');
   const persisted = {
     apiBase: el('apiBase').value.trim(),
-    canInterface: interfacesSelect ? interfacesSelect.value : '',
+    // The pick, not the list's value, which is empty until the backend is connected.
+    canInterface: state.preferredCanInterface,
     canBitrates: state.canBitrates,
     canDataBitrates: state.canDataBitrates,
     customCanSpec: state.customCanSpec,
-    dashboardConnected: state.dashboardConnected,
+    // A session being restored or reconnected is still the user's: a reload meanwhile goes on with it.
+    dashboardConnected: state.dashboardConnected || Boolean(state.dashboardRetry || state.pendingReconnect),
     selectedDetailTab: state.selectedDetailTab,
     tableSort: state.tableSort,
     sidebarCollapsed: state.sidebarCollapsed,
@@ -634,13 +796,7 @@ const _writeSettingsNow = () => {
     plotStroke: state.plotStroke,
     plotGrid: state.plotGrid,
     plotColorOverrides: state.plotColorOverrides,
-    compareGraphs: state.compareGraphs.map(g => ({
-      id: g.id, name: g.name, series: g.series, thresholds: g.thresholds || [],
-      derivedSeries: g.derivedSeries || [],
-      markers: g.markers || [],
-      drawings: g.drawings || [],
-      timeWindow: g.timeWindow, smooth: g.smooth, stroke: g.stroke, disconnectPoints: g.disconnectPoints, grid: g.grid,
-    })),
+    compareGraphs: state.compareGraphs.map((g) => ({ id: g.id, ...compareGraphConfig(g) })),
     savedCompareConfigs: state.savedCompareConfigs,
     favouriteNodeIds: [...state.favouriteNodeIds],
     hiddenNodeIds: [...state.hiddenNodeIds],
@@ -649,8 +805,11 @@ const _writeSettingsNow = () => {
     favouriteSubjectIds: [...state.favouriteSubjectIds],
     hiddenSubjectIds: [...state.hiddenSubjectIds],
     subjectsTableSort: state.subjectsTableSort,
+    subjectsKind: state.subjectsKind,
+    compactRows: state.compactRows,
     subjectsHeaderFilters: typeof getSubjectsHeaderFilters === 'function' ? getSubjectsHeaderFilters() : null,
     recordFilterDraft: state.recordFilterDraft,
+    rawLogPlaybackSpeed: state.rawLogPlaybackSpeed,
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
 };
@@ -738,6 +897,7 @@ const loadSettings = () => {
     document.documentElement.setAttribute('data-theme', 'dark');
     el('themeToggle').setAttribute('aria-checked', 'true');
   }
+  refreshPlotColors();
   if (typeof settings.canInterface === 'string') {
     state.preferredCanInterface = settings.canInterface;
   }
@@ -791,6 +951,9 @@ const loadSettings = () => {
       stop_on_limit: d.stop_on_limit !== false,
     };
   }
+  if (RAW_LOG_SPEEDS.some(([speed]) => speed === settings.rawLogPlaybackSpeed)) {
+    state.rawLogPlaybackSpeed = settings.rawLogPlaybackSpeed;
+  }
   if (Array.isArray(settings.favouriteSubjectIds)) {
     state.favouriteSubjectIds = new Set(settings.favouriteSubjectIds);
   }
@@ -800,6 +963,10 @@ const loadSettings = () => {
   if (settings.subjectsTableSort?.key) {
     state.subjectsTableSort = settings.subjectsTableSort;
   }
+  if (['all', 'Subject', 'Service'].includes(settings.subjectsKind)) {
+    state.subjectsKind = settings.subjectsKind;
+  }
+  if (settings.compactRows === true) state.compactRows = true;
   if (typeof settings.plotTimeWindow === 'number' && settings.plotTimeWindow >= 0) {
     state.plotTimeWindow = settings.plotTimeWindow;
   }
@@ -818,47 +985,19 @@ const loadSettings = () => {
   if (settings.plotColorOverrides && typeof settings.plotColorOverrides === 'object') {
     state.plotColorOverrides = settings.plotColorOverrides;
   }
+  // Graphs and saved graphs come back whole, what is valid of them (compare-view.js).
   if (Array.isArray(settings.compareGraphs)) {
     state.compareGraphs = settings.compareGraphs
-      .filter(g => g && typeof g.id === 'string' && Array.isArray(g.series))
-      .map(g => ({
-        id: g.id, name: g.name || '',
-        series: g.series.filter(s => Number.isInteger(s?.subjectId) && typeof s?.attribute === 'string'),
-        paused: false, pausedAt: null,
-        timeWindow: typeof g.timeWindow === 'number' ? g.timeWindow : 60,
-        smooth: typeof g.smooth === 'number' ? g.smooth : 0,
-        stroke: typeof g.stroke === 'number' ? g.stroke : 1.5,
-        disconnectPoints: g.disconnectPoints === true,
-        grid: g.grid === true,
-        thresholds: Array.isArray(g.thresholds) ? g.thresholds.filter(t => typeof t.value === 'number') : [],
-        derivedSeries: Array.isArray(g.derivedSeries) ? g.derivedSeries.filter(d => d?.id && d?.type && d?.sourceA) : [],
-        markers: Array.isArray(g.markers) ? g.markers.filter(m => typeof m.t === 'number') : [],
-        drawings: Array.isArray(g.drawings) ? g.drawings.filter(d => Array.isArray(d?.points) && d.points.length >= 2) : [],
-        _timer: null, _fingerprint: '', _hidden: new Set(),
-      }));
+      .filter((g) => typeof g?.id === 'string' && sanitizeCompareGraph(g))
+      .map((g) => newCompareGraph(g, g.id));
   }
   if (Array.isArray(settings.savedCompareConfigs)) {
-    state.savedCompareConfigs = settings.savedCompareConfigs
-      .filter(c => c && typeof c.name === 'string' && Array.isArray(c.series))
-      .map(c => ({
-        name: c.name,
-        series: c.series.filter(s => Number.isInteger(s?.subjectId) && typeof s?.attribute === 'string'),
-        derivedSeries: Array.isArray(c.derivedSeries) ? c.derivedSeries.filter(d => d?.id && d?.type && d?.sourceA) : [],
-        markers: Array.isArray(c.markers) ? c.markers.filter(m => typeof m.t === 'number') : [],
-        drawings: Array.isArray(c.drawings) ? c.drawings.filter(d => Array.isArray(d?.points) && d.points.length >= 2) : [],
-      }));
+    state.savedCompareConfigs = settings.savedCompareConfigs.map(sanitizeCompareGraph).filter(Boolean);
   }
   if (!state.compareGraphs.length && Array.isArray(settings.plotCompareList)) {
     const migrated = settings.plotCompareList.filter(
       item => Number.isInteger(item?.subjectId) && typeof item?.attribute === 'string'
     );
-    if (migrated.length) {
-      state.compareGraphs.push({
-        id: 'cg_migrated', name: '', series: migrated,
-        paused: false, pausedAt: null,
-        timeWindow: 60, smooth: 0, stroke: 1.5, disconnectPoints: false,
-        _timer: null, _fingerprint: '', _hidden: new Set(),
-      });
-    }
+    if (migrated.length) state.compareGraphs.push(newCompareGraph({ series: migrated }, 'cg_migrated'));
   }
 };

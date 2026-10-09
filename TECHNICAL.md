@@ -78,6 +78,8 @@ EventLogger.start()        SQLite persistence
 | `log_store.py` | In-memory deque (max 5000) fed by a `logging.Handler`; exposed via `/api/logs` |
 | `dsdl_manager.py` | DSDL discovery, namespace tree, source/compiled state, custom-type CRUD in the data folder (`dsdl/custom`, compiled to `dsdl/compiled`), compilation in-process via `pycyphal.dsdl.compile` (no `nnvg`, so it works frozen) |
 | `raw_log.py` | Raw CAN logs: `RawLog` writes frames to a candump `.log` file (python-can's `CanutilsLogWriter`, behind a lock), `SocketcanTap` is the listen-only second socket that feeds it on SocketCAN; behind the hub, `CANHub.on_frame` feeds it. Started and stopped by `CANSession.start_raw_log` / `stop_raw_log`, which also writes the `.types.json` sidecar (subject types, servers, names, bitrates). `LogPlayer` is a python-can bus that plays a log at its pace ÷ speed; `CANSession.play_raw_log` opens it through the hub, with the scanner in `offline` mode taking ports from the sidecar instead of asking nodes |
+| `cyphal_v11.py` | Noticing Cyphal v1.1 traffic, which this v1.0 stack drops: `is_v11_transfer_start` recognises the first frame of a v1.1 message transfer, `V11Traffic` counts transfers, nodes and subject-IDs for `/api/status`. Fed by `CANHub` behind the hub, and on SocketCAN by a `SocketcanTap` with a kernel filter (`SOCKETCAN_FILTER`) |
+| `bus_errors.py` | Errors on the bus, said once: `BusErrors` follows the controller's state and error counters as the session's health check samples them every 3 s (SocketCAN's from iproute2, the hub's counters otherwise), logs a line when errors start and one when they stop, and gives `/api/status` its `bus_errors`. Drops pycyphal's line per error-frame state bit |
 | `firmware.py` | Firmware updates: `FirmwareServer` answers `uavcan.file.Read` (only that, from the data folder's `firmware/`) on the scanner's node and follows each update's progress; `send_update_command` sends ExecuteCommand BEGIN_SOFTWARE_UPDATE. `CANSession.begin_firmware_update` ties them together |
 | `type_guess.py` | Guessing a subject's type: `rank_types` keeps the compiled message types every sampled payload round-trips through exactly (CAN FD frame padding allowed) and ranks them by plausible values, custom first, fixed-port last. Payloads come from `ScannerNode.sample_subject` (a transport-level input session); `ScannerNode.set_subject_type` and `CANSession.set_subject_type` apply and save the chosen type (`subject_types.json`) |
 | `replay.py` | Recording-replay engine: streams `recording_events` rows back through subscriber queues at controlled speed; mirrors `TelemetryManager`'s broadcast shape so the WS handler picks one source per session (telemetry XOR replay) |
@@ -130,8 +132,8 @@ All frontend code lives in `website/`. Plain HTML/CSS/JS. No build step. D3 for 
 |------|------|
 | `state.js` | Global `state` object, constants (`PLOT_COLORS`, `PLOT_TICK_MS`), basic helpers (`el`, `escapeHtml`, formatters), API helpers (`apiBase`, `requestJson`), settings load/save (debounced 250ms, flushed on `beforeunload`) |
 | `cache.js` | Telemetry cache and per-node accessors: `cacheEvent`, `getNodeRate`, `getNodeHealthValue`, `getNodeVisualState`, `pruneNodeCache`, `buildSubjectDetailData` |
-| `plot.js` | Multi-panel D3 time-series plot: axis setup, line rendering, hover crosshair + tooltip, interactive three-zone legend (color picker, line style cycling, visibility, remove), zoom/pan, timeline markers, freehand drawing, animation loop, resize handling |
-| `compare-view.js` | Independent multi-graph compare view: multi-series overlay, derived series (delta, ratio, moving avg, min/max, rate), thresholds, presets, export/import workspace, per-graph controls, crosshair sync across graphs |
+| `plot.js` | Multi-panel D3 time-series plot, shared by the Nodes and Subjects plots and Compare: axis setup, line rendering, hover crosshair + tooltip, interactive three-zone legend (color picker, line style cycling, visibility, remove), zoom/pan, timeline markers, freehand drawing, animation loop, resize handling |
+| `compare-view.js` | Independent multi-graph compare view: graph cards and their editing rows (`buildComparePanel`: series picker, derived series, thresholds), the multi-series overlay each graph draws (`_renderCompareOverlay`), derived series (delta, ratio, moving avg, min/max, rate), presets, export/import workspace, per-graph controls, status strip, crosshair sync across graphs, and `openPlotInCompare` behind the Nodes and Subjects plots' Compare button |
 | `detail-panel.js` | Per-node detail panel: subject cards, tab rendering (publishers, subscribers, servers, clients, registers, history), plot integration, selection helpers |
 | `nodes-table.js` | Tabulator init, formatters, row build (port arrays joined to strings to avoid spurious cell re-renders), favourite + ghost delete actions, ghost rows pinned to bottom |
 | `services-panel.js` | Service interaction: schema fetch, request form rendering, send/repeat/copy, persistent call history from backend, view-isolated state (`forSubjects` parameter), offline fallback for stale schemas |
@@ -139,7 +141,8 @@ All frontend code lives in `website/`. Plain HTML/CSS/JS. No build step. D3 for 
 | `history-panel.js` | Node lifecycle history: timeline rendering, event labels/badges, subject activity summary, time-range filtering |
 | `subjects-panel.js` | Subject browser: Tabulator-based table of all subjects and services, inline service expansion with node selector, integrated persistent history. Uses a stash/unstash pattern to protect the inline service detail DOM node from Tabulator's virtual re-renders |
 | `graph-view.js` | Network topology: D3 force-directed graph with three view modes (nodes only / node-centric / subject-centric), live link traffic, drag-to-pin with persistent positions, adjacency highlighting, info panel that follows the selected node, hide-system / hide-offline / per-node-or-subject hide with restore badge, inline device rename, gravity bias by metric |
-| `dsdl-view.js` | DSDL Inspector tab: namespace tree with bus-activity badges, field-level search, dependency navigation, custom-type editor with compile-state lock |
+| `dsdl-editor.js` | DSDL custom-type editor: new / edit / new-version form with live preview, fixed-port-ID check, unsaved-draft prompt, compile-state lock. Opened by `dsdl-view.js`, which lends it what it needs of the tab (`DsdlEditor.attach`) |
+| `dsdl-view.js` | DSDL Inspector tab: namespace tree with bus-activity badges, field-level search, dependency navigation, compile, type delete; opens the custom-type editor (`dsdl-editor.js`) |
 | `record-view.js` | Record tab: subject/service/node pickers, per-recording cards with progress bars (with "no limit" rendering for unbounded recordings), live polling, edit-limits modal, duplicate, CSV/JSON export, Play-replay button on completed recordings |
 | `replay-strip.js` | Replay playback strip above the main view: position scrub, speed selector, pause/resume/stop, MM:SS/MM:SS time display; polls `/api/replay/status` every 1 s; transitions to a "Finished" mode (Replay-again / Close) when the backend's `replay_ended` sentinel arrives with `finished: true` |
 | `log-panel.js` | Right log panel: collapsible/resizable shell, ring buffer (cap 2000, not persisted), Cyphal feed (diagnostic.Record + user-added text subjects), Server poller (`/api/logs` every 2s), severity floor across sources, per-source toggle pills with count badges, disconnect indicator on the Server pill |
@@ -153,15 +156,15 @@ Top-level `const`/`let` declarations are shared globals across script tags (no m
 ```
 Page load → loadSettings() → bind() → updateSemaphores()
             ↓ (auto-reconnect from saved state)
-            connectDashboard() → /api/status
-                ↓
+            connectDashboard() → openDashboard() → /api/status
+                ↓ (no answer: retryDashboard() after 2, 4, 8, 16, then every 30 s)
             startStatusPolling() (5s) + startInterfacePolling() (3s while not yet on CAN)
                 ↓
             User clicks CAN Connect (or another client did) → connectCan()
                 ↓
             schedulePostCanStartup(5s) — wait for backend pipeline to come up
                 ↓
-            getAllNodes() (one-shot) + startNodesPolling() (slider 1-60s)
+            getAllNodes() (one-shot) + startNodesPolling() (1s)
             startThroughputTimer() (1s) + connectWs()
                 ↓
             ws.onmessage → cacheEvent() → scheduleDetailRefresh() (100ms debounce)
@@ -170,13 +173,14 @@ Page load → loadSettings() → bind() → updateSemaphores()
 
 The frontend never blocks on a single source. WebSocket is for live events; REST is for structural snapshots and connection metadata.
 
-Six views share the same WebSocket and REST data:
+Seven views share the same WebSocket and REST data:
 - **Nodes view** — Tabulator table of nodes (with ghost rows for displaced identities pinned to bottom), detail panel below with tabs (Publishers, Subscribers, Servers, Clients, Registers, History).
 - **Subjects view** — Tabulator table of all subjects and services across the network. Services can be expanded inline with a node selector and request form. Both views use `services-panel.js` for service interaction but maintain isolated state via the `forSubjects` parameter pattern.
 - **Graph view** — D3 force-directed graph showing device nodes (circles) and subject nodes (diamonds) with directional pub/sub links and animated live-traffic indicators. Three view modes (nodes only / node-centric / subject-centric), drag-to-pin with persistent positions, zoom/pan, adjacency highlighting, hide-system / hide-offline / per-node-or-subject hide with a restore badge, inline device rename, gravity bias by total links / channels / rate / payload.
 - **Compare view** — independent graphs for side-by-side multi-series comparison.
 - **DSDL view** — namespace tree of loaded types with bus-activity badges, custom-type editor.
 - **Record view** — capture filtered events into per-recording SQLite stores with limits.
+- **Debug view** — the bus's health and transport diagnostics, and a raw CAN frame monitor (Trace, By ID).
 
 Independent of the views, the **Right log panel** (toggled from the right edge) is a unified timeline of Cyphal diagnostic messages, user-picked text subjects, and the backend's `/api/logs` stream.
 
@@ -198,25 +202,27 @@ The detail panel's plot in `detail-panel.js#renderPlot` is a stack of one mini-p
 
 The plot redraws every `PLOT_TICK_MS` (100ms) while data is live; otherwise the loop pauses until the next user interaction or new event. The tooltip re-evaluates on each render tick at the stored cursor pixel position, so values update in real time as data scrolls under a stationary cursor. Synced crosshairs (in compare view) store a timestamp instead, which is re-broadcast from the source plot each tick.
 
-The legend uses three-zone `<div>` pills: left swatch (click to pick color via native `<input type="color">`), center label (click to toggle visibility), and optional style indicator (click to cycle through 9 line styles: 5 stroke-dasharray + 4 marker shapes) and remove button. Legend items for derived series, thresholds, and compare series carry all four zones. The legend's full DOM is only rebuilt when the underlying series set changes — within a stable set, only classes update.
+The legend uses three-zone `<div>` pills: left swatch (click to pick color via native `<input type="color">`), center label (click to toggle visibility), and optional style indicator (click to cycle through 9 line styles: 5 stroke-dasharray + 4 marker shapes) and remove button. Legend items for derived series, thresholds, and compare series carry all four zones. The legend's full DOM is only rebuilt when the underlying series set changes — within a stable set, only classes update. In Compare the legend is a table (`.plot-legend--table`): each row adds the series' unit and its last, lowest and highest value over the time in view (`_statsInView` in compare-view.js), in fixed-width columns that line up; the values are written into their cells on every draw, so the rows stay put.
 
 ### Compare view
 
-`compare-view.js` provides independent graphs for side-by-side multi-series comparison. Each graph has its own series list, derived series, thresholds, timeline markers, freehand drawings, time window, and animation loop. Graphs are stored in `state.compareGraphs` and persisted in localStorage.
+`compare-view.js` provides independent graphs for side-by-side multi-series comparison. Each graph has its own series list, derived series, thresholds, timeline markers, freehand drawings, time window, and animation loop. Graphs are stored in `state.compareGraphs` and persisted in localStorage. A graph's card is a header (Edit, name, time controls, Save/Clone/Remove), its editing rows (`.compare-card-editor`: the series, derived and threshold rows of `buildComparePanel`, and the display row), folded away under Edit, and its body (`.compare-card-body`): the plot, and a column of controls at its side (`.compare-side`) that shows when the graph is collapsed (`collapsed`, kept with it). Collapsed, the header and editing rows are hidden, the legend is one line of names (CSS only), and the column holds the expand button, a time-window menu, and the pause and Sync buttons, which move there from the header and back. Collapse All / Expand All in the toolbar sets every card through `card._setCollapsed`; `_syncCollapseAll` keeps its label, as `_syncPauseAll` keeps Pause All's.
 
-**Derived series** are computed from raw series at render time via `_computeDerived()`: delta (A−B), ratio (A/B), moving average (windowed), min/max envelope (rolling), and rate of change (Δv/Δt). Each type declares its source count and optional window parameter.
+**Derived series** are computed from raw series at render time via `_computeDerived()`: delta (A−B), ratio (A/B), moving average (windowed), min/max envelope (rolling: at each sample, the lowest and highest of the last N samples, kept in a monotonic queue so it costs one pass), and rate of change (Δv/Δt). Each type declares its source count and optional window parameter (in samples). Add says what a derived series still needs (a series in the graph, Source A or B) and focuses that box, as a threshold's Add does for its value.
 
-**Zoom/pan** is implemented in `bindPlotTooltip`: wheel zoom scales `cfg._zoom` centered on cursor, drag translates `cfg._panOffset`. `computePlotScales` applies zoom and pan to the base X domain. Click toggles pause (with 250ms delay to distinguish from double-click); double-click resets zoom and pan.
+**Zoom/pan** is implemented in `bindPlotTooltip`: Ctrl+wheel zoom scales `cfg._zoom` centered on cursor (the wheel alone scrolls the page), drag translates `cfg._panOffset`. `computePlotScales` applies zoom and pan to the base X domain. With the graph's `clickPauses` on (off by default), a click toggles pause (with 250ms delay to distinguish from double-click); double-click resets zoom and pan.
 
-**Timeline markers** (`cfg.markers[]`) are placed with Shift+click and rendered as vertical dashed lines with labels by `_renderMarkers`. Each marker has a timestamp, label, optional note, color, and line style. Clicking near an existing marker opens an inline edit form (`_openMarkerForm`) with save/delete.
+**Timeline markers** (`cfg.markers[]`) are placed with Shift+click and rendered as vertical dashed lines with labels by `_renderMarkers`. Each marker has a timestamp, label, optional note, color, and line style. Clicking near an existing marker opens an inline edit form (`_openMarkerForm`) with save/delete. The graph's Markers row (`refreshMarks` in `buildComparePanel`) lists the markers by time and counts the drawings; `_syncMarks` refreshes it whenever either changes, and `_showMarker` pauses the graph with a marker in the middle of its window (`pausedAt` = the marker's time + 40% of the window).
 
-**Freehand drawings** (`cfg.drawings[]`) are captured with Alt+drag. Points are stored as `{t, y}` (timestamp + normalized 0–1 panel height) so they scroll with the timeline. Drawing color, width, and dash style are configurable per-graph via toolbar controls. Alt+double-click clears all drawings.
+**Freehand drawings** (`cfg.drawings[]`) are captured with Alt+drag. Points are stored as `{t, y}` (timestamp + normalized 0–1 panel height) so they scroll with the timeline. Drawings and markers are clipped to the plot, as its lines are, so once scrolled past the y-axis they are cut there rather than drawn over it. Drawing color, width, and dash style are configurable per-graph via toolbar controls. Alt+double-click clears all drawings.
+
+**Sync**: graphs with `sync` on share their view. `_shareView(graph)` copies a synced graph's pause (`paused`, `pausedAt`, the resume glide), time window, zoom and pan to the other synced graphs and redraws them; it runs whenever one changes: from its header controls (the `invalidate` they call), from its plot (the restart `bindPlotTooltip` calls after a wheel zoom, drag, double-click or click-pause), from `_showMarker`, and after Pause All, so synced graphs hold one moment. A graph that turns Sync on takes the group's view. Each synced graph also draws the other synced graphs' markers (`_markersShown`, their hover note naming the graph that owns them, where they are edited); when one's markers change, `_syncMarks` redraws the group (`_redrawSynced`), paused graphs included. A synced graph whose next graph (in `state.compareGraphs`, the cards' order) is synced too draws its time axis without labels and with a bottom margin of `PLOT_MARGIN.top`, its plot taking the room (`timeLabels` in `_renderCompareGraphNow`, part of its fingerprint).
 
 **Crosshair sync** uses custom DOM events (`crosshair-sync`, `crosshair-hide`) dispatched on the `.compare-cards` container. Each plot stores both `_cursorMx` (local pixel) and `_syncedT` (received timestamp) and re-evaluates on every render tick.
 
-**Fingerprint-based re-rendering**: `_renderCompareGraphNow` computes a string fingerprint from all render-affecting state (series data, time window, zoom, pan, styles, markers, drawings). If the fingerprint matches the previous render, the function returns early. Any state change invalidates the fingerprint via `cfg._fingerprint = ''`.
+**Fingerprint-based re-rendering**: `_renderCompareGraphNow` computes a string fingerprint from all render-affecting state (series data, time window, zoom, pan, styles, markers, drawings). If the fingerprint matches the previous render, the function returns early. Any state change invalidates the fingerprint via `cfg._fingerprint = ''`. A render draws what the plot shows, not what the history holds: `_pointsToDraw()` keeps a line's points in view (and one beyond each edge), and of a pixel column holding more than two, only its lowest and highest, so no spike is lost. `_linePath()` writes a line in tenths of a pixel as whole numbers, and the path is scaled back by 0.1 (`vector-effect: non-scaling-stroke` keeps its stroke and dashes their size; the lines' group holds the clip): as text, a fraction costs several times a whole number, and that was most of a dense line's redraw. `plotData()` keeps a publisher's points, filtered once, while the field's history stays as it is. Together these halve a redraw of two graphs of six 100 Hz series on a 1920 px screen (10.2 to 5.1 ms, the picture unchanged). The animation timer skips graphs scrolled out of view (an `IntersectionObserver` tracks the cards); they catch up when they come back.
 
-**Presets** save/load named graph configurations. **Export/Import** serializes the full workspace (all graphs + saved configs) as a JSON file.
+**Presets** save/load named graph configurations. **Export/Import** serializes the full workspace (all graphs + saved configs) as a JSON file. A preset, the workspace file, a clone and the persisted settings all hold a graph as `compareGraphConfig()` gives it, and read one back through `sanitizeCompareGraph()`, which keeps what is valid and fills in defaults.
 
 ## Telemetry event format
 
@@ -261,6 +267,8 @@ cynitor/
     replay.py               Recording replay engine (subscriber queues + timing)
     frame_capture.py        Raw CAN frame capture (transport-level tap)
     raw_log.py              Raw CAN logs to candump .log files
+    cyphal_v11.py           Noticing Cyphal v1.1 traffic on the bus
+    bus_errors.py           Errors on the bus, said once and shown while they last
     firmware.py             Firmware updates: file server for bootloaders
     type_guess.py           Guessing a subject's type from its payloads
     requirements.txt        Python runtime deps
@@ -279,7 +287,8 @@ cynitor/
     history-panel.js        Node lifecycle history timeline
     subjects-panel.js       Subject browser (subjects view) with inline service expansion
     graph-view.js           D3 force-directed network topology
-    dsdl-view.js            DSDL Inspector view + custom-type editor
+    dsdl-editor.js          DSDL custom-type editor (opened by dsdl-view.js)
+    dsdl-view.js            DSDL Inspector view
     record-view.js          Record tab: pickers, per-recording cards, export, replay launcher
     replay-strip.js         Replay playback strip: scrub, speed, pause/stop/finish-mode
     debug-view.js           Raw CAN frame debugging view (opt-in capture)

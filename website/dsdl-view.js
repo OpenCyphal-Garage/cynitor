@@ -13,14 +13,9 @@ const DsdlView = (() => {
   let _busRefreshTimer = null;
   let _statusPollTimer = null;
   let _lastDetailData = null;
-  let _editorOpen = false;
-  let _editorMode = 'new';
-  let _editPrefill = null;
-  let _editorSplitRatio = 0.5;
-  let _previewRatio = 0.5;
-  let _customNamespaces = [];
   let _hiddenNamespaces = new Set();
   let _showHidden = false;
+  const _compiling = new Set();  // the scopes ('public', 'custom') compiling now
 
   const init = () => {
     const container = el('dsdlContainer');
@@ -37,34 +32,42 @@ const DsdlView = (() => {
 
   const hide = () => { _stopBusRefresh(); _stopStatusPoll(); };
 
+  // A compiled custom type is not edited: the code the runtime loaded from it
+  // would no longer match it (the server refuses too). It can be deleted,
+  // its compiled code with it, and saved again.
+  const _lockedAdvice = 'Delete it and save it again, or save it under a new version.';
+  const _compiledNote = `Compiled, so it cannot be edited. ${_lockedAdvice}`;
+
+  const _placeholderHtml = `
+    <div class="dsdl-detail-placeholder">
+      <div class="dsdl-detail-placeholder-icon">{&nbsp;}</div>
+      <div class="dsdl-detail-placeholder-text">Select a type to inspect</div>
+    </div>`;
+
   const _buildLayout = () => `
     <div class="dsdl-view">
       <div class="dsdl-split">
         <div class="dsdl-tree-panel" id="dsdlTreePanel">
+          <div class="dsdl-search-wrap">
+            <input type="search" class="dsdl-search" id="dsdlSearch"
+                   placeholder="Search types, fields, constants…" aria-label="Search DSDL types" />
+            <div class="dsdl-search-count" id="dsdlSearchCount" role="status"></div>
+          </div>
           <div class="dsdl-tree-scroll">
             <div class="dsdl-tree-section">
-              <div class="dsdl-section-header" id="dsdlPublicHeader"></div>
-              <div class="dsdl-tree" id="dsdlTree"></div>
+              <div class="dsdl-section-header" id="dsdlCustomHeader"></div>
+              <div class="dsdl-tree" id="dsdlCustomTree" role="tree" aria-label="Custom types"></div>
             </div>
             <div class="dsdl-tree-divider"></div>
             <div class="dsdl-tree-section">
-              <div class="dsdl-section-header" id="dsdlCustomHeader"></div>
-              <div class="dsdl-tree" id="dsdlCustomTree"></div>
+              <div class="dsdl-section-header" id="dsdlPublicHeader"></div>
+              <div class="dsdl-tree" id="dsdlTree" role="tree" aria-label="Public regulated types"></div>
             </div>
-          </div>
-          <div class="dsdl-search-wrap">
-            <input type="text" class="dsdl-search" id="dsdlSearch"
-                   placeholder="Search types or fields…" aria-label="Search DSDL types" />
           </div>
         </div>
         <div class="dsdl-split-handle" id="dsdlSplitHandle"></div>
         <div class="dsdl-detail-area" id="dsdlDetailArea">
-          <div class="dsdl-detail-panel" id="dsdlDetail">
-            <div class="dsdl-detail-placeholder">
-              <div class="dsdl-detail-placeholder-icon">{&nbsp;}</div>
-              <div class="dsdl-detail-placeholder-text">Select a type to inspect</div>
-            </div>
-          </div>
+          <div class="dsdl-detail-panel" id="dsdlDetail">${_placeholderHtml}</div>
         </div>
       </div>
     </div>`;
@@ -78,6 +81,8 @@ const DsdlView = (() => {
       _renderDisconnected();
       return;
     }
+    // A tree already shown stays until the new one arrives.
+    if (!_namespacesData) el('dsdlTree').innerHTML = '<div class="dsdl-tree-empty">Loading types…</div>';
     try {
       const [statusResp, nsResp] = await Promise.all([
         requestJson('/api/dsdl/status'),
@@ -94,10 +99,32 @@ const DsdlView = (() => {
       if (_selectedType) {
         _loadTypeDetail(_selectedType);
         _expandToType(_selectedType);
+      } else {
+        // In place of "Not connected." when the tab was open before connecting.
+        el('dsdlDetail').innerHTML = _placeholderHtml;
       }
     } catch (err) {
       _renderError(err.message);
     }
+  };
+
+  const _reloadTree = async () => {
+    _namespacesData = null;
+    _statusData = null;
+    try {
+      const [statusResp, nsResp] = await Promise.all([
+        requestJson('/api/dsdl/status'),
+        requestJson('/api/dsdl/namespaces'),
+      ]);
+      _statusData = statusResp;
+      _namespacesData = nsResp.namespaces;
+      _buildTelemetryIndex();
+      _renderTreeHeaders();
+      _renderTree();
+      _renderCustomTree();
+      DsdlEditor.lockIfCompiled();
+      if (_selectedType) _loadTypeDetail(_selectedType);
+    } catch {}
   };
 
   const _statusChanged = (a, b) => {
@@ -112,6 +139,7 @@ const DsdlView = (() => {
 
   const _pollStatus = async () => {
     if (!state.dashboardConnected) return;
+    _refreshAges();
     try {
       const fresh = await requestJson('/api/dsdl/status');
       if (_statusChanged(_statusData, fresh)) {
@@ -152,20 +180,26 @@ const DsdlView = (() => {
     const canRecompile = _statusData.public_compilable !== false;
     // A packaged binary unpacks its files at every start, so their age says
     // nothing about when the types were compiled.
-    const age = !canRecompile ? ' · built in'
-      : _statusData.last_public_compiled ? ` · ${_formatAge(_statusData.last_public_compiled)}` : '';
+    const age = !canRecompile ? ' · built in' : _ageHtml(_statusData.last_public_compiled);
 
     header.innerHTML = `
       <span class="dsdl-section-title">Public regulated</span>
       <span class="dsdl-section-count">${count}</span>
       <span class="dsdl-section-right">
-        <span class="dsdl-tree-status"><span class="dsdl-dot ${dot}"></span>${escapeHtml(label)}${escapeHtml(age)}</span>
-        ${canRecompile ? `<button class="dsdl-hdr-btn dsdl-hdr-compile" id="dsdlRecompileBtn" aria-label="Recompile public types" title="Recompile public types">
-          <svg width="10" height="10" viewBox="0 0 12 12"><path d="M1 6a5 5 0 019-2M11 6a5 5 0 01-9 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>
-        </button>` : ''}
+        <span class="dsdl-tree-status"><span class="dsdl-dot ${dot}"></span>${escapeHtml(label)}${age}</span>
+        ${canRecompile ? _compileButtonHtml('dsdlRecompileBtn', 'public', 'Recompile public types') : ''}
       </span>`;
 
-    document.getElementById('dsdlRecompileBtn')?.addEventListener('click', _recompilePublic);
+    document.getElementById('dsdlRecompileBtn')?.addEventListener('click', () => _compile('public'));
+  };
+
+  // A header's compile button, busy (spinning, disabled) while its scope
+  // compiles: drawn from _compiling, it stays busy when a header is redrawn.
+  const _compileButtonHtml = (id, scope, label) => {
+    const busy = _compiling.has(scope);
+    return `<button class="dsdl-hdr-btn dsdl-hdr-compile${busy ? ' dsdl-spin' : ''}" id="${id}" aria-label="${label}" title="${label}"${busy ? ' disabled' : ''}>
+      <svg width="10" height="10" viewBox="0 0 12 12"><path d="M1 6a5 5 0 019-2M11 6a5 5 0 01-9 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>
+    </button>`;
   };
 
   const _renderCustomHeader = () => {
@@ -179,27 +213,26 @@ const DsdlView = (() => {
     const compiled = hasCustom && _isCustomFullyCompiled();
     const dotCls = !hasCustom ? '' : compiled ? 'dsdl-dot-ok' : 'dsdl-dot-warn';
     const statusLabel = !hasCustom ? '' : compiled ? 'Compiled' : 'Not compiled';
-    const age = hasCustom && _statusData?.last_custom_compiled
-      ? ` · ${_formatAge(_statusData.last_custom_compiled)}` : '';
+    const age = hasCustom ? _ageHtml(_statusData?.last_custom_compiled) : '';
     const statusHtml = hasCustom ? `
-      <span class="dsdl-tree-status"><span class="dsdl-dot ${dotCls}"></span>${escapeHtml(statusLabel)}${escapeHtml(age)}</span>
-      <button class="dsdl-hdr-btn dsdl-hdr-compile" id="dsdlCustomCompileBtn" aria-label="Compile custom types" title="Compile custom types">
-        <svg width="10" height="10" viewBox="0 0 12 12"><path d="M1 6a5 5 0 019-2M11 6a5 5 0 01-9 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg>
-      </button>` : '';
+      <span class="dsdl-tree-status"><span class="dsdl-dot ${dotCls}"></span>${escapeHtml(statusLabel)}${age}</span>
+      ${_compileButtonHtml('dsdlCustomCompileBtn', 'custom', 'Compile custom types')}` : '';
 
     header.innerHTML = `
       <span class="dsdl-section-title">Custom</span>
       ${countHtml}
       <span class="dsdl-section-right">
         ${statusHtml}
+        <button class="dsdl-hdr-btn" id="dsdlCustomNewType" title="Write a new type, in a namespace of your own">New type</button>
         <button class="dsdl-hdr-btn" id="dsdlCustomAddNs" aria-label="Add namespace" title="Add namespace">
           <svg width="10" height="10" viewBox="0 0 10 10"><path d="M5 1v8M1 5h8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
           <svg width="10" height="10" viewBox="0 0 16 16"><path d="M2 3h5l2 2h5v8H2z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
         </button>
       </span>`;
 
+    document.getElementById('dsdlCustomNewType')?.addEventListener('click', () => DsdlEditor.openNew());
     document.getElementById('dsdlCustomAddNs')?.addEventListener('click', () => _showNewNamespaceDialog());
-    document.getElementById('dsdlCustomCompileBtn')?.addEventListener('click', _compileCustom);
+    document.getElementById('dsdlCustomCompileBtn')?.addEventListener('click', () => _compile('custom'));
   };
 
   const _isCustomFullyCompiled = () => {
@@ -214,42 +247,49 @@ const DsdlView = (() => {
     return any;
   };
 
-  const _compileCustom = async () => {
-    const btn = document.getElementById('dsdlCustomCompileBtn');
-    if (btn) btn.classList.add('dsdl-spin');
-    _clearCustomCompileError();
+  // One compile per scope ('public', 'custom') at a time.
+  const _compile = async (scope) => {
+    if (_compiling.has(scope)) return;
+    _compiling.add(scope);
+    _renderTreeHeaders();
+    _clearCompileError(scope);
     try {
-      const result = await requestJson('/api/dsdl/compile', {
+      // A failed compile is answered 422: requestJson throws with its error.
+      await requestJson('/api/dsdl/compile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope: 'custom' }),
+        body: JSON.stringify({ scope }),
       });
-      if (!result.ok) {
-        _showCustomCompileError((result.errors || []).join('\n'));
-      }
       await _reloadTree();
     } catch (err) {
-      _showCustomCompileError(err.message);
+      _showCompileError(scope, err.message);
+      // Refused, it may still have compiled the other namespaces: show them.
+      if (err.status === 422) await _reloadTree();
     } finally {
-      if (btn) btn.classList.remove('dsdl-spin');
+      _compiling.delete(scope);
+      _renderTreeHeaders();
     }
   };
 
-  const _showCustomCompileError = (msg) => {
-    const header = document.getElementById('dsdlCustomHeader');
+  // A compile's errors sit under its own section's header: each scope
+  // shows and clears only its own.
+  const _sectionHeader = (scope) => document.getElementById(scope === 'custom' ? 'dsdlCustomHeader' : 'dsdlPublicHeader');
+
+  const _showCompileError = (scope, msg) => {
+    const header = _sectionHeader(scope);
     if (!header) return;
     let errEl = header.parentElement.querySelector('.dsdl-compile-error');
     if (!errEl) {
       errEl = document.createElement('div');
       errEl.className = 'dsdl-compile-error';
+      errEl.setAttribute('role', 'alert');
       header.after(errEl);
     }
     errEl.textContent = msg;
   };
 
-  const _clearCustomCompileError = () => {
-    const section = document.getElementById('dsdlCustomHeader')?.parentElement;
-    section?.querySelector('.dsdl-compile-error')?.remove();
+  const _clearCompileError = (scope) => {
+    _sectionHeader(scope)?.parentElement.querySelector('.dsdl-compile-error')?.remove();
   };
 
   const _formatAge = (timestamp) => {
@@ -258,6 +298,18 @@ const DsdlView = (() => {
     if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
     if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
     return `${Math.floor(seconds / 86400)}d ago`;
+  };
+
+  // " · 5m ago", marked with its time so _refreshAges keeps it true.
+  const _ageHtml = (timestamp) => (timestamp
+    ? `<span data-since="${Number(timestamp)}"> · ${_formatAge(timestamp)}</span>` : '');
+
+  // The headers are redrawn only when the status changes; their ages move
+  // on with the clock in place, leaving their buttons be.
+  const _refreshAges = () => {
+    el('dsdlContainer').querySelectorAll('[data-since]').forEach((span) => {
+      span.textContent = ` · ${_formatAge(Number(span.dataset.since))}`;
+    });
   };
 
   // ------------------------------------------------------------------
@@ -283,6 +335,34 @@ const DsdlView = (() => {
     return custom;
   };
 
+  // Each tree is one Tab stop; the arrows go from row to row (_bindEvents).
+  const _rowKey = (row) => row.dataset.type ?? row.dataset.ns;
+  const _visibleRows = (tree) => [...tree.querySelectorAll('[role="treeitem"]')].filter((row) => row.offsetParent !== null);
+  const _focusedRowKey = (tree) => (tree.contains(document.activeElement) ? _rowKey(document.activeElement) : undefined);
+
+  // After a redraw the Tab stop, and the focus with it, go back to the row
+  // that had the focus; else the stop is on the selected type, or the top.
+  const _setTabStop = (tree, focusedKey) => {
+    const rows = _visibleRows(tree);
+    const focused = focusedKey !== undefined && rows.find((row) => _rowKey(row) === focusedKey);
+    const stop = focused || rows.find((row) => row.classList.contains('dsdl-type-selected')) || rows[0];
+    if (stop) stop.tabIndex = 0;
+    if (focused) focused.focus();
+  };
+
+  const _focusRow = (row) => {
+    if (!row) return;
+    row.closest('[role="tree"]').querySelectorAll('[role="treeitem"][tabindex="0"]').forEach((r) => { r.tabIndex = -1; });
+    row.tabIndex = 0;
+    row.focus();
+  };
+
+  // The namespace row a row sits under, or null at the top.
+  const _parentRow = (row) => {
+    const holder = row.dataset.ns !== undefined ? row.parentElement : row;
+    return holder.parentElement.closest('.dsdl-ns-children')?.previousElementSibling ?? null;
+  };
+
   const _renderTree = () => {
     const container = document.getElementById('dsdlTree');
     if (!container || !_namespacesData) return;
@@ -298,13 +378,15 @@ const DsdlView = (() => {
       container.innerHTML = '<div class="dsdl-tree-empty">No matching types.</div>';
       return;
     }
+    const focusedKey = _focusedRowKey(container);
     container.innerHTML = html;
+    _setTabStop(container, focusedKey);
     _updateBusDots();
   };
 
-  const _renderCustomTree = () => {
+  const _drawCustomTree = () => {
     const container = document.getElementById('dsdlCustomTree');
-    if (!container) return;
+    if (!container || !_namespacesData) return;
 
     const term = _searchTerm.toLowerCase().trim();
     const customNs = _customNamespacesFromTree();
@@ -339,7 +421,9 @@ const DsdlView = (() => {
       container.innerHTML = '<div class="dsdl-tree-empty">No matching custom types.</div>';
       return;
     }
+    const focusedKey = _focusedRowKey(container);
     container.innerHTML = html;
+    _setTabStop(container, focusedKey);
 
     document.getElementById('dsdlToggleHidden')?.addEventListener('click', () => {
       _showHidden = !_showHidden;
@@ -369,6 +453,34 @@ const DsdlView = (() => {
     _updateBusDots();
   };
 
+  // The custom tree is drawn after the public one, wherever both are: the
+  // search's count, of both, follows it.
+  const _renderCustomTree = () => {
+    _drawCustomTree();
+    _updateSearchCount();
+  };
+
+  const _countMatches = (node, term) => _filterTypes(node.types || [], term).length
+    + Object.values(node.children || {}).reduce((n, child) => n + _countMatches(child, term), 0);
+
+  // How many types a search finds; those in hidden namespaces, not shown,
+  // are counted apart.
+  const _updateSearchCount = () => {
+    const count = document.getElementById('dsdlSearchCount');
+    const term = _searchTerm.toLowerCase().trim();
+    if (!count) return;
+    if (!term || !_namespacesData) {
+      count.textContent = '';
+      return;
+    }
+    const shown = document.querySelectorAll('#dsdlTreePanel .dsdl-type-row').length;
+    const custom = _customNamespacesFromTree();
+    const hidden = _showHidden ? 0 : Object.keys(custom).filter((ns) => _hiddenNamespaces.has(ns))
+      .reduce((n, ns) => n + _countMatches(custom[ns], term), 0);
+    const found = shown === 0 ? 'No type matches' : shown === 1 ? '1 type matches' : `${shown} types match`;
+    count.textContent = hidden ? `${found}, ${hidden} more in hidden namespaces` : found;
+  };
+
   const _hasUncompiledTypes = (node) => {
     if (node.types) {
       for (const t of node.types) {
@@ -382,6 +494,9 @@ const DsdlView = (() => {
     }
     return false;
   };
+
+  const _hasTypes = (node) => (node.types || []).length > 0
+    || Object.values(node.children || {}).some(_hasTypes);
 
   const _renderCustomNsNode = (name, fullPath, node, depth, searchTerm, dimmed = false) => {
     const filteredTypes = _filterTypes(node.types || [], searchTerm);
@@ -410,11 +525,12 @@ const DsdlView = (() => {
       const selected = _selectedType === t.full_name ? ' dsdl-type-selected' : '';
       const lockedCls = t.compiled ? ' dsdl-type-compiled' : ' dsdl-type-uncompiled';
       const lockTitle = t.compiled
-        ? ' title="Compiled — locked. Clear python_compiled_messages/ and recompile to edit."'
+        ? ` title="${escapeHtml(_compiledNote)}"`
         : ' title="Not compiled — recompile to load this type into the running runtime."';
       typesHtml += `
         <div class="dsdl-type-row${selected}${lockedCls}" data-type="${escapeHtml(t.full_name)}"${lockTitle}
-             style="padding-left: ${(depth + 1) * 1.125 + 1}rem">
+             role="treeitem" tabindex="-1" aria-selected="${Boolean(selected)}"
+             style="--depth: ${depth + 1}">
           <span class="dsdl-kind ${kindCls}">${kindLabel}</span>
           <span class="dsdl-type-name">${escapeHtml(t.short_name)}</span>
           <span class="dsdl-type-ver">${escapeHtml(t.version)}</span>
@@ -445,6 +561,9 @@ const DsdlView = (() => {
         <svg width="8" height="8" viewBox="0 0 8 8"><path d="M4 1v6M1 4h6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
         <svg width="9" height="9" viewBox="0 0 16 16"><path d="M4 2h8v12H4z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M7 6h2M7 8.5h2" stroke="currentColor" stroke-width="1" stroke-linecap="round"/></svg>
       </button>`}
+      ${dimmed || _hasTypes(node) ? '' : `<button class="dsdl-ns-add" data-delete-ns="${escapeHtml(fullPath)}" title="Delete this empty namespace" aria-label="Delete namespace">
+        <svg width="9" height="9" viewBox="0 0 16 16"><path d="M3 4h10M6 4V2.5h4V4M4.5 4l.7 9.5h5.6l.7-9.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+      </button>`}
       ${hideBtn}
     </span>`;
 
@@ -455,13 +574,14 @@ const DsdlView = (() => {
       return `
         <div class="dsdl-ns${dimCls}">
           <div class="dsdl-ns-row dsdl-ns-custom${uncompiledCls}" data-ns="${escapeHtml(fullPath)}"
-               style="padding-left: ${depth * 1.125 + 0.5}rem">
+               role="treeitem" tabindex="-1" aria-expanded="${Boolean(expanded)}"
+               style="--depth: ${depth}">
             ${chevron}
             <span class="dsdl-ns-label">${escapeHtml(name)}</span>
             ${addBtns}
           </div>
-          <div class="dsdl-ns-children ${expanded ? '' : 'hidden'}">
-            <div class="dsdl-custom-empty" style="padding-left: ${(depth + 1) * 1.125 + 1}rem">Empty</div>
+          <div class="dsdl-ns-children ${expanded ? '' : 'hidden'}" role="group">
+            <div class="dsdl-custom-empty" style="--depth: ${depth + 1}">Empty</div>
           </div>
         </div>`;
     }
@@ -470,12 +590,13 @@ const DsdlView = (() => {
     return `
       <div class="dsdl-ns${dimCls}">
         <div class="dsdl-ns-row dsdl-ns-custom${uncompiledCls}" data-ns="${escapeHtml(fullPath)}"
-             style="padding-left: ${depth * 1.125 + 0.5}rem">
+             role="treeitem" tabindex="-1" aria-expanded="${Boolean(expanded)}"
+             style="--depth: ${depth}">
           ${chevron}
           <span class="dsdl-ns-label">${escapeHtml(name)}</span>
           ${addBtns}
         </div>
-        <div class="dsdl-ns-children ${expanded ? '' : 'hidden'}">
+        <div class="dsdl-ns-children ${expanded ? '' : 'hidden'}" role="group">
           ${typesHtml}
           ${childHtml}
         </div>
@@ -511,7 +632,8 @@ const DsdlView = (() => {
       const selected = _selectedType === t.full_name ? ' dsdl-type-selected' : '';
       typesHtml += `
         <div class="dsdl-type-row${selected}" data-type="${escapeHtml(t.full_name)}"
-             style="padding-left: ${(depth + 1) * 1.125 + 1}rem">
+             role="treeitem" tabindex="-1" aria-selected="${Boolean(selected)}"
+             style="--depth: ${depth + 1}">
           <span class="dsdl-kind ${kindCls}">${kindLabel}</span>
           <span class="dsdl-type-name">${escapeHtml(t.short_name)}</span>
           <span class="dsdl-type-ver">${escapeHtml(t.version)}</span>
@@ -526,26 +648,40 @@ const DsdlView = (() => {
     return `
       <div class="dsdl-ns">
         <div class="dsdl-ns-row" data-ns="${escapeHtml(fullPath)}"
-             style="padding-left: ${depth * 1.125 + 0.5}rem">
+             role="treeitem" tabindex="-1" aria-expanded="${Boolean(expanded)}"
+             style="--depth: ${depth}">
           ${chevron}
           <span class="dsdl-ns-label">${escapeHtml(name)}</span>
         </div>
-        <div class="dsdl-ns-children ${expanded ? '' : 'hidden'}">
+        <div class="dsdl-ns-children ${expanded ? '' : 'hidden'}" role="group">
           ${typesHtml}
           ${childHtml}
         </div>
       </div>`;
   };
 
+  // By name, then by version as numbers (1.9 before 1.10). The server lists
+  // types by file name, so with port-IDs first.
+  const _byNameAndVersion = (a, b) => {
+    const [aMajor, aMinor] = a.version.split('.').map(Number);
+    const [bMajor, bMinor] = b.version.split('.').map(Number);
+    return a.short_name.localeCompare(b.short_name) || aMajor - bMajor || aMinor - bMinor;
+  };
+
+  // The types matching a search, in the order they are listed. A type is
+  // found by its compiled name too ("Heartbeat_1_0"), as messages and
+  // recordings give it (dsdlTypeName, cache.js).
   const _filterTypes = (types, term) => {
-    if (!term) return types;
-    return types.filter(t => {
+    const spelled = term && dsdlTypeName(term);
+    const matching = !term ? types : types.filter(t => {
       if (t.short_name.toLowerCase().includes(term)) return true;
-      if (t.full_name.toLowerCase().includes(term)) return true;
+      if (t.full_name.toLowerCase().includes(term) || t.full_name.toLowerCase().includes(spelled)) return true;
       if (t.fixed_port_id != null && String(t.fixed_port_id).includes(term)) return true;
       if (t.field_names?.some(f => f.toLowerCase().includes(term))) return true;
+      if (t.constant_names?.some(c => c.toLowerCase().includes(term))) return true;
       return false;
     });
+    return [...matching].sort(_byNameAndVersion);
   };
 
   // ------------------------------------------------------------------
@@ -562,10 +698,14 @@ const DsdlView = (() => {
     _busActivityMap = new Map();
     if (!_namespacesData) { _updateBusDots(); return; }
 
+    const known = _getTypeIndex();
     const subjectTypeMap = new Map();
     for (const [subjectId, evt] of state.latestBySubject) {
       if (!evt.message_type) continue;
-      const fullName = _telemetryIndex.get(evt.message_type);
+      // The type it is decoded as, named by its registers, the user or its
+      // fixed port; else its class name, when only one type has it.
+      const named = subjectTypeName(subjectId, evt);
+      const fullName = known[named] ? named : _telemetryIndex.get(evt.message_type);
       if (fullName) subjectTypeMap.set(subjectId, fullName);
     }
 
@@ -595,7 +735,9 @@ const DsdlView = (() => {
     if (!_namespacesData) return;
     const walk = (node) => {
       for (const t of (node.types || [])) {
-        _telemetryIndex.set(_dsdlToTelemetryName(t.full_name), t.full_name);
+        // A class name several types share (Scalar_1_0: 46 of them) names none.
+        const cls = _dsdlToTelemetryName(t.full_name);
+        _telemetryIndex.set(cls, _telemetryIndex.has(cls) ? null : t.full_name);
       }
       for (const child of Object.values(node.children || {})) walk(child);
     };
@@ -638,6 +780,7 @@ const DsdlView = (() => {
   };
 
   let _busExpanded = false;
+  const _BUS_CHIPS_FOLDED = 4;  // the publishers shown before "+N more"
 
   const _updateBusDetail = () => {
     const section = document.getElementById('dsdlBusActivity');
@@ -649,41 +792,22 @@ const DsdlView = (() => {
       return;
     }
     section.classList.remove('hidden');
-    const chips = entries.map(s =>
+    // Folded, the first few and the count of the rest, its button in view.
+    const shown = _busExpanded ? entries : entries.slice(0, _BUS_CHIPS_FOLDED);
+    const chips = shown.map(s =>
       `<span class="dsdl-bus-chip">subject ${s.subjectId} · ${escapeHtml(_formatNodeLabel(s.nodeId))}</span>`
     ).join('');
+    const more = entries.length - shown.length;
+    const toggle = more ? `+${more} more` : entries.length > _BUS_CHIPS_FOLDED ? 'show less' : '';
 
     section.innerHTML = `
       <span class="dsdl-bus-dot"></span>
       <span class="dsdl-bus-label">Active on bus</span>
-      ${chips}`;
-
-    if (!_busExpanded) {
-      section.classList.add('dsdl-bus-collapsed');
-    } else {
-      section.classList.remove('dsdl-bus-collapsed');
-    }
-
-    requestAnimationFrame(() => {
-      const overflows = section.scrollHeight > section.clientHeight + 2;
-      const existing = section.querySelector('.dsdl-bus-toggle');
-      if (overflows && !_busExpanded) {
-        if (!existing) {
-          const btn = document.createElement('button');
-          btn.className = 'dsdl-bus-toggle';
-          btn.textContent = `+${entries.length} more`;
-          btn.addEventListener('click', () => { _busExpanded = true; _updateBusDetail(); });
-          section.appendChild(btn);
-        }
-      } else if (_busExpanded && entries.length > 4) {
-        if (!existing) {
-          const btn = document.createElement('button');
-          btn.className = 'dsdl-bus-toggle';
-          btn.textContent = 'show less';
-          btn.addEventListener('click', () => { _busExpanded = false; _updateBusDetail(); });
-          section.appendChild(btn);
-        }
-      }
+      ${chips}
+      ${toggle ? `<button class="dsdl-bus-toggle" aria-expanded="${_busExpanded}">${toggle}</button>` : ''}`;
+    section.querySelector('.dsdl-bus-toggle')?.addEventListener('click', () => {
+      _busExpanded = !_busExpanded;
+      _updateBusDetail();
     });
   };
 
@@ -742,24 +866,10 @@ const DsdlView = (() => {
 
     _lastDetailData = data;
 
-    let fieldsHtml;
-    if (data.kind === 'service') {
-      fieldsHtml = `
-        <div class="dsdl-card">
-          <div class="dsdl-card-label">Request</div>
-          ${_renderFieldTable(data.fields.request || [])}
-        </div>
-        <div class="dsdl-card">
-          <div class="dsdl-card-label">Response</div>
-          ${_renderFieldTable(data.fields.response || [])}
-        </div>`;
-    } else {
-      fieldsHtml = `
-        <div class="dsdl-card">
-          <div class="dsdl-card-label">Fields</div>
-          ${_renderFieldTable(data.fields || [])}
-        </div>`;
-    }
+    const fieldsHtml = data.kind === 'service'
+      ? _fieldCardHtml('Request', data.fields.request, data.layout?.request)
+        + _fieldCardHtml('Response', data.fields.response, data.layout?.response)
+      : _fieldCardHtml('Fields', data.fields, data.layout);
 
     const constantsHtml = data.constants.length ? `
       <div class="dsdl-card">
@@ -769,29 +879,39 @@ const DsdlView = (() => {
             ${data.constants.map(c => `
               <tr class="dsdl-frow">
                 <td class="dsdl-fcol-type">${escapeHtml(c.type)}</td>
-                <td class="dsdl-fcol-name">${escapeHtml(c.name)}</td>
+                <td class="dsdl-fcol-name">${escapeHtml(c.name)}${_docHtml(c.doc)}</td>
                 <td class="dsdl-fcol-val"><span class="dsdl-const-eq">=</span> ${escapeHtml(c.value)}</td>
               </tr>`).join('')}
           </tbody>
         </table>
       </div>` : '';
 
+    // The type's comment, its first paragraph on one line: what it is for.
+    const summary = (data.doc || '').split(/\n\s*\n/)[0].replace(/\s*\n\s*/g, ' ').trim();
+
     const depsHtml = data.dependencies.length ? `
       <div class="dsdl-inline-section">
         <span class="dsdl-inline-label">Depends on</span>
-        ${data.dependencies.map(d => `<a class="dsdl-dep-chip" data-dep="${escapeHtml(d)}">${escapeHtml(d)}</a>`).join('')}
+        ${data.dependencies.map(d => `<button type="button" class="dsdl-dep-chip" data-dep="${escapeHtml(d)}">${escapeHtml(d)}</button>`).join('')}
       </div>` : '';
 
+    // A type the compiler refuses says why before a compile is tried, the
+    // line at fault marked in its source.
+    const problem = data.problem;
+    const problemHtml = problem ? `
+      <div class="dsdl-problem" role="alert">Does not compile${problem.line ? ` — line ${problem.line}` : ''}: ${escapeHtml(problem.message)}</div>` : '';
     const sourceLines = data.source_text.replace(/\n$/, '').split('\n');
-    const numberedLines = sourceLines.map((line, i) =>
-      `<span class="dsdl-src-num">${i + 1}</span>${escapeHtml(line)}`
-    ).join('\n');
+    const numberedLines = sourceLines.map((line, i) => {
+      const numbered = `<span class="dsdl-src-num">${i + 1}</span>${escapeHtml(line)}`;
+      return problem?.line === i + 1 ? `<span class="dsdl-src-problem">${numbered}</span>` : numbered;
+    }).join('\n');
 
-    const canEdit = data.source === 'custom' && !data.compiled;
-    const actionsHtml = canEdit ? `
+    const actionsHtml = data.source === 'custom' ? `
       <div class="dsdl-doc-actions">
-        <button class="dsdl-editor-btn dsdl-editor-btn-save" id="dsdlEditBtn" aria-label="Edit type">Edit</button>
+        ${data.compiled ? '' : '<button class="dsdl-editor-btn dsdl-editor-btn-save" id="dsdlEditBtn" aria-label="Edit type">Edit</button>'}
+        <button class="dsdl-editor-btn dsdl-editor-btn-save" id="dsdlNewVersionBtn" title="Write its next version, starting from a copy">New version</button>
         <button class="dsdl-editor-btn dsdl-editor-btn-danger" id="dsdlDeleteBtn" aria-label="Delete type">Delete</button>
+        ${data.compiled ? `<span class="dsdl-doc-note">${escapeHtml(_compiledNote)}</span>` : ''}
       </div>` : '';
 
     panel.innerHTML = `
@@ -806,11 +926,14 @@ const DsdlView = (() => {
             ${portBadge}
             <span class="dsdl-badge ${sourceCls}">${sourceLabel}</span>
             <span class="dsdl-badge ${compiledCls}">${compiledLabel}</span>
+            ${data.deprecated ? '<span class="dsdl-badge dsdl-badge-warn">Deprecated</span>' : ''}
           </div>
+          ${summary ? `<p class="dsdl-doc-summary">${escapeHtml(summary)}</p>` : ''}
           ${actionsHtml}
           <div class="dsdl-bus-section hidden" id="dsdlBusActivity"></div>
         </div>
         <div class="dsdl-doc-body">
+          ${problemHtml}
           ${fieldsHtml}
           ${constantsHtml}
           ${depsHtml}
@@ -825,28 +948,55 @@ const DsdlView = (() => {
       link.addEventListener('click', () => _navigateToDependency(link.dataset.dep));
     });
 
-    document.getElementById('dsdlEditBtn')?.addEventListener('click', () => _openEditorEdit(data));
-    document.getElementById('dsdlDeleteBtn')?.addEventListener('click', () => _confirmDeleteType(data.full_name));
+    document.getElementById('dsdlEditBtn')?.addEventListener('click', () => DsdlEditor.openEdit(data));
+    document.getElementById('dsdlNewVersionBtn')?.addEventListener('click', () => DsdlEditor.openNewVersion(data));
+    document.getElementById('dsdlDeleteBtn')?.addEventListener('click', () => _confirmDeleteType(data.full_name, data.compiled));
 
     _updateBusDetail();
 
-    if (_editorOpen) {
-      const editorHandle = document.getElementById('dsdlEditorHandle');
-      if (editorHandle) editorHandle.style.display = '';
-      const editorPanel = document.getElementById('dsdlEditorPanel');
-      const detail = document.getElementById('dsdlDetail');
-      if (editorPanel) editorPanel.style.flex = `0 0 ${_editorSplitRatio * 100}%`;
-      if (detail) detail.style.flex = '1';
-    }
+    // An editor open alone now has a type to share the area with.
+    document.getElementById('dsdlDetailArea')?.classList.remove('dsdl-editor-alone');
   };
+
+  // "7 bytes · extent 12 bytes", "1–259 bytes · sealed": what a type takes
+  // on the wire, then sealed, or how far a later version may grow it.
+  const _layoutText = (layout) => {
+    const [low, high] = layout.size_bytes;
+    const size = low === high ? `${low} ${low === 1 ? 'byte' : 'bytes'}` : `${low}–${high} bytes`;
+    return `${size} · ${layout.sealed ? 'sealed' : `extent ${layout.extent_bytes} bytes`}`;
+  };
+
+  // A card of fields, titled "one of" for a union, its size beside the title.
+  const _fieldCardHtml = (title, fields, layout) => {
+    const union = Boolean(layout?.union);
+    const heading = !union ? title : title === 'Fields' ? 'One of' : `${title}, one of`;
+    const hint = union ? ' title="A union: it holds one of these fields at a time"' : '';
+    const meta = layout ? `<span class="dsdl-card-meta">${escapeHtml(_layoutText(layout))}</span>` : '';
+    return `
+      <div class="dsdl-card">
+        <div class="dsdl-card-label"${hint}>${heading}${meta}</div>
+        ${_renderFieldTable(fields || [])}
+      </div>`;
+  };
+
+  // A comment under a field's or constant's name: its first line (often a
+  // unit, "[second]"), the whole of it on hover.
+  const _docHtml = (doc) => {
+    const first = (doc || '').split('\n').find((line) => line.trim())?.trim();
+    return first ? `<div class="dsdl-fcol-doc" title="${escapeHtml(doc)}">${escapeHtml(first)}</div>` : '';
+  };
+
+  // A field's type, free to wrap after the dots between its names in a
+  // narrow pane ("uavcan.si.unit." over "Scalar.1.0"), not inside a version.
+  const _fieldTypeHtml = (type) => escapeHtml(type).replace(/\.(?=[A-Za-z_])/g, '.<wbr>');
 
   const _renderFieldTable = (fields) => {
     if (!fields.length) return '<div class="dsdl-field-empty">No fields</div>';
     return `<table class="dsdl-ftable"><tbody>
       ${fields.map(f => `
         <tr class="dsdl-frow">
-          <td class="dsdl-fcol-type">${escapeHtml(f.type)}</td>
-          <td class="dsdl-fcol-name">${escapeHtml(f.name)}</td>
+          <td class="dsdl-fcol-type">${_fieldTypeHtml(f.type)}</td>
+          <td class="dsdl-fcol-name">${escapeHtml(f.name)}${_docHtml(f.doc)}</td>
         </tr>`).join('')}
     </tbody></table>`;
   };
@@ -854,6 +1004,7 @@ const DsdlView = (() => {
   const _highlightSelected = () => {
     document.querySelectorAll('.dsdl-type-row').forEach(el => {
       el.classList.toggle('dsdl-type-selected', el.dataset.type === _selectedType);
+      el.setAttribute('aria-selected', String(el.dataset.type === _selectedType));
     });
   };
 
@@ -896,6 +1047,47 @@ const DsdlView = (() => {
     });
   };
 
+  const _confirmDeleteType = (fullName, compiled) => {
+    const panel = document.getElementById('dsdlDetail');
+    if (!panel) return;
+    panel.querySelector('.dsdl-confirm-bar')?.remove();
+    const bar = document.createElement('div');
+    bar.className = 'dsdl-inline-dialog dsdl-confirm-bar';
+    bar.innerHTML = `
+      <span class="dsdl-confirm-text">Delete <code class="dsdl-confirm-code">${escapeHtml(fullName)}</code>${compiled ? ' and its compiled code' : ''}?</span>
+      <button class="dsdl-dialog-ok dsdl-dialog-danger" id="dsdlDelOk">Delete</button>
+      <button class="dsdl-dialog-cancel" id="dsdlDelCancel" aria-label="Cancel delete">&times;</button>`;
+    panel.insertBefore(bar, panel.firstChild);
+    // The bar stays until the server answers: deleted, the type's pane goes
+    // with it; refused, the bar says why.
+    const ok = document.getElementById('dsdlDelOk');
+    ok?.addEventListener('click', async () => {
+      ok.disabled = true;
+      const refused = await _deleteType(fullName);
+      if (refused) {
+        ok.disabled = false;
+        _showDialogError(bar, refused);
+      }
+    });
+    document.getElementById('dsdlDelCancel')?.addEventListener('click', () => bar.remove());
+  };
+
+  // Deletes a custom type; returns why not when the server refuses.
+  const _deleteType = async (fullName) => {
+    try {
+      await requestJson(`/api/dsdl/custom/type/${encodeURIComponent(fullName)}`, { method: 'DELETE' });
+    } catch (err) {
+      return err.message;
+    }
+    DsdlEditor.closeIfEditing(fullName);
+    _selectedType = null;
+    _lastDetailData = null;
+    _saveDsdlState();
+    const panel = document.getElementById('dsdlDetail');
+    if (panel) panel.innerHTML = _placeholderHtml;
+    await _reloadTree();
+  };
+
   // ------------------------------------------------------------------
   // Namespace dialog
   // ------------------------------------------------------------------
@@ -914,7 +1106,7 @@ const DsdlView = (() => {
       <input type="text" class="dsdl-dialog-input" id="dsdlNsInput"
              placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(prefix)}" aria-label="Namespace name" />
       <button class="dsdl-dialog-ok" id="dsdlNsOk">Create</button>
-      <button class="dsdl-dialog-cancel" id="dsdlNsCancel">&times;</button>`;
+      <button class="dsdl-dialog-cancel" id="dsdlNsCancel" aria-label="Cancel">&times;</button>`;
 
     const anchor = document.getElementById('dsdlCustomHeader');
     anchor?.after(dialog);
@@ -937,7 +1129,7 @@ const DsdlView = (() => {
         _expandedNodes.add(ns.split('.')[0]);
         _renderCustomTree();
       } catch (err) {
-        _showEditorToast(err.message, true);
+        _showDialogError(dialog, err.message);
       }
     });
 
@@ -948,540 +1140,29 @@ const DsdlView = (() => {
     });
   };
 
-  // ------------------------------------------------------------------
-  // Editor panel
-  // ------------------------------------------------------------------
-
-  const _openEditorNew = async (prefilledNs) => {
-    _editorOpen = true;
-    _editorMode = 'new';
-    _editPrefill = null;
+  // An empty custom namespace goes at once: there is nothing in it to lose.
+  const _deleteNamespace = async (namespace) => {
     try {
-      const resp = await requestJson('/api/dsdl/custom/namespaces');
-      _customNamespaces = resp.namespaces || [];
-    } catch { _customNamespaces = []; }
-    _renderEditorSplit(prefilledNs);
-  };
-
-  const _confirmDeleteType = (fullName) => {
-    const panel = document.getElementById('dsdlDetail');
-    if (!panel) return;
-    panel.querySelector('.dsdl-confirm-bar')?.remove();
-    const bar = document.createElement('div');
-    bar.className = 'dsdl-inline-dialog dsdl-confirm-bar';
-    bar.innerHTML = `
-      <span class="dsdl-confirm-text">Delete <code class="dsdl-confirm-code">${escapeHtml(fullName)}</code>?</span>
-      <button class="dsdl-dialog-ok dsdl-dialog-danger" id="dsdlDelOk">Delete</button>
-      <button class="dsdl-dialog-cancel" id="dsdlDelCancel" aria-label="Cancel delete">&times;</button>`;
-    panel.insertBefore(bar, panel.firstChild);
-    document.getElementById('dsdlDelOk')?.addEventListener('click', async () => {
-      bar.remove();
-      await _deleteType(fullName);
-    });
-    document.getElementById('dsdlDelCancel')?.addEventListener('click', () => bar.remove());
-  };
-
-  const _deleteType = async (fullName) => {
-    try {
-      await requestJson(`/api/dsdl/custom/type/${encodeURIComponent(fullName)}`, { method: 'DELETE' });
+      await requestJson(`/api/dsdl/custom/namespace/${encodeURIComponent(namespace)}`, { method: 'DELETE' });
     } catch (err) {
-      _showEditorToast(err.message, true);
+      showToast(err.message, 'error');
       return;
     }
-    if (_editorOpen && _editorMode === 'edit' && _editPrefill?.full_name === fullName) {
-      _closeEditor();
-      _editorMode = 'new';
-      _editPrefill = null;
-    }
-    _selectedType = null;
-    _lastDetailData = null;
+    _hiddenNamespaces.delete(namespace);
     _saveDsdlState();
-    const panel = document.getElementById('dsdlDetail');
-    if (panel) {
-      panel.innerHTML = `
-        <div class="dsdl-detail-placeholder">
-          <div class="dsdl-detail-placeholder-icon">{&nbsp;}</div>
-          <div class="dsdl-detail-placeholder-text">Select a type to inspect</div>
-        </div>`;
-    }
     await _reloadTree();
   };
 
-  const _openEditorEdit = async (typeData) => {
-    _editorOpen = true;
-    _editorMode = 'edit';
-    _editPrefill = {
-      namespace: typeData.namespace,
-      type_name: typeData.short_name,
-      version: typeData.version,
-      source_text: typeData.source_text || '',
-      fixed_port_id: typeData.fixed_port_id,
-      full_name: typeData.full_name,
-    };
-    try {
-      const resp = await requestJson('/api/dsdl/custom/namespaces');
-      _customNamespaces = resp.namespaces || [];
-    } catch { _customNamespaces = []; }
-    _renderEditorSplit(typeData.namespace);
-  };
-
-  const _closeEditor = () => {
-    _editorOpen = false;
-    const area = document.getElementById('dsdlDetailArea');
-    if (!area) return;
-
-    const editorPanel = document.getElementById('dsdlEditorPanel');
-    const editorHandle = document.getElementById('dsdlEditorHandle');
-    if (editorPanel) editorPanel.remove();
-    if (editorHandle) editorHandle.remove();
-
-    const detail = document.getElementById('dsdlDetail');
-    if (detail) detail.style.flex = '';
-  };
-
-  const _renderEditorSplit = (prefilledNs) => {
-    const area = document.getElementById('dsdlDetailArea');
-    if (!area) return;
-
-    let editorPanel = document.getElementById('dsdlEditorPanel');
-    if (!editorPanel) {
-      editorPanel = document.createElement('div');
-      editorPanel.id = 'dsdlEditorPanel';
-      editorPanel.className = 'dsdl-editor-panel';
-      area.insertBefore(editorPanel, area.firstChild);
-
-      const handle = document.createElement('div');
-      handle.id = 'dsdlEditorHandle';
-      handle.className = 'dsdl-editor-handle';
-      area.insertBefore(handle, editorPanel.nextSibling);
-
-      _initEditorDrag();
+  // An error said in the inline dialog it answers, on a line of its own.
+  const _showDialogError = (dialog, msg) => {
+    let line = dialog.querySelector('.dsdl-dialog-error');
+    if (!line) {
+      line = document.createElement('div');
+      line.className = 'dsdl-dialog-error';
+      line.setAttribute('role', 'alert');
+      dialog.appendChild(line);
     }
-
-    const detail = document.getElementById('dsdlDetail');
-    const hasDetail = _selectedType && _lastDetailData;
-    const editorHandle = document.getElementById('dsdlEditorHandle');
-    if (hasDetail) {
-      editorPanel.style.flex = `0 0 ${_editorSplitRatio * 100}%`;
-      if (detail) detail.style.flex = '1';
-      if (editorHandle) editorHandle.style.display = '';
-    } else {
-      editorPanel.style.flex = '1';
-      if (detail) detail.style.flex = '0 0 0';
-      if (editorHandle) editorHandle.style.display = 'none';
-    }
-
-    const isEdit = _editorMode === 'edit';
-    const prefill = _editPrefill || {};
-    const nameValue = isEdit ? (prefill.type_name || '') : '';
-    const versionValue = isEdit ? (prefill.version || '1.0') : '1.0';
-    const portValue = isEdit && prefill.fixed_port_id != null ? String(prefill.fixed_port_id) : '';
-    const sourceValue = isEdit ? (prefill.source_text || '') : '';
-    const lockAttr = isEdit ? ' disabled' : '';
-    const titleText = isEdit ? 'Edit DSDL Type' : 'New DSDL Type';
-    const saveLabel = isEdit ? 'Save changes' : 'Save';
-
-    const nsOptions = _customNamespaces.map(ns => {
-      const sel = (prefilledNs && ns === prefilledNs) ? ' selected' : '';
-      return `<option value="${escapeHtml(ns)}"${sel}>${escapeHtml(ns)}</option>`;
-    }).join('');
-    const nsHint = (!isEdit && _customNamespaces.length === 0)
-      ? `<div class="dsdl-editor-hint">No namespaces yet — create one with the “+” button in the Custom section.</div>`
-      : '';
-
-    const policyTip = "Only types that aren't compiled can be edited or deleted. Compiled types are loaded by the running CAN runtime — changing them would diverge source from live code. Recompile (or clear python_compiled_messages/) to free a type for editing.";
-
-    editorPanel.innerHTML = `
-      <div class="dsdl-editor-toolbar">
-        <span class="dsdl-editor-title">${titleText}</span>
-        <span class="dsdl-editor-toolbar-actions">
-          <span class="dsdl-editor-status" id="dsdlEditorStatus"></span>
-          <span class="dsdl-info-tip" tabindex="0" aria-label="Save policy" data-tip="${escapeHtml(policyTip)}">?</span>
-          <button class="dsdl-editor-btn dsdl-editor-btn-save" id="dsdlEditorSave">${saveLabel}</button>
-          <button class="dsdl-editor-close" id="dsdlEditorClose" aria-label="Close editor">&times;</button>
-        </span>
-      </div>
-      <div class="dsdl-editor-form">
-        ${nsHint}
-        <div class="dsdl-editor-row">
-          <label class="dsdl-editor-label">Namespace</label>
-          <div class="dsdl-editor-ns-wrap">
-            <select class="dsdl-editor-select" id="dsdlEditorNs"${lockAttr}>
-              <option value="">— select —</option>
-              ${nsOptions}
-            </select>
-          </div>
-        </div>
-        <div class="dsdl-editor-row dsdl-editor-row-inline">
-          <div>
-            <label class="dsdl-editor-label">Type name</label>
-            <input type="text" class="dsdl-editor-input" id="dsdlEditorName" placeholder="MyMessage" value="${escapeHtml(nameValue)}"${lockAttr} />
-          </div>
-          <div>
-            <label class="dsdl-editor-label">Version</label>
-            <input type="text" class="dsdl-editor-input dsdl-editor-ver" id="dsdlEditorVer" placeholder="1.0" value="${escapeHtml(versionValue)}"${lockAttr} />
-          </div>
-          <div>
-            <label class="dsdl-editor-label">Port ID</label>
-            <input type="text" class="dsdl-editor-input dsdl-editor-port" id="dsdlEditorPort" placeholder="optional" value="${escapeHtml(portValue)}" />
-          </div>
-        </div>
-        <div class="dsdl-editor-row dsdl-editor-row-grow">
-          <label class="dsdl-editor-label">Source</label>
-          <div class="dsdl-editor-source-wrap" id="dsdlEditorSourceWrap">
-            <textarea class="dsdl-editor-source" id="dsdlEditorSource" spellcheck="false"
-                      placeholder="# Write your DSDL definition here&#10;uint32 my_field&#10;float32 temperature&#10;# add --- to split request/response for a service">${escapeHtml(sourceValue)}</textarea>
-            <div class="dsdl-editor-preview-handle" id="dsdlPreviewHandle"></div>
-            <div class="dsdl-editor-preview" id="dsdlEditorPreview">
-              <div class="dsdl-editor-preview-label">Preview</div>
-              <div class="dsdl-editor-preview-content" id="dsdlPreviewContent">
-                <div class="dsdl-custom-empty">Type DSDL source above</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>`;
-
-    if (isEdit && sourceValue) _updatePreview(sourceValue);
-
-    document.getElementById('dsdlEditorClose')?.addEventListener('click', _closeEditor);
-    document.getElementById('dsdlEditorSave')?.addEventListener('click', _saveType);
-
-    const sourceEl = document.getElementById('dsdlEditorSource');
-    let previewTimer;
-    sourceEl?.addEventListener('input', () => {
-      clearTimeout(previewTimer);
-      previewTimer = setTimeout(() => _updatePreview(sourceEl.value), 250);
-    });
-
-    _initPreviewDrag();
-    _applyPreviewRatio();
-  };
-
-  const _getEditorNamespace = () => {
-    const select = document.getElementById('dsdlEditorNs');
-    return select?.value || '';
-  };
-
-  const _parseDsdlSource = (text) => {
-    const fieldRe = /^(?:truncated\s+|saturated\s+)?(\S+)\s+([a-zA-Z_]\w*)(?:\s*=\s*([^#]+))?/;
-    let kind = 'message';
-    let section = 'message';
-    const fields = { message: [] };
-    const constants = [];
-
-    for (const line of text.split('\n')) {
-      const s = line.trim();
-      if (s === '---') {
-        kind = 'service';
-        fields.request = fields.message || [];
-        delete fields.message;
-        fields.response = [];
-        section = 'response';
-        continue;
-      }
-      if (!s || s.startsWith('#') || s.startsWith('@')) continue;
-      const m = s.match(fieldRe);
-      if (!m) continue;
-      const [, type, name, value] = m;
-      if (value !== undefined) { constants.push({ type, name, value: value.trim() }); continue; }
-      if (type.startsWith('void')) continue;
-      if (!fields[section]) fields[section] = [];
-      fields[section].push({ type, name });
-    }
-
-    return {
-      kind,
-      fields: kind === 'service'
-        ? { request: fields.request || [], response: fields.response || [] }
-        : fields.message || [],
-      constants,
-    };
-  };
-
-  const _updatePreview = (sourceText) => {
-    const content = document.getElementById('dsdlPreviewContent');
-    if (!content) return;
-
-    if (!sourceText.trim()) {
-      content.innerHTML = '<div class="dsdl-custom-empty">Type DSDL source above</div>';
-      return;
-    }
-
-    const parsed = _parseDsdlSource(sourceText);
-    const isService = parsed.kind === 'service';
-    const kindLabel = isService ? 'Service' : 'Message';
-    const kindCls = isService ? 'dsdl-badge-service' : 'dsdl-badge-message';
-
-    let fieldsHtml;
-    if (isService) {
-      fieldsHtml = `
-        <div class="dsdl-preview-section dsdl-preview-section-req">
-          <span class="dsdl-preview-label dsdl-preview-label-req">Request</span>
-          ${_renderPreviewFields(parsed.fields.request)}
-        </div>
-        <div class="dsdl-preview-divider" aria-hidden="true">⎯ ⎯ ⎯</div>
-        <div class="dsdl-preview-section dsdl-preview-section-res">
-          <span class="dsdl-preview-label dsdl-preview-label-res">Response</span>
-          ${_renderPreviewFields(parsed.fields.response)}
-        </div>`;
-    } else {
-      fieldsHtml = `
-        <div class="dsdl-preview-section">
-          <span class="dsdl-preview-label">Fields</span>
-          ${_renderPreviewFields(parsed.fields)}
-        </div>`;
-    }
-
-    const constHtml = parsed.constants.length ? `
-      <div class="dsdl-preview-section">
-        <span class="dsdl-preview-label">Constants</span>
-        <table class="dsdl-ftable"><tbody>
-          ${parsed.constants.map(c => `<tr class="dsdl-frow">
-            <td class="dsdl-fcol-type">${escapeHtml(c.type)}</td>
-            <td class="dsdl-fcol-name">${escapeHtml(c.name)}</td>
-            <td class="dsdl-fcol-val"><span class="dsdl-const-eq">=</span> ${escapeHtml(c.value)}</td>
-          </tr>`).join('')}
-        </tbody></table>
-      </div>` : '';
-
-    content.innerHTML = `
-      <div class="dsdl-preview-header"><span class="dsdl-badge ${kindCls}">${kindLabel}</span></div>
-      ${fieldsHtml}${constHtml}`;
-  };
-
-  const _renderPreviewFields = (fields) => {
-    if (!fields.length) return '<div class="dsdl-custom-empty">No fields</div>';
-    return `<table class="dsdl-ftable"><tbody>
-      ${fields.map(f => `<tr class="dsdl-frow">
-        <td class="dsdl-fcol-type">${escapeHtml(f.type)}</td>
-        <td class="dsdl-fcol-name">${escapeHtml(f.name)}</td>
-      </tr>`).join('')}
-    </tbody></table>`;
-  };
-
-  const _applyPreviewRatio = () => {
-    const wrap = document.getElementById('dsdlEditorSourceWrap');
-    const source = document.getElementById('dsdlEditorSource');
-    const preview = document.getElementById('dsdlEditorPreview');
-    if (!wrap || !source || !preview) return;
-    source.style.flex = `${_previewRatio}`;
-    preview.style.flex = `${1 - _previewRatio}`;
-  };
-
-  const _initPreviewDrag = () => {
-    const handle = document.getElementById('dsdlPreviewHandle');
-    const wrap = document.getElementById('dsdlEditorSourceWrap');
-    if (!handle || !wrap) return;
-
-    let dragging = false;
-
-    handle.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      dragging = true;
-      handle.classList.add('dragging');
-      document.body.style.cursor = 'row-resize';
-      document.body.style.userSelect = 'none';
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
-    });
-
-    const onMove = (e) => {
-      if (!dragging) return;
-      const rect = wrap.getBoundingClientRect();
-      const y = e.clientY - rect.top;
-      _previewRatio = Math.max(0.15, Math.min(0.85, y / rect.height));
-      _applyPreviewRatio();
-    };
-
-    const onUp = () => {
-      dragging = false;
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      handle.classList.remove('dragging');
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
-  };
-
-  const _saveType = async () => {
-    const namespace = _getEditorNamespace();
-    const typeName = document.getElementById('dsdlEditorName')?.value.trim();
-    const version = document.getElementById('dsdlEditorVer')?.value.trim();
-    const source = document.getElementById('dsdlEditorSource')?.value;
-    const portStr = document.getElementById('dsdlEditorPort')?.value.trim();
-    const portId = portStr ? parseInt(portStr, 10) : null;
-
-    if (!namespace || !typeName || !version || !source) {
-      _showEditorToast('Fill in namespace, name, version, and source', true);
-      return;
-    }
-
-    const status = document.getElementById('dsdlEditorStatus');
-    if (status) { status.textContent = 'Saving…'; status.className = 'dsdl-editor-status'; }
-
-    try {
-      const overwrite = _editorMode === 'edit';
-      await requestJson('/api/dsdl/custom/type', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          namespace, type_name: typeName, version,
-          source_text: source, fixed_port_id: portId, overwrite,
-        }),
-      });
-
-      const fullName = `${namespace}.${typeName}.${version}`;
-      _editPrefill = {
-        namespace,
-        type_name: typeName,
-        version,
-        source_text: source,
-        fixed_port_id: portId,
-        full_name: fullName,
-      };
-
-      _showEditorToast('Saved', false);
-      await _reloadTree();
-      _loadTypeDetail(fullName);
-      _expandToType(fullName);
-    } catch (err) {
-      _showEditorToast(err.message, true);
-    }
-  };
-
-  const _reloadTree = async () => {
-    _namespacesData = null;
-    _statusData = null;
-    try {
-      const [statusResp, nsResp] = await Promise.all([
-        requestJson('/api/dsdl/status'),
-        requestJson('/api/dsdl/namespaces'),
-      ]);
-      _statusData = statusResp;
-      _namespacesData = nsResp.namespaces;
-      _buildTelemetryIndex();
-      _renderTreeHeaders();
-      _renderTree();
-      _renderCustomTree();
-      _lockEditorIfCompiled();
-      if (_selectedType) _loadTypeDetail(_selectedType);
-    } catch {}
-  };
-
-  const _lockEditorIfCompiled = () => {
-    if (!_editorOpen || !_editPrefill?.full_name) return;
-    const fresh = _getTypeIndex()[_editPrefill.full_name];
-    if (!fresh || !fresh.compiled) return;
-
-    const panel = document.getElementById('dsdlEditorPanel');
-    if (!panel || panel.classList.contains('dsdl-editor-locked')) return;
-    panel.classList.add('dsdl-editor-locked');
-
-    panel.querySelectorAll('input, textarea, select, button:not(.dsdl-editor-close)').forEach(el => {
-      el.disabled = true;
-    });
-
-    const form = panel.querySelector('.dsdl-editor-form');
-    if (form && !panel.querySelector('.dsdl-editor-locked-banner')) {
-      const banner = document.createElement('div');
-      banner.className = 'dsdl-editor-locked-banner';
-      banner.textContent = 'This type was compiled — editing is locked. Clear python_compiled_messages/ and recompile to edit it again.';
-      panel.insertBefore(banner, form);
-    }
-  };
-
-  const _recompilePublic = async () => {
-    const btn = document.getElementById('dsdlRecompileBtn');
-    if (btn) btn.classList.add('dsdl-spin');
-    _clearCompileError();
-    try {
-      const result = await requestJson('/api/dsdl/compile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope: 'public' }),
-      });
-      if (!result.ok) {
-        _showCompileError((result.errors || []).join('\n'));
-      }
-      await _reloadTree();
-    } catch (err) {
-      _showCompileError(err.message);
-    } finally {
-      if (btn) btn.classList.remove('dsdl-spin');
-    }
-  };
-
-  const _showCompileError = (msg) => {
-    const header = document.getElementById('dsdlPublicHeader');
-    if (!header) return;
-    let errEl = header.parentElement.querySelector('.dsdl-compile-error');
-    if (!errEl) {
-      errEl = document.createElement('div');
-      errEl.className = 'dsdl-compile-error';
-      header.after(errEl);
-    }
-    errEl.textContent = msg;
-  };
-
-  const _clearCompileError = () => {
-    document.querySelector('.dsdl-compile-error')?.remove();
-  };
-
-  const _showEditorToast = (msg, isError) => {
-    const status = document.getElementById('dsdlEditorStatus');
-    if (status) {
-      status.textContent = msg;
-      status.className = `dsdl-editor-status ${isError ? 'dsdl-editor-error' : 'dsdl-editor-ok'}`;
-      setTimeout(() => { if (status.textContent === msg) status.textContent = ''; }, 5000);
-      return;
-    }
-    const tree = document.getElementById('dsdlTree');
-    if (!tree) return;
-    const toast = document.createElement('div');
-    toast.className = `dsdl-toast ${isError ? 'dsdl-toast-error' : 'dsdl-toast-ok'}`;
-    toast.textContent = msg;
-    tree.parentElement.appendChild(toast);
-    setTimeout(() => toast.remove(), 4000);
-  };
-
-  const _initEditorDrag = () => {
-    const handle = document.getElementById('dsdlEditorHandle');
-    const area = document.getElementById('dsdlDetailArea');
-    if (!handle || !area) return;
-
-    let dragging = false;
-
-    handle.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      dragging = true;
-      handle.classList.add('dragging');
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
-    });
-
-    const onMove = (e) => {
-      if (!dragging) return;
-      const rect = area.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const ratio = Math.max(0.15, Math.min(0.85, x / rect.width));
-      _editorSplitRatio = ratio;
-      const editor = document.getElementById('dsdlEditorPanel');
-      const detail = document.getElementById('dsdlDetail');
-      if (editor) editor.style.flex = `0 0 ${ratio * 100}%`;
-      if (detail) detail.style.flex = '1';
-    };
-
-    const onUp = () => {
-      dragging = false;
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      handle.classList.remove('dragging');
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
+    line.textContent = msg;
   };
 
   // ------------------------------------------------------------------
@@ -1511,7 +1192,13 @@ const DsdlView = (() => {
       const addTypeBtn = e.target.closest('[data-add-type]');
       if (addTypeBtn) {
         e.stopPropagation();
-        _openEditorNew(addTypeBtn.dataset.addType);
+        DsdlEditor.openNew(addTypeBtn.dataset.addType);
+        return;
+      }
+      const deleteNsBtn = e.target.closest('[data-delete-ns]');
+      if (deleteNsBtn) {
+        e.stopPropagation();
+        _deleteNamespace(deleteNsBtn.dataset.deleteNs);
         return;
       }
       const nsRow = e.target.closest('.dsdl-ns-row');
@@ -1528,8 +1215,34 @@ const DsdlView = (() => {
       if (typeRow) _loadTypeDetail(typeRow.dataset.type);
     };
 
+    // ↑/↓ row to row, Home/End, → opens a namespace or goes into it,
+    // ← closes it or goes to its parent, Enter/Space as a click.
+    const treeKeys = (e) => {
+      const row = e.target;
+      if (row.getAttribute('role') !== 'treeitem') return;  // a key on a row's button is the button's
+      const rows = _visibleRows(e.currentTarget);
+      const at = rows.indexOf(row);
+      const expanded = row.getAttribute('aria-expanded');
+      const keys = {
+        ArrowDown: () => _focusRow(rows[at + 1]),
+        ArrowUp: () => _focusRow(rows[at - 1]),
+        Home: () => _focusRow(rows[0]),
+        End: () => _focusRow(rows[rows.length - 1]),
+        ArrowRight: () => (expanded === 'false' ? row.click()
+          : _focusRow(row.nextElementSibling?.querySelector('[role="treeitem"]'))),
+        ArrowLeft: () => (expanded === 'true' ? row.click() : _focusRow(_parentRow(row))),
+        Enter: () => row.click(),
+        ' ': () => row.click(),
+      };
+      if (!keys[e.key]) return;
+      e.preventDefault();
+      keys[e.key]();
+    };
+
     document.getElementById('dsdlTree')?.addEventListener('click', treeHandler);
     document.getElementById('dsdlCustomTree')?.addEventListener('click', treeHandler);
+    document.getElementById('dsdlTree')?.addEventListener('keydown', treeKeys);
+    document.getElementById('dsdlCustomTree')?.addEventListener('keydown', treeKeys);
 
     _initSplitDrag();
   };
@@ -1538,15 +1251,20 @@ const DsdlView = (() => {
   // Split drag handle
   // ------------------------------------------------------------------
 
+  const _remPx = () => parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+
+  // The tree's width, dragged at the split: in rem, 11.25 to 37.5.
+  const _setTreeWidth = (rem) => {
+    _treeWidth = Math.max(11.25, Math.min(37.5, rem));
+    document.getElementById('dsdlTreePanel')?.style.setProperty('--dsdl-tree-width', `${_treeWidth}rem`);
+  };
+
   const _initSplitDrag = () => {
     const handle = document.getElementById('dsdlSplitHandle');
     const panel = document.getElementById('dsdlTreePanel');
     if (!handle || !panel) return;
 
-    const saved = _loadDsdlState();
-    if (saved.treeWidth) {
-      panel.style.width = saved.treeWidth + 'px';
-    }
+    if (_treeWidth) _setTreeWidth(_treeWidth);
 
     let startX, startW;
 
@@ -1555,25 +1273,18 @@ const DsdlView = (() => {
       startX = e.clientX;
       startW = panel.getBoundingClientRect().width;
       handle.classList.add('dragging');
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
+      document.body.classList.add('dsdl-resizing-col');
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
     });
 
-    const onMove = (e) => {
-      const dx = e.clientX - startX;
-      const newW = Math.max(180, Math.min(600, startW + dx));
-      panel.style.width = newW + 'px';
-    };
+    const onMove = (e) => _setTreeWidth((startW + e.clientX - startX) / _remPx());
 
     const onUp = () => {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
       handle.classList.remove('dragging');
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      _treeWidth = panel.getBoundingClientRect().width;
+      document.body.classList.remove('dsdl-resizing-col');
       _saveDsdlState();
     };
   };
@@ -1588,7 +1299,7 @@ const DsdlView = (() => {
         expandedNodes: [..._expandedNodes],
         selectedType: _selectedType,
         searchTerm: _searchTerm,
-        treeWidth: _treeWidth,
+        treeWidthRem: _treeWidth,
         hiddenNamespaces: [..._hiddenNamespaces],
       };
       localStorage.setItem('cynitor.dsdl.state', JSON.stringify(data));
@@ -1612,8 +1323,9 @@ const DsdlView = (() => {
     if (saved.searchTerm) {
       _searchTerm = saved.searchTerm;
     }
-    if (saved.treeWidth) {
-      _treeWidth = saved.treeWidth;
+    // In rem; earlier versions saved it in px, as treeWidth.
+    if (saved.treeWidthRem || saved.treeWidth) {
+      _treeWidth = saved.treeWidthRem || saved.treeWidth / _remPx();
     }
     if (Array.isArray(saved.hiddenNamespaces)) {
       _hiddenNamespaces = new Set(saved.hiddenNamespaces);
@@ -1625,6 +1337,10 @@ const DsdlView = (() => {
   // ------------------------------------------------------------------
 
   const _renderDisconnected = () => {
+    // Forgotten, so a search or a click cannot draw them again until the
+    // server is back: _loadData fetches them anew.
+    _namespacesData = null;
+    _statusData = null;
     const ph = document.getElementById('dsdlPublicHeader');
     if (ph) ph.innerHTML = '';
     const ch = document.getElementById('dsdlCustomHeader');
@@ -1641,6 +1357,19 @@ const DsdlView = (() => {
     const tree = document.getElementById('dsdlTree');
     if (tree) tree.innerHTML = `<div class="dsdl-tree-empty">Error: ${escapeHtml(msg)}</div>`;
   };
+
+  // What the editor (dsdl-editor.js) needs of the tab.
+  DsdlEditor.attach({
+    typeIndex: _getTypeIndex,
+    typeShown: () => Boolean(_selectedType && _lastDetailData),
+    showSaved: async (fullName) => {
+      await _reloadTree();
+      _loadTypeDetail(fullName);
+      _expandToType(fullName);
+    },
+    fieldTypeHtml: _fieldTypeHtml,
+    lockedAdvice: _lockedAdvice,
+  });
 
   return { init, hide };
 })();

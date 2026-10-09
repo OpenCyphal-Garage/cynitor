@@ -10,7 +10,7 @@ import re
 import importlib
 import time
 import numpy as np
-from pycyphal.dsdl import get_model, to_builtin
+from pycyphal.dsdl import deserialize, get_model, to_builtin
 from pydsdl import CompositeType, Field
 
 from typing import Any, Optional, Callable
@@ -53,8 +53,15 @@ class ScannerNode:
     REGISTER_TIMEOUT = 2.0
     SERVICE_CALL_TIMEOUT = 5.0
     MESSAGE_RATE_WINDOW_SECONDS = 10
+    # A publisher counts in its subject's total rate while it still sends: its
+    # last message within three of its periods, two seconds at least. The
+    # dashboard calls one quiet for longer silent by the same rule.
+    PUBLISHING_PERIODS = 3
+    PUBLISHING_MIN_SECONDS = 2.0
     MAX_SUBJECT_ID = 8191
     MAX_SERVICE_ID = 511
+    # A port-ID register's "unset" (register/384.Access): the port is inactive.
+    UNSET_PORT_ID = 65535
     MAX_REGISTERS = 256
     INFO_REFRESH_S = 60.0   # GetInfo refresh period once a node has answered
     INFO_RETRY_S = 10.0     # retry period while it has not
@@ -65,6 +72,19 @@ class ScannerNode:
         385: 'uavcan.register.List_1_0',
         430: 'uavcan.node.GetInfo_1_0',
         435: 'uavcan.node.ExecuteCommand_1_3',
+    }
+    # Every standard service with a fixed ID, for reading the calls heard on
+    # the bus: a node may serve one without a register saying so, and Cynitor
+    # serves uavcan.file.Read itself to a node updating its firmware.
+    FIXED_SERVICES = {
+        **STANDARD_SERVICES,
+        405: 'uavcan.file.GetInfo_0_2',
+        406: 'uavcan.file.List_0_2',
+        407: 'uavcan.file.Modify_1_1',
+        408: 'uavcan.file.Read_1_1',
+        409: 'uavcan.file.Write_1_1',
+        434: 'uavcan.node.GetTransportStatistics_0_1',
+        510: 'uavcan.time.GetSynchronizationMasterInfo_0_1',
     }
 
     def __init__(self, register_file: Optional[str] = None) -> None:
@@ -167,25 +187,9 @@ class ScannerNode:
                 "media_acceptance_filtering_efficiency": st.media_acceptance_filtering_efficiency,
                 "lost_loopback_frames": st.lost_loopback_frames,
             }
-            info["capture_active"] = transport.capture_active
         except Exception:
             pass
         return info
-
-    def begin_frame_capture(self, handler) -> None:
-        """Enable transport-level frame capture, routing every frame to handler.
-
-        Sticky: pycyphal cannot stop capture without closing the transport, and
-        it forces loopback + accept-all filtering. Used by FrameCaptureManager.
-        """
-        self._node.presentation.transport.begin_capture(handler)
-
-    @property
-    def capture_active(self) -> bool:
-        try:
-            return self._node.presentation.transport.capture_active
-        except Exception:
-            return False
 
     @staticmethod
     def _dsdl_type_to_module_name(dsdl_type: str) -> str:
@@ -261,6 +265,9 @@ class ScannerNode:
             port_id = int(value[0])  # Natural16 is an array with one element
         except (TypeError, ValueError, IndexError) as e:
             logging.warning(f"Invalid {label}-ID in register '{reg_name}': {value}, error: {e}")
+            return None
+        if port_id == self.UNSET_PORT_ID:  # a port the node has but does not use, as the standard allows
+            logging.debug(f"Register '{reg_name}' of node {node_id} is unset: the port is inactive")
             return None
         if not (0 <= port_id <= max_port_id):
             logging.warning(f"Invalid {label}-ID {port_id} in register '{reg_name}' for node {node_id}")
@@ -763,6 +770,38 @@ class ScannerNode:
             logging.error(f"Error making service call for service {service_id} on node {node_id}: {str(e)}")
             raise
 
+    def describe_service_transfer(self, server_node_id: int, service_id: int, is_request: bool,
+                                  payload: bytes) -> tuple[Optional[str], str]:
+        """A service request or response heard on the bus, for the recordings:
+        its type's name, when known, and its fields as JSON, or its bytes in
+        hex where the type is unknown or they do not fit it."""
+        name, service_class = self._service_class(server_node_id, service_id)
+        if service_class is not None:
+            try:
+                value = deserialize(service_class.Request if is_request else service_class.Response,
+                                    [memoryview(payload)])
+                if value is not None:
+                    return name, json.dumps(to_builtin(value))
+            except Exception as e:
+                logging.debug(f"Service {service_id} transfer does not read as {name}: {e}")
+        return name, payload.hex(" ").upper()
+
+    def _service_class(self, server_node_id: int, service_id: int) -> tuple[Optional[str], Any]:
+        """The name and class of the service a node serves on ``service_id``, as
+        its registers say, else as the fixed ID says; (None, None) if unknown."""
+        meta = self.service_metadata.get((server_node_id, service_id))
+        client = self.service_clients.get((server_node_id, service_id))
+        if meta and client is not None:
+            return f"{meta['namespace']}.{meta['service_name']}", client.dtype
+        name = self.FIXED_SERVICES.get(service_id)
+        if name is None:
+            return None, None
+        namespace, _, class_name = name.rpartition('.')
+        try:
+            return name, getattr(importlib.import_module(namespace), class_name)
+        except (ImportError, AttributeError):
+            return name, None
+
     def get_service_schema(self, node_id: int) -> list[dict[str, Any]]:
         """Return structured schema for all services on a node."""
         node = self.all_nodes.get(node_id)
@@ -1091,6 +1130,13 @@ class ScannerNode:
         # DSDL strings arrive as uint8 arrays; any other array is numbers.
         elif isinstance(val, np.ndarray) and val.dtype == np.uint8:
             results.append({"attribute": name, "value": bytes(val).decode("utf-8", errors="ignore")})
+        # An array of composites (port.List's SubjectID[]) holds DSDL objects:
+        # each as builtins, a one-field type (an ID) as its value alone.
+        elif isinstance(val, np.ndarray) and val.dtype == object:
+            items = [to_builtin(item) for item in val]
+            results.append({"attribute": name, "value": [
+                next(iter(item.values())) if isinstance(item, dict) and len(item) == 1 else item for item in items
+            ]})
         elif isinstance(val, np.ndarray):
             results.append({"attribute": name, "value": val.tolist()})
         # Primitives
@@ -1143,20 +1189,30 @@ class ScannerNode:
             return 0.0
         return (len(times) - 1) / (times[-1] - times[0])
 
+    def _still_publishing(self, times: collections.deque, rate: float, now: float) -> bool:
+        """Whether a publisher whose messages came at ``times`` still sends at ``now``."""
+        period = 1.0 / rate if rate > 0 else 0.0
+        return bool(times) and now - times[-1] <= max(self.PUBLISHING_MIN_SECONDS, self.PUBLISHING_PERIODS * period)
+
     def _track_rate(self, subject_id: int, node_id: int, timestamp: float) -> tuple[float, float]:
         """Record one message and return (this publisher's rate, the whole subject's rate).
 
         Rates are kept per publisher: several nodes publish the same subject
         (every node publishes Heartbeat), and a per-subject rate would credit
-        each of them with all the others' traffic.
+        each of them with all the others' traffic. The subject's rate counts
+        only the publishers still sending: one that stopped would otherwise
+        keep its full rate in it until its messages left the window.
         """
         times = self._rate_timestamps.setdefault((subject_id, node_id), collections.deque())
         times.append(timestamp)
         publisher_rate = self._windowed_rate(times, timestamp)
-        subject_rate = sum(
-            self._windowed_rate(other, timestamp)
-            for (sid, _nid), other in self._rate_timestamps.items() if sid == subject_id
-        )
+        subject_rate = 0.0
+        for (sid, _nid), other in self._rate_timestamps.items():
+            if sid != subject_id:
+                continue
+            other_rate = self._windowed_rate(other, timestamp)
+            if self._still_publishing(other, other_rate, timestamp):
+                subject_rate += other_rate
         return round(publisher_rate, 1), round(subject_rate, 1)
 
     @staticmethod

@@ -27,7 +27,7 @@ TelemetryManager (pub-sub router)
 ✅ **Browser Origin Policy** - The API accepts browser requests only from its own dashboard and from pages served on this machine  
 ✅ **Clean Shutdown** - Graceful WebSocket disconnect and logger queue flush  
 ✅ **Allocator Guard** - Reuses external allocator if present, otherwise starts local allocator and re-checks every 10s
-✅ **CAN Health Monitoring** - Detects CAN bus faults (BUS-OFF, ERROR-PASSIVE, interface disappearance on SocketCAN; a failing or unplugged adapter otherwise) and auto-disconnects
+✅ **CAN Health Monitoring** - Detects CAN bus faults (BUS-OFF, interface disappearance on SocketCAN; a failing or unplugged adapter otherwise) and auto-disconnects; errors on a bus still in use (ERROR-WARNING, ERROR-PASSIVE, error counters growing) are shown and logged once instead
 ✅ **Bus Load Monitoring** - Real-time CAN bus utilization via `canbusload` subprocess on SocketCAN, or counted from the forwarded frames for other adapters (Classic CAN and CAN FD alike), streamed to clients via WebSocket  
 ✅ **Register Access** - Read and write Cyphal node registers via REST API  
 ✅ **Offline Node Detection** - Tracks node disappearance with `last_seen` timestamps and stale state handling  
@@ -147,7 +147,7 @@ Output:
 ============================================================
 SERVER RUNNING
 ============================================================
-Bound to:    127.0.0.1:8080
+Bound to:    http://127.0.0.1:8080/
 REST API:    http://localhost:8080/api/
 Health:      http://localhost:8080/api/health
 Status:      http://localhost:8080/api/status
@@ -202,18 +202,16 @@ ws.send(JSON.stringify({
 ws.send(JSON.stringify({ type: 'ping' }));
 
 // Subscribe to the raw frame-capture stream (Debugging view). Off by default.
-// Enabling starts transport-level capture if not already active — see the note
-// below. Send enabled:false to stop receiving frames on this connection.
+// The first connection to enable it starts capture. Send enabled:false to stop
+// receiving frames on this connection; the last one to stop ends capture.
 ws.send(JSON.stringify({ type: 'capture', enabled: true }));
 ```
 
-> **Frame capture is sticky and changes bus behaviour.** pycyphal implements
-> capture by reconfiguring the acceptance filter to accept all frames and
-> forcing loopback on every outgoing frame. It cannot be stopped without closing
-> the transport (a CAN disconnect), and it adds bus/CPU overhead. It is therefore
-> opt-in: only clients that send `{type:'capture',enabled:true}` receive frames,
-> and `enabled:false` only stops *forwarding* to that client — the transport tap
-> stays active until disconnect.
+> **Frame capture only listens.** Its frames come from a listen-only tap: on
+> SocketCAN a socket of its own, for any other adapter a listener on the CAN
+> hub's forwarding. It changes nothing Cynitor sends or receives, and runs only
+> while at least one connection captures. Every frame on the bus comes through,
+> error frames included, which the Cyphal stack never sees.
 
 **Server Messages:**
 
@@ -237,7 +235,7 @@ Telemetry events (filtered per client):
 }
 ```
 
-`rate` is this publisher's message rate on the subject, in Hz (one decimal, over the last 10 s). `subject_rate` is the subject's total over all its publishers: with five nodes publishing Heartbeat at 1 Hz, each event carries `rate` 1.0 and `subject_rate` 5.0. Events recorded before `subject_rate` existed lack it, and there `rate` was the subject total.
+`rate` is this publisher's message rate on the subject, in Hz (one decimal, over the last 10 s). `subject_rate` is the subject's total over its publishers still sending: with five nodes publishing Heartbeat at 1 Hz, each event carries `rate` 1.0 and `subject_rate` 5.0. A publisher whose last message is older than three of its periods (two seconds at least) no longer counts in it, the rule by which the dashboard calls a subject silent. Both are computed when a message arrives, so a subject that stops altogether sends no new value: the dashboard tells that from the time of its last message. Events recorded before `subject_rate` existed lack it, and there `rate` was the subject total.
 
 `timestamp_unix` is when the transfer was received as stamped by the transport (for SocketCAN, the kernel's receive timestamp), not when the backend got round to processing it.
 
@@ -270,33 +268,59 @@ Pong (sent in response to a client `ping` message):
 
 Capture status (sent in response to a client `capture` message):
 ```json
-{ "type": "capture_status", "active": true, "stats": { "captured": 0, "rx": 0, "tx": 0, "cyphal": 0, "foreign": 0, "dropped": 0 } }
+{ "type": "capture_status", "active": true, "capturing": true, "forwarding": true, "stats": { "captured": 0, "rx": 0, "tx": 0, "cyphal": 0, "foreign": 0, "errors": 0, "dropped": 0 }, "frames": [] }
 ```
-`active` reflects whether transport-level capture is running. When enabling
-fails because no CAN session exists, the message carries `"active": false` and an
-`"error"` field. A disable reply carries `"active": false, "forwarding": false`.
+`capturing` says whether capture runs, for any connection. `forwarding` says
+whether this connection is sent the frames. A disable reply carries
+`"forwarding": false`, and `capturing` stays `true` only while another
+connection captures. When enabling fails, both are `false` and an `"error"`
+field says why: no CAN session, or the tap could not open. `active` is kept for
+dashboards from before these two: `capturing` in an enable reply, `false` in
+the others.
+
+An enable reply's `frames` holds up to the 500 most recent frames captured
+before this connection subscribed, while another one captured (oldest first,
+shaped as in `can_frame`). It is taken in the same step as subscribing: the
+`can_frame` stream that follows carries the frames after them, none repeated
+and none skipped. It is empty when the connection starts capture, or was
+subscribed already.
 
 Raw frame batch (sent only to clients that opted into capture; batched ~every
-120 ms to bound message rate):
+120 ms to bound message rate, each with every frame queued since the last, up
+to 2000):
 ```json
 {
     "type": "can_frame",
-    "stats": { "captured": 1024, "rx": 1000, "tx": 24, "cyphal": 1010, "foreign": 14, "dropped": 0 },
+    "stats": { "captured": 1024, "rx": 1000, "tx": 24, "cyphal": 1010, "foreign": 13, "errors": 1, "dropped": 0 },
     "frames": [
         {
-            "t": 12345.678, "ts": 1741949445.123, "dir": "rx",
+            "t": 1741949445.123451, "ts": 1741949445.123451, "dir": "rx",
             "id": "0x107D552A", "ext": true, "dlc": 8, "data": "01 02 03 04 05 06 07 E5",
             "cyphal": true, "priority": "NOMINAL", "src": 42, "dst": null,
-            "kind": "msg", "port": 7509, "transfer_id": 5, "start": true, "end": true
+            "kind": "msg", "port": 7509, "transfer_id": 5, "start": true, "end": true, "toggle": true
         },
-        { "t": 12345.679, "ts": 1741949445.124, "dir": "rx", "id": "0x00000123", "ext": false, "dlc": 2, "data": "AA BB", "cyphal": false }
+        { "t": 1741949445.124002, "ts": 1741949445.124002, "dir": "rx", "id": "0x00000123", "ext": false, "dlc": 2, "data": "AA BB", "cyphal": false },
+        { "t": 1741949445.125130, "ts": 1741949445.125130, "dir": "rx", "id": "0x000000A8", "ext": false, "dlc": 8,
+          "data": "00 00 04 00 00 00 00 00", "cyphal": false, "error": ["protocol violation: stuff", "no ACK", "bus error"] }
     ]
 }
 ```
-`dir` is `tx`/`rx` (TX = forced-loopback of our own frames). `dlc` is the data
-length in bytes (0–64), not the DLC code. For Cyphal frames,
-`kind` is `msg`/`req`/`resp` and `port` is the subject- or service-ID; non-Cyphal
-("foreign") frames carry only the raw fields with `cyphal: false`.
+`t` and `ts` are the time the frame was received, in Unix seconds (on SocketCAN
+the kernel's timestamp; from an adapter whose clock counts from its power-up,
+the time the frame reached Cynitor). `dir` is `tx` for a frame Cynitor sent: one
+sent from this computer that, if it is a Cyphal frame, comes from Cynitor's
+node-ID or its allocator's (on SocketCAN the tap also hears the computer's other
+programs, such as every node on a vcan, which stay `rx`). `dlc` is the data
+length in bytes (0–64), not the DLC code. An error frame has `"cyphal": false`
+and `error`: what it reports, in words, on SocketCAN, candleLight (`gs_usb`)
+adapters and raw logs (its `id` holds the error classes and `data` the
+details, as `linux/can/error.h` lays them out), else `["error frame"]`. A
+remote frame has `"rtr": true`, an empty `data` and the length it asks for as
+`dlc`. For Cyphal frames,
+`kind` is `msg`/`req`/`resp` and `port` is the subject- or service-ID, and
+`start`, `end` and `toggle` are the tail byte's start-of-transfer,
+end-of-transfer and toggle bits; non-Cyphal ("foreign") frames carry only the
+raw fields with `cyphal: false`.
 
 Protocol errors (sent when the client sends a frame the server cannot parse):
 ```json
@@ -306,6 +330,8 @@ Protocol errors (sent when the client sends a frame the server cannot parse):
 These do not include a `type` field; the bare `error` key signals a protocol-level problem rather than a domain event. Subsequent frames are still accepted on the same connection.
 
 ### REST API
+
+Every endpoint answers an error with a `4xx` or `5xx` status and `{"error": "<message>"}`, sometimes with more fields that say more (such as `available_interfaces`).
 
 **Get server status (connection state, available interfaces, bus load):**
 ```bash
@@ -327,13 +353,21 @@ Response:
     ],
     "bus_utilization": 3.0,
     "dropped": {"scanner": 0, "logger": 0, "clients": 12},
-    "last_error": null
+    "last_error": null,
+    "cyphal_v11": null,
+    "bus_errors": null
 }
 ```
 
+`bus_errors` is `null` while the bus has no errors, and when not connected to CAN. While it has some, it is `{"state", "tx_errors", "rx_errors", "since_unix"}`: the CAN controller's state (`"ERROR-WARNING"`, `"ERROR-PASSIVE"`) and its transmit and receive error counters, all three `null` where the adapter does not report them (only SocketCAN does), and when the errors began. The bus has errors while its controller is in one of those states, or while an error counter grew in the last 10 s: SocketCAN's bus-error and state-change counters, or, for an adapter behind the hub, the error frames it reports and the sends it refused. The session's health check samples them every 3 s. Most often the bus is not terminated (120 Ω at each end) or a node runs another bitrate; the dashboard shows the errors under the CAN status, and the server logs a line when they start and one when they stop, in place of pycyphal's line per error frame. A controller in ERROR-WARNING or ERROR-PASSIVE still sends and receives, so the session goes on; BUS-OFF ends it, `last_error` saying so.
+
+`cyphal_v11` is `null` until Cyphal v1.1 traffic is seen on the bus, which Cynitor, a Cyphal v1.0 monitor, does not decode. Then it is `{"transfers", "nodes": [node-IDs], "subject_count", "subject_ids": [the first 16, sorted], "last_seen_unix"}`, counted over the CAN session; the dashboard shows it under the CAN status. A v1.1 transfer is recognised by its first frame: an extended CAN ID with bit 25 = 0, bit 24 = 0 and bit 7 = 1 (a 16-bit subject-ID; v1.0 keeps bit 7 at 0), and a tail byte with start-of-transfer and toggle set (which tells it from a DroneCAN service frame), every frame but a transfer's last being full. On SocketCAN a listen-only socket watches for it, filtered by the kernel to frames with those ID bits; behind the hub, the hub does. A v1.1 topic pinned to a v1.0 subject-ID (`name#1234`) travels as v1.0 and is decoded as usual.
+
+`bus_utilization` is the bus load in percent, here and in the `metrics` message and `/api/can/transport`. It is `null` when not connected to CAN, and when nothing can measure it: on SocketCAN it comes from `canbusload` (Linux can-utils), so a host without it reports `null`, not an idle 0.
+
 `dropped` counts decoded messages discarded since the CAN connection opened because a queue was full: `scanner` before reaching anything, `logger` missing from the 24 h history and from recordings, `clients` missing from some dashboard's live view (each open dashboard has its own 100-event queue). `null` when not connected to CAN. The dashboard shows the total next to the CAN message rate.
 
-`status` is `"running"` when connected to CAN, `"idle"` otherwise. `last_error` contains the error message if CAN was auto-disconnected due to a bus fault. `can_bitrate` is the bitrate Cynitor opened the adapter at, or `null` for SocketCAN, whose bitrate the kernel sets. `can_data_bitrate` is the CAN FD data-phase bitrate it opened the adapter with, or `null` (Classic CAN, or SocketCAN). `can_fd` says whether the session runs Cyphal/CAN FD; for SocketCAN that follows the interface's own setup.
+`status` is `"running"` when connected to CAN, `"idle"` otherwise. `last_error` contains the error message if CAN was auto-disconnected due to a bus fault. `can_bitrate` is the bitrate Cynitor opened the adapter at, or `null` for SocketCAN, whose bitrate the kernel sets. `can_data_bitrate` is the CAN FD data-phase bitrate it opened the adapter with, or `null` (Classic CAN, or SocketCAN). `can_fd` says whether the session runs Cyphal/CAN FD; for SocketCAN that follows the interface's own setup when it connects. A SocketCAN interface switched between CAN FD and Classic CAN while connected ends the session within a few seconds, `last_error` saying so ("Interface can0 was switched to Classic CAN; connect again to use it"); connecting again takes the new setup.
 
 `available_interfaces` lists SocketCAN names only, as before. `available_adapters` lists everything the dashboard can offer: SocketCAN interfaces, adapters of vendor drivers python-can can enumerate (PEAK, Kvaser, Vector, IXXAT) and, off Linux, candleLight (`gs_usb`) and known slcan adapters. Pass an entry's `interface` to `POST /api/can/connect`, with a `bitrate` when `needs_bitrate` is true. `supports_fd` says whether a session on it can run CAN FD: for an adapter Cynitor opens itself (`needs_bitrate` true), that it can be opened as CAN FD when given a `data_bitrate`; for SocketCAN, that the interface is set up for CAN FD, which Cynitor then uses without being asked. The list is rescanned at most every 10 seconds, and not at all while connected.
 
@@ -419,7 +453,8 @@ Response (connected):
 ```
 
 `protocol` / `statistics` come from pycyphal's transport (`mtu` is the
-single-frame payload limit: 7 = Classic CAN, up to 63 = CAN FD). `link` is
+single-frame payload limit: 7 = Classic CAN, up to 63 = CAN FD).
+`capture_active` says whether frame capture runs, for any connection. `link` is
 best-effort controller state parsed from `ip -details -statistics link show`;
 fields are `null` on virtual interfaces (vcan) or where the controller does not
 report them. For an adapter Cynitor opens itself, `link` holds what the CAN hub
@@ -428,19 +463,21 @@ counts instead: `bitrate`, `dbitrate` (the CAN FD data bitrate, or `null`),
 `adapter_error_frames` (error frames, if the adapter's driver reports them).
 The Debugging view polls this endpoint at ~1 Hz while active.
 
-**Raw frame-capture snapshot (Debugging view frame monitor):**
+**Raw frame-capture snapshot:**
 ```bash
 curl 'http://localhost:8080/api/can/capture?limit=500'
 ```
 
-Returns the recent-frame ring buffer plus capture counters — used to backfill
-the frame monitor on open / after reconnect. Live frames stream over the
-WebSocket `can_frame` message (see above); this endpoint does not start capture.
+Returns the recent-frame ring buffer plus capture counters, for scripts: the
+frames of the capture running, or of the last one. The dashboard does not use
+it: the reply to its `capture` message carries the same frames without
+overlapping the stream (see above). Live frames stream over the WebSocket
+`can_frame` message; this endpoint does not start capture.
 
 ```json
 {
   "active": true,
-  "stats": {"captured": 1024, "rx": 1000, "tx": 24, "cyphal": 1010, "foreign": 14, "dropped": 0},
+  "stats": {"captured": 1024, "rx": 1000, "tx": 24, "cyphal": 1010, "foreign": 13, "errors": 1, "dropped": 0},
   "frames": [ /* same per-frame shape as the can_frame stream, oldest→newest */ ]
 }
 ```
@@ -457,6 +494,7 @@ Response:
 ```json
 {
     "paths": [{"path": "...", "label": "Public regulated types", "source": "regulated"}],
+    "public_compilable": true,
     "compiled": true,
     "last_compiled": 1773832423.0,
     "last_public_compiled": 1773832423.0,
@@ -466,14 +504,16 @@ Response:
 }
 ```
 
-`last_public_compiled` covers the `uavcan/` and `reg/` namespaces only; `last_custom_compiled` covers every other top-level namespace under `python_compiled_messages/` (i.e. user-created custom types). `last_compiled` is the max of both, kept for backward compatibility.
+`last_public_compiled` covers the public `uavcan/` and `reg/` namespaces, compiled into `python_compiled_messages/`; `last_custom_compiled` covers the custom types, compiled into the data folder (`dsdl/compiled`). `last_compiled` is the max of both, kept for backward compatibility.
+
+The status is kept in memory, so polling it is cheap. It is read from disk again at once after a save, delete or compile made through this API, and otherwise at most every 30 s, for changes made elsewhere (such as the public types compiled when CAN connects, if they were not yet).
 
 **DSDL namespace tree:**
 ```bash
 curl http://localhost:8080/api/dsdl/namespaces
 ```
 
-Returns a nested tree of namespaces with type entries. Each type includes `short_name`, `full_name`, `version`, `kind` (`"message"` or `"service"`), `fixed_port_id`, `source` (`"regulated"` or `"custom"`), and `compiled` (`true` if a corresponding `.py` exists in `python_compiled_messages/`).
+Returns a nested tree of namespaces with type entries. Each type includes `short_name`, `full_name`, `version`, `kind` (`"message"` or `"service"`), `fixed_port_id`, `source` (`"regulated"` or `"custom"`), `field_names` and `constant_names` (for search), and `compiled` (`true` once its Python code exists: in `python_compiled_messages/` for a public type, in the data folder's `dsdl/compiled` for a custom one). Custom namespaces, empty ones included, carry `"_source": "custom"`.
 
 **DSDL type detail:**
 ```bash
@@ -482,13 +522,23 @@ curl http://localhost:8080/api/dsdl/type/uavcan.node.Heartbeat.1.0
 
 Returns full type info: fields (with types), constants, dependencies, compilation status, and raw `.dsdl` source text. For services, fields are split into `request` and `response`.
 
+What the compiler (pydsdl) reads in the type comes with it: `doc` (the type's comment), `deprecated`, a `doc` on each field and constant (its comment, a unit such as `[second]` first when it has one), and `layout`:
+
+```json
+"layout": {"union": false, "sealed": false, "extent_bytes": 12, "size_bytes": [7, 7]}
+```
+
+`size_bytes` is the serialized size, smallest and largest; `extent_bytes` how far a type that is not sealed may grow in later versions (for a sealed type, its largest size). A service has one layout each way: `{"request": {...}, "response": {...}}`. When pydsdl cannot read the type, `doc` is empty, `deprecated` false and `layout` null.
+
+`problem` is null for a type that compiles. For one that does not, it says why, as a compile would: `{"message": "Syntax error", "line": 2}`, where `line` is the line of the type's own source, or null when the fault is with the file as a whole (a missing `@sealed`) or in a type it uses, which the message then names.
+
 **Create custom namespace:**
 ```bash
 curl -X POST http://localhost:8080/api/dsdl/custom/namespace \
   -H 'Content-Type: application/json' \
   -d '{"namespace": "myapp.sensors"}'
 ```
-Returns `201` with `{"namespace": "myapp.sensors", "path": "..."}`.
+Returns `201` with `{"namespace": "myapp.sensors", "path": "..."}`. A namespace under `uavcan` or `reg`, the public regulated types' own, returns `400`; so does saving a type into one.
 
 **List custom namespaces:**
 ```bash
@@ -506,12 +556,21 @@ Returns `201` with `{"full_name": "myapp.sensors.Temperature.1.0", "path": "..."
 
 Pass `"overwrite": true` to replace an existing custom type's source. Only allowed while the type is **not compiled** — the server returns `409` if the type has already been compiled.
 
+`fixed_port_id` is optional. A custom type may only take the fixed port-IDs the compiler accepts outside the `uavcan` namespace: 6144–7167 for a message, 256–383 for a service (a source with a `---` line). Any other value, or one that is not an integer, returns `400`.
+
 **Delete custom DSDL type:**
 ```bash
 curl -X DELETE http://localhost:8080/api/dsdl/custom/type/myapp.sensors.Temperature.1.0
 ```
 Returns `200` with `{"full_name": "myapp.sensors.Temperature.1.0", "deleted": true}`.
 Returns `404` if the source file is missing, or `400` on a malformed name. Deleting also removes the type's compiled code.
+
+**Delete an empty custom namespace:**
+```bash
+curl -X DELETE http://localhost:8080/api/dsdl/custom/namespace/myapp.sensors
+```
+Returns `200` with `{"namespace": "myapp.sensors", "deleted": true}`; its empty sub-namespaces go with it.
+Returns `400` while it still has types (delete them first) or on a malformed name, and `404` if there is no such namespace.
 
 **Compile DSDL types:**
 ```bash
@@ -530,7 +589,7 @@ curl -X POST http://localhost:8080/api/dsdl/compile \
   -H 'Content-Type: application/json' \
   -d '{"scope": "all"}'
 ```
-Returns `200` with `{"ok": true}` on success, or `422` with `{"ok": false, "errors": [...]}`.
+Returns `200` with `{"ok": true}` on success, or `422` with `{"error": "..."}`, each failing namespace's error on a line of its own. A fault the compiler finds in a type reads `<full name>, line <n>: <message>` (`, line <n>` left out when it is about the whole file), for example `myapp.sensors.Reading.1.0, line 2: Syntax error`; any other failure reads `<namespace label>: <message>`. Compiles run one at a time: a request made while one runs waits for it to end.
 
 Compilation runs inside the server. In the packaged binaries the public types are built in: `"public"` is refused and `"all"` compiles the custom types; `GET /api/dsdl/status` reports this as `"public_compilable": false`. Custom types and their compiled code are kept in the data folder (`dsdl/custom`, `dsdl/compiled`).
 
@@ -892,6 +951,25 @@ Event types: `first_seen`, `reappeared`, `disappeared`, `restart_suspected` (the
 
 Returns `400` for invalid node_id or limit, `503` if the event logger is not available.
 
+**Get recent lifecycle events of every node:**
+```bash
+curl "http://localhost:8080/api/nodes/events?range=15m&types=restart_suspected,node_id_conflict"
+```
+
+The same events as above, for all nodes at once, newest first: the Graph tab uses them to mark nodes that restarted or share a node-ID. Query params: `range` (as above, default `15m`), `types`, `limit` (1–2000, default `500`).
+
+```json
+{
+    "now_unix": 1741949460.5,
+    "events": [
+        {"id": 12, "node_id": 37, "unique_id": "d74f8b69…", "timestamp_unix": 1741949445.123,
+         "event_type": "restart_suspected", "detail": {"old_uptime": 812, "new_uptime": 3}}
+    ]
+}
+```
+
+`now_unix` is the server's clock at the time of the reply, so that a client can tell an event's age without relying on its own clock. Returns `400` for an invalid `range` or `limit`, `503` if the event logger is not available.
+
 **Get node subject summary (aggregated telemetry stats per subject):**
 ```bash
 curl http://localhost:8080/api/nodes/37/history/subjects
@@ -975,7 +1053,7 @@ Named captures with optional length/event-count limits. Two storage modes:
 - **`dedicated`** (default for new recordings) — matching subject events and service calls stream into a per-recording table (`recording_events`) from the moment the recording starts. Survives the global buffer's retention. Quick-save snapshots matching events from the global buffer into the same table at creation time.
 - **`global`** — Phase 1 bookmarks. Metadata only; export reads from the shared `events` table within the recording's time-range × filter. Subject to global retention.
 
-All recording endpoints return `503` if no `event_logger` is initialized (no CAN session yet), **except** `GET /api/recordings`, which returns `200 { recordings: [] }` so the frontend's startup poll doesn't error before CAN is connected.
+Recordings are kept in the data folder, so every recording endpoint works with CAN disconnected too: saved recordings are listed, exported, renamed, deleted and replayed (replay needs CAN disconnected). A live recording captures while CAN is connected; one started with CAN disconnected begins capturing once it connects.
 
 #### List, create, inspect
 
@@ -985,7 +1063,7 @@ GET    /api/recordings/{rec_id}              → { recording: { ...stats } }
 GET    /api/recordings/buffer                → { buffer: { ...global buffer stats } }
 POST   /api/recordings                       body: { name, filter?, notes?, max_length_seconds?, max_events?, stop_on_limit? } → 201 { recording }
 POST   /api/recordings/{rec_id}/stop         → { recording }
-PATCH  /api/recordings/{rec_id}              body: { name?, notes? } → { recording }
+PATCH  /api/recordings/{rec_id}              body: { name?, notes?, max_length_seconds?, max_events?, stop_on_limit? } → { recording }
 DELETE /api/recordings/{rec_id}[?purge=true] → { deleted, purged }
 ```
 
@@ -996,6 +1074,8 @@ A recording row contains: `id`, `name`, `start_unix`, `end_unix`, `filter`, `not
 #### Limits and auto-stop
 
 `max_length_seconds` and `max_events` are optional caps. With `stop_on_limit: true` (default off — opt in per recording), the recording auto-stops on the first limit breach: `end_unix` is set, `auto_stopped` becomes `true`, and the recording disappears from the active-routing registry. With `stop_on_limit: false`, the limits are soft targets — the recording keeps capturing past 100%, useful for showing progress bars in the UI without enforcing a cap.
+
+PATCH changes only the fields it is sent (`null` counts as not sent), so a limit cannot be removed once set. A running recording takes new limits at once: one lowered below what it has reached stops it (with `stop_on_limit`) on its next event, or within 5 seconds.
 
 Auto-stop is checked both on each matching event (during ingest) and via a 5-second background sweep (catches time-based limits when the bus is silent).
 
@@ -1020,6 +1100,19 @@ Snapshots matching events from the global buffer in `[now - last_seconds, now]` 
 
 An event matches if it satisfies **any** dimension (subject in `subject_ids` OR node in `node_ids` OR service in `service_ids` OR type in `message_types`). Empty/missing keys impose no restriction on that dimension. Empty filter overall = capture everything. Unknown keys are ignored. Invalid types are dropped silently (non-integer ids, non-string types). `service_ids` matches `service_call` rows; it has no effect against the global `events` table for legacy bookmarks.
 
+#### Service calls
+
+A live recording takes every service call on the bus that its filter matches, between any two nodes, Cynitor's own among them. A Cyphal service call goes from one node to another, so Cynitor's own node hears only the calls made to it: the recordings take the calls from a listen-only tap on the bus instead (on SocketCAN a socket the kernel passes only service frames, behind the CAN hub a listener on its forwarding). Each request and response is rebuilt from its frames, and the two are paired by client, server, service-ID and transfer-ID. A call matches `service_ids` by its service-ID, and `node_ids` by its server or its client.
+
+A call is stored as a `service_call` event: `service_id`; `publisher_node_id`, the server's node-ID; `message_type`, the service's type when Cynitor knows it (from the server's registers, or a standard fixed service-ID), else `null`; and its fields in `attributes`:
+
+- `client_node_id` — the node that made the call.
+- `status` — `ok`, or `timeout` when no response came within 5 seconds.
+- `latency_ms` — from the request to the response, as heard on the bus; `null` for a timeout, or for a response whose request the recording did not hear.
+- `request`, `response` — the transfer's fields as JSON text when Cynitor knows the type, else its bytes in hex; `null` when not heard.
+
+Quick save holds no service calls: the global buffer it copies from holds subject events only. A call made from the Services panel is also kept in its node's history, as event type `service_call`.
+
 #### Export
 
 ```http
@@ -1027,7 +1120,7 @@ GET    /api/recordings/{rec_id}/export?format=csv      → text/csv stream
 GET    /api/recordings/{rec_id}/export?format=jsonl    → application/x-ndjson stream
 ```
 
-CSV columns: `recording_id, timestamp_unix, timestamp, subject_id, publisher_node_id, unique_id, message_type, rate, attribute, value, unit`. One row per attribute (events with N attributes → N rows). Service-call rows currently appear with their `service_id` in the `subject_id` column and service metadata in `attributes_json` — a future CSV revision may add a dedicated `kind`/`service_id` column.
+CSV columns: `recording_id, timestamp_unix, timestamp, subject_id, service_id, publisher_node_id, unique_id, message_type, rate, attribute, value, unit`. One row per attribute (events with N attributes → N rows). A service call fills `service_id` instead of `subject_id`, gives its server's node-ID as `publisher_node_id` and its type as `message_type`, and takes a row per field of the call (`client_node_id`, `status`, `latency_ms`, `request`, `response`; see Service calls), the field's name in `attribute`.
 
 JSONL (JSON Lines) streams one JSON object per line. The first line is a header: `{ "recording": {...}, "exported_at_unix": float }`. Every subsequent line is a single event object with `kind`, `subject_id`/`service_id`, `timestamp_unix`, `attributes`, etc. Streamed with the same pagination as CSV — no hard event cap.
 
@@ -1120,7 +1213,7 @@ curl -X POST http://localhost:8080/api/replay/seek \
   -H 'Content-Type: application/json' \
   -d '{"position_s": 12.5}'
 ```
-`position_s` is clamped to `[0, duration_s]`. Returns 404 if no replay is running.
+`position_s` is clamped to `[0, duration_s]`. Playback moves there at once, also between two events, and `events_emitted` then counts the events before that position. Returns 404 if no replay is running.
 
 **Change speed without re-seeking:**
 ```bash
@@ -1194,7 +1287,7 @@ Events are automatically logged to `telemetry_events.db`. The `events` table has
 
 **Retention.** The global `events` table is pruned by **time-based retention** (default 24 hours). A hard event-count cap (`max_events`, default 5,000,000) acts as a safety net only — it bounds disk if rate × retention would otherwise blow past it. Events are written in transactions of up to 500 (about 20,000 events/s on an SSD). Pruning runs every 1000 writes; configure both via `EventLogger(retention_seconds=..., max_events=...)`.
 
-Per-recording event stores (`recording_events`) are **not** subject to retention — they only grow until the recording is deleted (with `?purge=true`) or stopped. Recording rows survive global retention by definition.
+Per-recording event stores (`recording_events`) are **not** subject to retention: a recording keeps its events until it is deleted, which deletes them too. `?purge=true` also deletes a legacy bookmark's time range from the global `events` table (a bookmark keeps no events of its own). Recording rows survive global retention by definition.
 
 **Query logged events programmatically:**
 ```python

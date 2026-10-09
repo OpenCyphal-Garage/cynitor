@@ -139,7 +139,7 @@ const renderServiceCard = (svc, forSubjects = false) => {
   const isCallable = svc.callable !== false;
   const expandedId = forSubjects ? state._subjectExpandedServiceId : state.expandedServiceId;
   const isExpanded = isCallable && expandedId === svc.service_id;
-  const typeName = svc.full_type ? escapeHtml(svc.full_type) : `Service ${svc.service_id}`;
+  const typeName = svc.full_type ? escapeHtml(dsdlTypeName(svc.full_type)) : `Service ${svc.service_id}`;
   const hasFields = svc.request_fields && svc.request_fields.length > 0;
   const schemaIncomplete = isCallable && !svc.request_fields;
 
@@ -230,7 +230,7 @@ const renderServiceCard = (svc, forSubjects = false) => {
     <div class="svc-card-header${!isCallable ? ' svc-card-header-static' : ''}" data-service-id="${svc.service_id}">
       ${isCallable ? `<span class="svc-expand-icon">${isExpanded ? '▾' : '▸'}</span>` : ''}
       <span class="svc-service-id">${svc.service_id}</span>
-      <span class="svc-service-type" title="${escapeHtml(svc.full_type || '')}">${typeName}</span>
+      <span class="svc-service-type" title="${escapeHtml(dsdlTypeName(svc.full_type) || '')}">${typeName}</span>
       ${badgeHtml}
     </div>
     ${formHtml}
@@ -688,7 +688,7 @@ const renderServicesTab = async () => {
   }
 
   // State 8: no services
-  const services = schema || [];
+  const services = [...(schema || [])].sort((a, b) => a.service_id - b.service_id);
   if (!services.length) {
     content.innerHTML = svcStateMsg(
       '○', `Node ${nodeId} has no services`,

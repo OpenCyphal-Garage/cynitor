@@ -1,11 +1,18 @@
 """Tests for WebSocketServer REST endpoints including CAN connect/disconnect."""
 
 import asyncio
+import time
 import pytest
+from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from aiohttp import web
 from aiohttp.test_utils import AioHTTPTestCase, TestClient, TestServer
 from websocket_server import WebSocketServer
+from dsdl_manager import DsdlManager
+import can
+
+from frame_capture import FrameCaptureManager
 from log_store import InMemoryLogStore
 import logging
 
@@ -27,6 +34,7 @@ def _make_session(is_running=False, can_interface=None):
     session.can_fd = False
     session.replay = None
     session.event_logger = None
+    session.frame_capture = None
     session.connect = AsyncMock()
     session.disconnect = AsyncMock()
     return session
@@ -828,6 +836,25 @@ class TestTransportDiagnostics:
         diagnostics.assert_called_once_with("vcan0")
 
 
+class _CaptureTap:
+    """The tap on the bus CANSession opens for FrameCaptureManager."""
+
+    def __init__(self):
+        self.on_frame, self.open_now = None, False
+
+    def open(self, on_frame):
+        self.on_frame, self.open_now = on_frame, True
+        return self.close
+
+    def close(self):
+        self.open_now = False
+
+
+def _captured(can_id):
+    """A non-Cyphal frame with this CAN ID, as a tap hands it over."""
+    return can.Message(arbitration_id=can_id, data=b"\x00", timestamp=1_700_000_000.0 + can_id)
+
+
 class TestFrameCaptureAPI:
     """GET /api/can/capture snapshot + 'capture' WS message handling."""
 
@@ -872,7 +899,6 @@ class TestFrameCaptureAPI:
         q = asyncio.Queue()
         mgr = MagicMock()
         mgr.active = True
-        mgr.start = MagicMock()
         mgr.subscribe = MagicMock(return_value=q)
         mgr.unsubscribe = MagicMock()
         mgr.stats = MagicMock(return_value={"captured": 0})
@@ -881,12 +907,86 @@ class TestFrameCaptureAPI:
         ws.send_json = AsyncMock()
 
         await server._handle_capture_message(ws, enabled=True)
-        mgr.start.assert_called_once()
         mgr.subscribe.assert_called_once()
         assert server.capture_clients.get(ws) is q
 
         await server._handle_capture_message(ws, enabled=False)
         mgr.unsubscribe.assert_called_once_with(q)
+        assert ws not in server.capture_clients
+
+    @pytest.mark.asyncio
+    async def test_capture_enable_sends_earlier_frames_once(self, server, session):
+        # The frames caught before the client subscribed (for another one) come
+        # with the reply, and its queue holds only later ones: the client gets
+        # each frame once.
+        tap = _CaptureTap()
+        session.frame_capture = mgr = FrameCaptureManager(tap.open)
+        other = mgr.subscribe()
+        tap.on_frame(_captured(1))
+        tap.on_frame(_captured(2))
+        mgr.drain()
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        await server._handle_capture_message(ws, enabled=True)
+        tap.on_frame(_captured(3))
+        mgr.drain()
+        mgr.unsubscribe(other)
+        queue = server.capture_clients[ws]
+        streamed = [queue.get_nowait()["id"] for _ in range(queue.qsize())]
+        reply = ws.send_json.await_args.args[0]
+        assert [f["id"] for f in reply.get("frames", [])] == ["0x00000001", "0x00000002"]
+        assert streamed == ["0x00000003"]
+
+    @pytest.mark.asyncio
+    async def test_capture_loop_sends_a_backlog_at_once(self, server, session):
+        # A busy bus queues frames faster than 250 a window: each message takes
+        # all that is queued, so the stream keeps up instead of dropping frames.
+        session.frame_capture = None
+        queue = asyncio.Queue()
+        for n in range(1000):
+            queue.put_nowait({"id": n})
+        ws = MagicMock()
+        ws.closed = False
+        sent = []
+        ws.send_json = AsyncMock(side_effect=sent.append)
+        server._running = True
+        server.capture_clients[ws] = queue
+        forward = asyncio.create_task(server._capture_loop(ws))
+        await asyncio.sleep(server._CAPTURE_BATCH_WINDOW + 0.1)
+        forward.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await forward
+        assert [len(message["frames"]) for message in sent] == [1000]
+
+    @pytest.mark.asyncio
+    async def test_capture_stops_with_the_last_connection(self, server, session):
+        # Capture runs while any connection captures: one's stop ends only the
+        # frames sent to it, the last one's ends capture. Each reply says both.
+        tap = _CaptureTap()
+        session.frame_capture = FrameCaptureManager(tap.open)
+        first, second = MagicMock(), MagicMock()
+        first.send_json, second.send_json = AsyncMock(), AsyncMock()
+        said = []
+        for ws, enabled in ((first, True), (second, True), (first, False), (second, False)):
+            await server._handle_capture_message(ws, enabled=enabled)
+            reply = ws.send_json.await_args.args[0]
+            said.append((reply.get("capturing"), reply.get("forwarding"), tap.open_now))
+        session.frame_capture = None
+        await server._handle_capture_message(first, enabled=True)
+        no_can = first.send_json.await_args.args[0]
+        assert said == [(True, True, True), (True, True, True), (True, False, True), (False, False, False)]
+        assert (no_can.get("capturing"), no_can.get("forwarding")) == (False, False)
+
+    @pytest.mark.asyncio
+    async def test_capture_that_cannot_start_says_why(self, server, session):
+        def refuse(on_frame):
+            raise OSError("No such device")
+        session.frame_capture = FrameCaptureManager(refuse)
+        ws = MagicMock()
+        ws.send_json = AsyncMock()
+        await server._handle_capture_message(ws, enabled=True)
+        reply = ws.send_json.await_args.args[0]
+        assert reply["forwarding"] is False and "No such device" in reply["error"]
         assert ws not in server.capture_clients
 
 
@@ -931,6 +1031,17 @@ class TestAdapterListing:
         assert data["dropped"] == {"scanner": 0, "logger": 4, "clients": 1}
 
     @pytest.mark.asyncio
+    async def test_status_reports_bus_errors(self, listing_client, session):
+        from bus_errors import BusErrors
+        with patch("main.discover_can_interfaces", return_value=[]):
+            none_yet = (await (await listing_client.get("/api/status")).json())["bus_errors"]
+            session.bus_errors = BusErrors("can0")
+            session.bus_errors.observe({"state": "ERROR-PASSIVE", "berr_tx": 0, "berr_rx": 128}, now=100.0)
+            data = await (await listing_client.get("/api/status")).json()
+        assert none_yet is None
+        assert data["bus_errors"] == {"state": "ERROR-PASSIVE", "tx_errors": 0, "rx_errors": 128, "since_unix": 100.0}
+
+    @pytest.mark.asyncio
     async def test_refresh_query_forces_a_rescan(self, listing_client, catalog):
         resp = await listing_client.get("/api/can/adapters?refresh=1")
         assert resp.status == 200
@@ -947,3 +1058,96 @@ class TestAdapterListing:
     @pytest.mark.asyncio
     async def test_without_a_catalog_nothing_is_listed(self, client):
         assert (await (await client.get("/api/can/adapters")).json()) == {"adapters": []}
+
+
+class TestRecentNodeEvents:
+    """GET /api/nodes/events: every node's lifecycle events, for the graph."""
+
+    @pytest.mark.asyncio
+    async def test_returns_events_with_server_clock(self, client, session):
+        session.event_logger = MagicMock()
+        session.event_logger.get_node_history = AsyncMock(return_value=[
+            {"id": 1, "node_id": 10, "unique_id": None, "timestamp_unix": 100.0,
+             "event_type": "restart_suspected", "detail": None},
+        ])
+        resp = await client.get("/api/nodes/events?range=1h&types=restart_suspected,node_id_conflict&limit=50")
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["events"][0]["event_type"] == "restart_suspected"
+        assert isinstance(data["now_unix"], float)
+        args, kwargs = session.event_logger.get_node_history.call_args
+        assert args == (None,)
+        assert kwargs["event_types"] == ["restart_suspected", "node_id_conflict"]
+        assert kwargs["limit"] == 50
+        assert data["now_unix"] - kwargs["since_unix"] == pytest.approx(3600, abs=1)
+
+    @pytest.mark.asyncio
+    async def test_rejects_bad_parameters(self, client, session):
+        session.event_logger = MagicMock()
+        session.event_logger.get_node_history = AsyncMock(return_value=[])
+        assert (await client.get("/api/nodes/events?range=2y")).status == 400
+        assert (await client.get("/api/nodes/events?limit=x")).status == 400
+        assert (await client.get("/api/nodes/events?limit=0")).status == 400
+
+    @pytest.mark.asyncio
+    async def test_needs_the_event_logger(self, client):
+        assert (await client.get("/api/nodes/events")).status == 503
+
+
+class TestDsdlCompile:
+    """Two compiles at once would write the same compiled files at once."""
+
+    @pytest.mark.asyncio
+    async def test_one_compile_at_a_time(self, session, log_store):
+        running, overlapped = [], []
+
+        class SlowDsdl:
+            def compile_custom(self):
+                running.append(1)
+                overlapped.append(len(running) > 1)
+                time.sleep(0.2)
+                running.pop()
+                return {"ok": True}
+
+        server = WebSocketServer(session=session, host="127.0.0.1", port=0, log_store=log_store,
+                                 dsdl_manager=SlowDsdl())
+        async with TestClient(TestServer(server.app)) as c:
+            server._running = True
+            answers = await asyncio.gather(*(c.post("/api/dsdl/compile", json={"scope": "custom"}) for _ in range(2)))
+        assert [a.status for a in answers] == [200, 200]
+        assert overlapped == [False, False]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_compile_answers_as_every_route_does(self, session, log_store, tmp_path, monkeypatch):
+        """{"error": message}: each namespace's error on a line of its own."""
+        (tmp_path / "dsdl_messages" / "custom").mkdir(parents=True)
+        mgr = DsdlManager(tmp_path)
+        server = WebSocketServer(session=session, host="127.0.0.1", port=0, log_store=log_store, dsdl_manager=mgr)
+        async with TestClient(TestServer(server.app)) as c:
+            server._running = True
+            nothing = await c.post("/api/dsdl/compile", json={"scope": "custom"})
+            for namespace in ("alpha", "beta"):
+                mgr.save_type(namespace, "Reading", "1.0", "uint8 x\n@sealed\n")
+            monkeypatch.setattr(mgr, "_compile", lambda target, lookups, output, label: [f"{label}: broken"])
+            broken = await c.post("/api/dsdl/compile", json={"scope": "custom"})
+            answers = [(nothing.status, await nothing.json()), (broken.status, await broken.json())]
+        assert answers == [(422, {"error": "No custom types to compile"}),
+                           (422, {"error": "custom/alpha: broken\ncustom/beta: broken"})]
+
+
+class TestDsdlDeleteNamespace:
+    """DELETE /api/dsdl/custom/namespace/{namespace}: an empty one goes."""
+
+    @pytest.mark.asyncio
+    async def test_status_codes(self, session, log_store, tmp_path):
+        (tmp_path / "dsdl_messages" / "custom").mkdir(parents=True)
+        mgr = DsdlManager(tmp_path)
+        mgr.create_namespace("spare")
+        mgr.save_type("full", "Reading", "1.0", "uint8 x\n@sealed\n")
+        server = WebSocketServer(session=session, host="127.0.0.1", port=0, log_store=log_store, dsdl_manager=mgr)
+        async with TestClient(TestServer(server.app)) as c:
+            server._running = True
+            statuses = {ns: (await c.delete(f"/api/dsdl/custom/namespace/{ns}")).status
+                        for ns in ("spare", "full", "nowhere", "Bad-Name")}
+        assert statuses == {"spare": 200, "full": 400, "nowhere": 404, "Bad-Name": 400}
+        assert mgr.list_custom_namespaces() == ["full"]

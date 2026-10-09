@@ -88,18 +88,61 @@ const drawBusLoadSparkline = () => {
   }
 };
 
+// Cyphal v1.1 traffic on the bus, which this dashboard (a v1.0 monitor)
+// cannot decode: devices sending it would otherwise just look silent.
+const V11_NODES_SHOWN = 4;
+const renderV11Notice = () => {
+  const notice = el('canV11Notice');
+  if (!notice) return;
+  const v11 = state.canConnected ? state.cyphalV11 : null;
+  notice.classList.toggle('hidden', !v11);
+  if (!v11) return;
+  const shown = v11.nodes.slice(0, V11_NODES_SHOWN).join(', ');
+  const more = v11.nodes.length > V11_NODES_SHOWN ? ` +${v11.nodes.length - V11_NODES_SHOWN}` : '';
+  notice.textContent = `Cyphal v1.1 from node${v11.nodes.length === 1 ? '' : 's'} ${shown}${more} · not decoded`;
+  const subjects = v11.subject_ids.join(', ') + (v11.subject_count > v11.subject_ids.length ? ', …' : '');
+  const ago = formatLastSeen([new Date(v11.last_seen_unix * 1000).toISOString()]);
+  notice.title = `${v11.transfers} Cyphal v1.1 transfers on ${v11.subject_count} subject-ID`
+    + `${v11.subject_count === 1 ? '' : 's'} (${subjects}), the last ${ago}. This dashboard speaks Cyphal v1.0: `
+    + 'v1.1 topics are not shown unless the device pins them to a v1.0 subject-ID.';
+};
+
+// Errors on the bus: the CAN controller in an error state, or its error
+// counters growing. Most often the bus is not terminated, or a node runs
+// another bitrate; the backend logs it once, and this shows it while it lasts.
+const BUS_ERROR_CAUSES = 'Usual causes: the bus is not terminated (120 Ω at each end, about 60 Ω across '
+  + 'CAN_H and CAN_L with the power off), a node runs another bitrate or sample point, CAN_H and CAN_L '
+  + 'are swapped or loose, or no other node is on the bus to acknowledge frames. '
+  + "The Debug tab shows the controller's counters.";
+const renderBusNotice = () => {
+  const notice = el('canBusNotice');
+  if (!notice) return;
+  const errors = state.canConnected ? state.busErrors : null;
+  notice.classList.toggle('hidden', !errors);
+  if (!errors) return;
+  // The counters, which change with every poll, only in the title: a screen
+  // reader is told again when the state changes, not every few seconds.
+  const what = ['Bus errors', errors.state].filter(Boolean).join(' · ');
+  const html = `${escapeHtml(what)}<span class="can-bus-notice-hint">Check 120 Ω termination and bitrate</span>`;
+  if (notice.innerHTML !== html) notice.innerHTML = html;
+  const counted = errors.tx_errors != null && errors.rx_errors != null
+    ? ` The controller's error counters: TX ${errors.tx_errors}, RX ${errors.rx_errors} (128 or more is error-passive).`
+    : '';
+  notice.title = `Errors on the bus since ${formatPlotTime(errors.since_unix)}.${counted} ${BUS_ERROR_CAUSES}`;
+};
+
 const updateSemaphores = () => {
+  renderV11Notice();
+  renderBusNotice();
   const serverDot = el('serverSemaphore');
   const canDot = el('canSemaphore');
   const serverInfo = el('serverThroughput');
   const canInfo = el('canUtilization');
 
   if (serverDot) {
-    if (state.dashboardConnected) {
-      serverDot.className = 'semaphore ok';
-    } else {
-      serverDot.className = 'semaphore';
-    }
+    // Pulsing while the backend is being reached, a lost one tried again too.
+    serverDot.className = state.dashboardConnected ? 'semaphore ok'
+      : state.dashboardConnecting || state.dashboardRetry ? 'semaphore connecting' : 'semaphore';
   }
 
   if (canDot) {
@@ -108,18 +151,22 @@ const updateSemaphores = () => {
     } else if (state.canConnecting) {
       canDot.className = 'semaphore connecting';
     } else if (state.canConnected) {
-      canDot.className = 'semaphore ok';
+      canDot.className = state.busErrors ? 'semaphore warn' : 'semaphore ok';
     } else {
       canDot.className = 'semaphore';
     }
   }
 
-  // Lock fields when connected
-  el('apiBase').disabled = state.dashboardConnected;
-  el('interfacesSelect').disabled = state.canConnected || state.canConnecting;
-  el('canSpecInput').disabled = state.canConnecting;
-  el('canBitrateSelect').disabled = state.canConnecting;
-  el('canBitrateCustom').disabled = state.canConnecting;
+  // Lock fields when connected; the CAN form needs the server, whose list it shows.
+  el('apiBase').disabled = state.dashboardConnected || Boolean(state.dashboardRetry);
+  const canFormOff = !state.dashboardConnected || state.canConnecting;
+  el('interfacesSelect').disabled = canFormOff || state.canConnected;
+  el('canSpecInput').disabled = canFormOff;
+  el('canBitrateSelect').disabled = canFormOff;
+  el('canBitrateCustom').disabled = canFormOff;
+  el('canDataBitrateSelect').disabled = canFormOff;
+  renderRecordStart();  // the Record tab's Start needs both connections
+  DebugView.renderControls();  // so does the Debug tab's Start capture, and its socket
 
   if (serverInfo) {
     if (state.dashboardConnected && state.wsThroughput > 0) {
@@ -127,6 +174,9 @@ const updateSemaphores = () => {
       serverInfo.classList.remove('hidden');
     } else if (state.dashboardConnected) {
       serverInfo.textContent = '0 B/s';
+      serverInfo.classList.remove('hidden');
+    } else if (state.dashboardRetry) {
+      serverInfo.textContent = 'reconnecting…';
       serverInfo.classList.remove('hidden');
     } else {
       serverInfo.classList.add('hidden');
@@ -171,7 +221,8 @@ const updateDashboardConnectButton = () => {
   if (state.dashboardConnecting) {
     button.textContent = 'Connecting…';
   } else {
-    button.textContent = state.dashboardConnected ? 'Disconnect' : 'Connect';
+    // A session waiting to reconnect is still on: Disconnect ends it.
+    button.textContent = state.dashboardConnected || state.dashboardRetry ? 'Disconnect' : 'Connect';
   }
   button.disabled = state.canConnecting || state.canDisconnecting || state.dashboardConnecting;
   updateSemaphores();
@@ -182,10 +233,13 @@ const updateCanConnectButton = () => {
   if (!button) {
     return;
   }
-  button.textContent = state.canConnected ? 'Disconnect' : 'Connect';
+  button.textContent = state.canConnecting ? 'Connecting…' : state.canDisconnecting ? 'Disconnecting…'
+    : state.canConnected ? 'Disconnect' : 'Connect';
   const incomplete = !state.canConnected && !canFormReady();
-  button.disabled = state.canConnecting || state.canDisconnecting || incomplete;
-  button.title = incomplete && selectedCanTarget().interface ? 'Choose the bus bitrate first' : '';
+  const serverOff = !state.dashboardConnected;
+  button.disabled = serverOff || state.canConnecting || state.canDisconnecting || incomplete;
+  button.title = serverOff ? (state.dashboardRetry ? 'Waiting for the server to answer' : 'Connect to the server first')
+    : incomplete && selectedCanTarget().interface ? 'Choose the bus bitrate first' : '';
   updateSemaphores();
 };
 
@@ -238,6 +292,10 @@ const stopThroughputTimer = () => {
   _updateStaleBanner();
 };
 
+// How long to wait after `attempts` failed tries to reconnect: 2 s, 4 s, 8 s,
+// 16 s, then every 30 s. The socket and the backend itself are tried so.
+const retryDelayMs = (attempts) => Math.min(30, 2 ** Math.min(attempts, 5)) * 1000;
+
 // ── WebSocket ──
 
 const scheduleReconnect = () => {
@@ -249,8 +307,7 @@ const scheduleReconnect = () => {
   }
 
   state.wsReconnectAttempts += 1;
-  const delaySeconds = Math.min(30, 2 ** Math.min(state.wsReconnectAttempts, 5));
-  state.wsReconnectTimer = window.setTimeout(() => connectWs(), delaySeconds * 1000);
+  state.wsReconnectTimer = window.setTimeout(() => connectWs(), retryDelayMs(state.wsReconnectAttempts));
 };
 
 const connectWs = () => {
@@ -273,6 +330,7 @@ const connectWs = () => {
   };
 
   state.ws.onclose = () => {
+    DebugView.onSocketClosed();
     updateSemaphores();
     if (state.userClosedWs) {
       return;
@@ -306,6 +364,7 @@ const connectWs = () => {
           state.replayPaused = false;
           state.replayFinished = true;
           state.replayPositionS = state.replayDurationS;
+          state.replayEventsEmitted = state.replayTotalEvents;  // the last poll was before the last events
           if (typeof syncReplayStrip === 'function') syncReplayStrip();
         } else {
           state.latestBySubject.clear();
@@ -478,7 +537,9 @@ const loadInterfaces = async () => {
       || (data.available_interfaces || []).map((name) => ({ interface: name, label: name, needs_bitrate: false }));
     const select = el('interfacesSelect');
     const previousValue = select.value;
-    const preferredValue = previousValue || state.preferredCanInterface;
+    // The user's pick, kept when it is not listed for a while (a USB adapter
+    // enumerating again), so that it is picked again once it is.
+    const preferredValue = state.preferredCanInterface || previousValue;
     select.innerHTML = '';
     for (const adapter of state.canAdapters) {
       const option = document.createElement('option');
@@ -502,7 +563,6 @@ const loadInterfaces = async () => {
       // only way forward is to name one.
       select.value = offered.length > 0 ? offered[0] : OTHER_CAN_INTERFACE;
     }
-    state.preferredCanInterface = select.value;
     updateCanForm({ restoreBitrate: select.value !== previousValue });
     saveSettings();
     return data;
@@ -534,6 +594,10 @@ const stopInterfacePolling = () => {
   }
 };
 
+// A first connect compiles the DSDL, and every connect listens for heartbeats
+// to pick a node-ID: it can take well over the 15 s other requests get.
+const CAN_CONNECT_TIMEOUT_MS = 120000;
+
 const selectInterface = async () => {
   const target = selectedCanTarget();
   if (!target.interface) {
@@ -556,6 +620,7 @@ const selectInterface = async () => {
     const data = await requestJson('/api/can/connect', {
       method: 'POST',
       body: JSON.stringify(body),
+      timeoutMs: CAN_CONNECT_TIMEOUT_MS,
     });
     state.preferredCanInterface = el('interfacesSelect').value;
     if (body.bitrate) {
@@ -571,17 +636,36 @@ const selectInterface = async () => {
     return data;
   } catch (error) {
     showToast(`CAN connect failed: ${error.message}`, 'error');
+    setCanError(`Connect failed: ${error.message}`);
     return null;
   }
 };
 
-const disconnectAll = ({ persist = true } = {}) => {
-  state.dashboardConnected = false;
-  state.canConnected = false;
+// Why the last CAN connect failed, or the session ended, kept under the CAN
+// form until the next attempt: a toast is gone in seconds.
+const setCanError = (message) => {
+  state.canError = message || null;
+  el('canError').textContent = state.canError || '';
+  el('canError').classList.toggle('hidden', !state.canError);
+};
+
+// The bus's nodes and load curve go with its CAN session, however it ends,
+// rather than stay on screen looking live.
+const clearCanSession = () => {
+  state.latestNodesPayload = { node_count: 0, nodes: {} };
   state.busUtilization = null;
   state.droppedEvents = null;
   state.busLoadHistory.length = 0;
   drawBusLoadSparkline();
+  renderNodesTable();
+  refreshSubjectsTable();
+  renderSelectedNodeContent();
+};
+
+const disconnectAll = ({ persist = true } = {}) => {
+  stopRetryingDashboard();
+  state.dashboardConnected = false;
+  state.canConnected = false;
   state.latestBySubject.clear();
   state.latestByNode.clear();
   state.subjectHistory.clear();
@@ -602,11 +686,13 @@ const disconnectAll = ({ persist = true } = {}) => {
   stopThroughputTimer();
   stopPlotAnim();
   if (typeof GraphView !== 'undefined') GraphView.hide();
+  // The DSDL tab shows the server's types: with no server it says so, as
+  // when opened disconnected, and connectDashboard brings them back.
+  if (state.activeView === 'dsdl') DsdlView.init();
   disconnectWs();
   updateDashboardConnectButton();
   updateCanConnectButton();
-  renderNodesTable();
-  renderSelectedNodeContent();
+  clearCanSession();
   updateSemaphores();
   if (persist) saveSettings();
 };
@@ -619,21 +705,27 @@ const pollStatus = async () => {
   let data;
   try {
     data = await requestJson('/api/status');
-  } catch {
+  } catch (error) {
     if (state.dashboardConnected) {
-      disconnectAll();
+      // Still saved as connected, and tried again until it answers; a token
+      // it asks for is the prompt's to give.
+      disconnectAll({ persist: false });
+      if (error.status !== 401) retryDashboard();
     }
     return;
   }
 
   state.busUtilization = data.bus_utilization ?? null;
   state.droppedEvents = data.dropped ?? null;
+  state.cyphalV11 = data.cyphal_v11 ?? null;
+  state.busErrors = data.bus_errors ?? null;
 
   const backendCanRunning = data.status === 'running' && !!data.can_interface;
 
   if (backendCanRunning && !state.canConnected) {
     // Another client connected CAN
     state.canConnected = true;
+    setCanError(null);
     showConnectedCanInterface(data.can_interface, data.can_bitrate, data.can_data_bitrate, data.can_fd);
     state.preferredCanInterface = data.can_interface;
     updateCanConnectButton();
@@ -643,21 +735,20 @@ const pollStatus = async () => {
   } else if (!backendCanRunning && state.canConnected) {
     // CAN disconnected (by another client or due to error)
     state.canConnected = false;
-    state.busUtilization = null;
-    state.droppedEvents = null;
     REG_CACHE.clear();
     updateCanConnectButton();
     stopCanStartupDelay();
     stopNodesPolling();
     stopThroughputTimer();
     disconnectWs();
-    renderNodesTable();
+    clearCanSession();
     saveSettings();
     await loadInterfaces();
     startInterfacePolling();
 
     if (data.last_error) {
       showToast(`CAN disconnected: ${data.last_error}`, 'error');
+      setCanError(`Disconnected: ${data.last_error}`);
     }
   }
 
@@ -689,6 +780,8 @@ const getAllNodes = async () => {
       state.selectedNodeId = null;
     }
     renderNodesTable();
+    // Here too, not only on messages: a bus gone quiet sends none.
+    refreshSubjectsTable();
     renderSelectedNodeContent();
   } catch (error) {
     state.latestNodesPayload = { node_count: 0, nodes: {} };
@@ -736,13 +829,36 @@ const schedulePostCanStartup = (delayMs = 10000) => {
   }, delayMs);
 };
 
+// A backend that stops answering mid-session, or does not answer a page that
+// opens with a session saved, is tried again, less and less often, until it
+// answers or the user disconnects. The session stays saved meanwhile.
+const retryDashboard = () => {
+  const retry = state.dashboardRetry || { timer: null, attempts: 0 };
+  clearTimeout(retry.timer);
+  retry.attempts += 1;
+  retry.timer = setTimeout(openDashboard, retryDelayMs(retry.attempts));
+  state.dashboardRetry = retry;
+  updateDashboardConnectButton();
+  renderNodesTable();
+  renderSelectedNodeContent();
+};
+
+const stopRetryingDashboard = () => {
+  clearTimeout(state.dashboardRetry?.timer);
+  state.dashboardRetry = null;
+};
+
+// The Server button: connects, or ends the session, one waiting to reconnect too.
 const connectDashboard = async () => {
   if (state.canConnecting || state.canDisconnecting) return;
-  if (state.dashboardConnected) {
+  if (state.dashboardConnected || state.dashboardRetry) {
     disconnectAll();
     return;
   }
+  await openDashboard();
+};
 
+const openDashboard = async () => {
   state.dashboardConnecting = true;
   updateDashboardConnectButton();
   renderNodesTable();
@@ -753,13 +869,20 @@ const connectDashboard = async () => {
     statusData = await requestJson('/api/status');
   } catch (error) {
     state.dashboardConnecting = false;
+    if ((state.dashboardRetry || state.pendingReconnect) && error.status !== 401) {
+      retryDashboard();
+      return;
+    }
+    stopRetryingDashboard();
     updateDashboardConnectButton();
     renderNodesTable();
     renderSelectedNodeContent();
-    showToast(`Backend unreachable: ${error.message}`, 'error');
+    // A backend that wants a token was reached: its prompt says so.
+    if (error.status !== 401) showToast(`Backend unreachable: ${error.message}`, 'error');
     return;
   }
 
+  stopRetryingDashboard();
   state.dashboardConnecting = false;
   state.dashboardConnected = true;
   updateDashboardConnectButton();
@@ -777,6 +900,7 @@ const connectDashboard = async () => {
   if (statusData.status === 'running' && statusData.can_interface) {
     state.canAdapters = statusData.available_adapters || [];
     state.canConnected = true;
+    setCanError(null);
     showConnectedCanInterface(statusData.can_interface, statusData.can_bitrate,
       statusData.can_data_bitrate, statusData.can_fd);
     state.preferredCanInterface = statusData.can_interface;
@@ -793,6 +917,7 @@ const connectDashboard = async () => {
   if (state.activeView === 'dsdl') DsdlView.init();
   if (state.activeView === 'debug') DebugView.init();
   fetchRecordings();
+  fetchRawLogs();  // a raw log already running lights the Record tab's dot
   saveSettings();
 };
 
@@ -816,7 +941,7 @@ const connectCan = async () => {
     stopNodesPolling();
     stopThroughputTimer();
     disconnectWs();
-    renderNodesTable();
+    clearCanSession();
     saveSettings();
 
     // Reload available interfaces
@@ -830,6 +955,7 @@ const connectCan = async () => {
 
   // Connect CAN
   stopInterfacePolling();
+  setCanError(null);
   state.canConnecting = true;
   updateCanConnectButton();
   renderNodesTable();
@@ -854,6 +980,6 @@ const connectCan = async () => {
   schedulePostCanStartup(5000);
 
   if (!state.dashboardConnected) {
-    await connectDashboard();
+    await openDashboard();
   }
 };

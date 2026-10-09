@@ -8,6 +8,26 @@ const isNodeDisappeared = (nodeId) => {
   return node?.has_disappeared === true;
 };
 
+// Numbers to plot from a message's attributes, as [field, value] pairs: a
+// numeric array gives one per element (`velocity[0]`, ...), up to a few.
+const PLOT_ARRAY_MAX = 16;
+
+const plottableValues = (attributes) => {
+  const values = [];
+  for (const a of attributes || []) {
+    if (typeof a.value === 'number') {
+      values.push([a.attribute, a.value]);
+    } else if (Array.isArray(a.value) && a.value.length <= PLOT_ARRAY_MAX
+        && a.value.every((v) => typeof v === 'number')) {
+      a.value.forEach((v, i) => values.push([`${a.attribute}[${i}]`, v]));
+    }
+  }
+  return values;
+};
+
+// The points a field's history keeps, the newest: at 100 Hz, 36 s of it.
+const HISTORY_POINTS = 3600;
+
 const cacheEvent = (event) => {
   if (!event || !Number.isInteger(event.subject_id)) {
     return;
@@ -16,6 +36,16 @@ const cacheEvent = (event) => {
   if (Number.isInteger(event.publisher_node_id) && isNodeDisappeared(event.publisher_node_id)) {
     return;
   }
+
+  // When the browser got it and how long after the same publisher's previous
+  // message: a rate arrives only with a message, so this is how the graph
+  // tells a subject that has gone quiet from a slow one.
+  const previous = Number.isInteger(event.publisher_node_id)
+    ? state.latestByNode.get(event.publisher_node_id)?.get(event.subject_id)
+    : state.latestBySubject.get(event.subject_id);
+  event._rxMs = Date.now();
+  event._gapMs = previous?._rxMs ? event._rxMs - previous._rxMs : null;
+  event._prevGapMs = previous?._gapMs ?? null;
 
   state.latestBySubject.set(event.subject_id, event);
 
@@ -26,14 +56,15 @@ const cacheEvent = (event) => {
     state.latestByNode.get(event.publisher_node_id).set(event.subject_id, event);
   }
 
+  // A point keeps its publisher (`n`): a subject several nodes publish plots
+  // per node, not as one line jumping between them.
   const now = event.timestamp_unix || (Date.now() / 1000);
-  for (const a of event.attributes || []) {
-    if (typeof a.value !== 'number') continue;
-    const key = `${event.subject_id}:${a.attribute}`;
+  for (const [field, value] of plottableValues(event.attributes)) {
+    const key = `${event.subject_id}:${field}`;
     if (!state.subjectHistory.has(key)) state.subjectHistory.set(key, []);
     const buf = state.subjectHistory.get(key);
-    buf.push({ t: now, v: a.value });
-    if (buf.length > 3600) buf.shift();
+    buf.push({ t: now, v: value, n: event.publisher_node_id });
+    if (buf.length > HISTORY_POINTS) buf.shift();
   }
 };
 
@@ -49,6 +80,25 @@ const getSelectedNode = () => {
 // own publisher's; recordings made before `subject_rate` existed fall back to it.
 const getSubjectRate = (event) => Number(event?.subject_rate ?? event?.rate) || 0;
 
+// A rate arrives only with a message, so a publisher that stops keeps its
+// last one. A message counts as current for three of its periods (two
+// seconds at least); the period is the rate's, or the gap between messages
+// when that is longer, as for subjects too slow to report a rate. Of the
+// last two gaps the shorter counts: one stray message after a long pause
+// does not make a stopped subject look slow and alive.
+// A paused or finished replay keeps the picture it stopped at.
+const FRESH_PERIODS = 3;
+const FRESH_MIN_MS = 2000;
+
+const isEventFresh = (ev, now = Date.now()) => {
+  if (!ev) return false;
+  if (state.replayPaused || state.replayFinished) return true;
+  const gapMs = Math.min(ev._gapMs ?? Infinity, ev._prevGapMs ?? Infinity);
+  const periodMs = Math.max(ev.rate > 0 ? 1000 / ev.rate : 0, Number.isFinite(gapMs) ? gapMs : 0);
+  return now - (ev._rxMs || 0) <= Math.max(FRESH_MIN_MS, FRESH_PERIODS * periodMs);
+};
+
+// Messages per second a node sends now: subjects it stopped publishing count for nothing.
 const getNodeRate = (nodeId) => {
   const nodes = state.latestNodesPayload?.nodes;
   const node = nodes ? nodes[String(nodeId)] : null;
@@ -59,14 +109,16 @@ const getNodeRate = (nodeId) => {
   if (!map) {
     return 0;
   }
+  const now = Date.now();
   let total = 0;
   for (const event of map.values()) {
-    total += Number(event.rate) || 0;
+    if (isEventFresh(event, now)) total += Number(event.rate) || 0;
   }
   return total;
 };
 
-const getNodeHealthValue = (nodeId) => {
+// A field of the node's latest heartbeat (health, mode, ...), or null.
+const getNodeHeartbeatValue = (nodeId, attribute) => {
   const map = state.latestByNode.get(nodeId);
   if (!map) {
     return null;
@@ -76,13 +128,16 @@ const getNodeHealthValue = (nodeId) => {
       continue;
     }
     for (const attr of event.attributes) {
-      if (String(attr.attribute).toLowerCase() === 'health') {
+      if (String(attr.attribute).toLowerCase() === attribute) {
         return String(attr.value);
       }
     }
   }
   return null;
 };
+
+const getNodeHealthValue = (nodeId) => getNodeHeartbeatValue(nodeId, 'health');
+const getNodeModeValue = (nodeId) => getNodeHeartbeatValue(nodeId, 'mode');
 
 const getNodeVisualState = (node) => {
   if (!node) {
@@ -91,10 +146,11 @@ const getNodeVisualState = (node) => {
   if (node.has_disappeared) {
     return 'offline';
   }
+  // Cyphal health: ADVISORY is a minor note (the Health column shows it),
+  // CAUTION a degraded node, WARNING a failing one.
   const health = getNodeHealthValue(node.node_id);
-  if (health && health !== 'NOMINAL') {
-    return 'error';
-  }
+  if (health === 'WARNING') return 'warning';
+  if (health === 'CAUTION') return 'caution';
   return getNodeRate(node.node_id) > 0 ? 'active' : 'idle';
 };
 
@@ -106,6 +162,38 @@ const getTotalMessageRate = () => {
     total += getNodeRate(node.node_id);
   }
   return total;
+};
+
+// A node by its alias or GetInfo name, when the dashboard knows one.
+const nodeDisplayName = (nodeId) => {
+  const node = state.latestNodesPayload?.nodes?.[nodeId];
+  return node ? getNodeAlias(node.unique_id) || node.name || '' : '';
+};
+
+// "10, 11" -> "10 org.zubax.myxa (front_left)\n11 ...": node-IDs with names, for a tooltip.
+const nodeIdsTitle = (idsText) => String(idsText).split(', ').filter((id) => id && id !== '-')
+  .map((id) => `${id} ${nodeDisplayName(Number(id))}`.trim()).join('\n');
+
+// Cyphal's fixed port-IDs: subjects from 6144 and services from 256 are
+// the standard ones every node may have (heartbeat, GetInfo, registers, ...).
+const FIRST_FIXED_SERVICE_ID = 256;
+const isFixedPortId = (kind, id) =>
+  id >= (kind === 'service' ? FIRST_FIXED_SERVICE_ID : FIRST_FIXED_SUBJECT_ID);
+
+// The standard types on their fixed port-IDs (public regulated DSDL), for
+// naming a port before anything has been decoded on it.
+const STANDARD_SUBJECT_TYPES = {
+  7168: 'uavcan.time.Synchronization', 7509: 'uavcan.node.Heartbeat', 7510: 'uavcan.node.port.List',
+  8164: 'uavcan.pnp.cluster.Discovery', 8165: 'uavcan.pnp.NodeIDAllocationData (v2)',
+  8166: 'uavcan.pnp.NodeIDAllocationData (v1)', 8174: 'uavcan.internet.udp.OutgoingPacket',
+  8184: 'uavcan.diagnostic.Record',
+};
+const STANDARD_SERVICE_TYPES = {
+  384: 'uavcan.register.Access', 385: 'uavcan.register.List', 390: 'uavcan.pnp.cluster.AppendEntries',
+  391: 'uavcan.pnp.cluster.RequestVote', 405: 'uavcan.file.GetInfo', 406: 'uavcan.file.List',
+  407: 'uavcan.file.Modify', 408: 'uavcan.file.Read', 409: 'uavcan.file.Write', 430: 'uavcan.node.GetInfo',
+  434: 'uavcan.node.GetTransportStatistics', 435: 'uavcan.node.ExecuteCommand',
+  500: 'uavcan.internet.udp.HandleIncomingPacket', 510: 'uavcan.time.GetSynchronizationMasterInfo',
 };
 
 // Where a subject's type comes from: 'registers', 'user' (set in Subjects),
@@ -122,21 +210,44 @@ const isUntypedSubject = (subjectId) => {
     && !state.latestBySubject.get(subjectId)?.message_type;
 };
 
+// A DSDL type named one way everywhere, "uavcan.node.Heartbeat.1.0", where the
+// backend may give its Python class's way ("Heartbeat_1_0").
+const dsdlTypeName = (name) => (name ? String(name).replace(/_(\d+)_(\d+)$/, '.$1.$2') : name);
+
+// A subject's full type name: the one it is decoded as, else the class of
+// its last message, else the standard type on its fixed port-ID.
+const subjectTypeName = (sid, event) => {
+  if (isUntypedSubject(sid)) return 'type unknown';
+  const decodedAs = state.latestNodesPayload?.subject_types?.[sid]?.type;
+  if (decodedAs) return dsdlTypeName(decodedAs);
+  const standard = STANDARD_SUBJECT_TYPES[sid];
+  const cls = event?.message_type;  // e.g. "Heartbeat_1_0": the class, versioned
+  if (standard && cls) return dsdlTypeName(`${standard.slice(0, standard.lastIndexOf('.') + 1)}${cls}`);
+  return dsdlTypeName(cls) || standard || '-';
+};
+
 const buildSubjectDetailData = (subjectIds, nodeId) => {
   if (!Array.isArray(subjectIds) || !subjectIds.length) {
     return [];
   }
   const perNodeEvents = Number.isInteger(nodeId) ? state.latestByNode.get(nodeId) : null;
+  const now = Date.now();
 
   return subjectIds.map((subjectId) => {
     const nodeEvent = perNodeEvents?.get(subjectId);
     const networkEvent = state.latestBySubject.get(subjectId);
     const event = nodeEvent || networkEvent;
+    const typeName = subjectTypeName(subjectId, event);
+    const fresh = isEventFresh(event, now);
+    // A publisher's card shows its own rate; a subscriber's, the subject's
+    // over all publishers. None once messages stopped: the card says silent.
+    const rate = Number.isInteger(nodeId) ? Number(event?.rate) || 0 : getSubjectRate(event);
     return {
       subjectId,
-      messageType: event?.message_type || null,
+      messageType: typeName === '-' || typeName === 'type unknown' ? null : typeName,
       untyped: isUntypedSubject(subjectId),
-      rate: event?.rate ?? null,
+      rate: !event ? null : fresh ? rate : 0,
+      silent: Boolean(event) && !fresh,
       attributes: Array.isArray(event?.attributes) ? event.attributes : [],
     };
   });

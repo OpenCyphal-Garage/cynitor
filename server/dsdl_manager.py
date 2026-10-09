@@ -9,6 +9,8 @@ import logging
 import re
 import shutil
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -21,6 +23,25 @@ _FIELD_RE = re.compile(
     r"(?P<name>[a-zA-Z_]\w*)"
     r"(?:\s*=\s*(?P<value>[^#]+))?"
 )
+
+# The fixed port-IDs the compiler (pydsdl) accepts on a type outside the
+# uavcan namespace; it refuses any other.
+_FIXED_PORT_RANGES = {"message": (6144, 7167), "service": (256, 383)}
+
+# The public regulated types' root namespaces. A custom namespace under one
+# would merge into theirs, in the tree and in the compiled code.
+_PUBLIC_ROOTS = ("uavcan", "reg")
+
+# How old the status kept in memory may get. A change made here resets it at
+# once; this bounds how late one made elsewhere shows: the public types
+# compiled when CAN connects (if they are not yet), files changed by hand.
+_STATUS_MAX_AGE_S = 30.0
+
+# pydsdl and nunavut log a line per type at INFO: hundreds for a public
+# compile, a few for every type shown, which would bury the dashboard's log
+# panel. Set once here, not around each use: uses run in several threads.
+for _chatty in ("pydsdl", "nunavut"):
+    logging.getLogger(_chatty).setLevel(logging.WARNING)
 
 
 class DsdlManager:
@@ -51,6 +72,11 @@ class DsdlManager:
 
         self._tree_cache: Optional[dict] = None
         self._type_index: dict[str, Path] = {}
+        self._status_cache: Optional[dict] = None
+        self._status_read_at = 0.0
+        # Held while the status is read, so a change made meanwhile resets
+        # what that read keeps, instead of the read keeping what was before.
+        self._status_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Public API
@@ -63,20 +89,28 @@ class DsdlManager:
             sys.path.append(path)
 
     def get_status(self) -> dict[str, Any]:
+        """Kept in memory: each open DSDL tab asks for it every few seconds,
+        and reading it walks every source and compiled file."""
+        with self._status_lock:
+            if self._status_cache is None or time.monotonic() - self._status_read_at > _STATUS_MAX_AGE_S:
+                self._status_cache = self._read_status()
+                self._status_read_at = time.monotonic()
+            return self._status_cache
+
+    def _read_status(self) -> dict[str, Any]:
         paths: list[dict] = []
         if self.public_types_dir.is_dir():
             paths.append({"path": str(self.public_types_dir), "label": "Public regulated types", "source": "regulated"})
         if self.custom_dir.is_dir():
             paths.append({"path": str(self.custom_dir), "label": "Custom types", "source": "custom"})
 
-        compiled_ok = all((self.compiled_dir / ns).is_dir() for ns in ("uavcan", "reg"))
+        compiled_ok = all((self.compiled_dir / ns).is_dir() for ns in _PUBLIC_ROOTS)
 
-        public_roots = {"uavcan", "reg"}
         last_public_compiled = self._max_compiled_mtime(
-            lambda p: p.parts and p.parts[0] in public_roots
+            lambda p: p.parts and p.parts[0] in _PUBLIC_ROOTS
         ) if compiled_ok else None
         last_custom_compiled = self._max_compiled_mtime(
-            lambda p: p.parts and p.parts[0] not in public_roots,
+            lambda p: p.parts and p.parts[0] not in _PUBLIC_ROOTS,
             self.custom_compiled_dir,
         )
         last_compiled_candidates = [t for t in (last_public_compiled, last_custom_compiled) if t is not None]
@@ -120,7 +154,7 @@ class DsdlManager:
         self._type_index.clear()
 
         if self.public_types_dir.is_dir():
-            for ns_root in ("uavcan", "reg"):
+            for ns_root in _PUBLIC_ROOTS:
                 ns_dir = self.public_types_dir / ns_root
                 if ns_dir.is_dir():
                     self._walk_namespace(ns_dir, ns_root, tree, "regulated")
@@ -167,7 +201,7 @@ class DsdlManager:
         _, _, fixed_port_id = self._parse_filename(path.name)
         is_custom = self.custom_dir.is_dir() and str(path).startswith(str(self.custom_dir))
 
-        return {
+        detail = {
             "full_name": full_name,
             "namespace": namespace,
             "short_name": short_name,
@@ -182,13 +216,88 @@ class DsdlManager:
             "dependencies": self._resolve_dependencies(parsed["dependencies"], namespace),
             "compiled": self._is_compiled(full_name),
         }
+        self._add_compiler_view(detail, path)
+        return detail
+
+    def _add_compiler_view(self, detail: dict[str, Any], path: Path) -> None:
+        """Add what the compiler (pydsdl) reads in a type beyond its fields: its
+        comments, whether it is a union, sealed or how far it may grow, its
+        size in bytes, and whether it is deprecated. Without pydsdl, or for a
+        type it cannot read, these stay empty; for the latter, ``problem``
+        says why, and on which line, as a compile would."""
+        service = detail["kind"] == "service"
+        sections = detail["fields"] if service else {"": detail["fields"]}
+        for field in (f for fields in sections.values() for f in fields):
+            field["doc"] = ""
+        for constant in detail["constants"]:
+            constant["doc"] = ""
+        detail.update(doc="", deprecated=False, layout=None, problem=None)
+        try:
+            import pydsdl
+            read = self._read_type(path, detail["namespace"].split(".")[0], detail["source"] == "custom")
+        except Exception as exc:
+            logger.debug("pydsdl did not read %s: %s", path, exc)
+            detail["problem"] = self._problem(exc, path)
+            return
+
+        parts = {"request": read.request_type, "response": read.response_type} if service else {"": read}
+        layouts = {}
+        for name, part in parts.items():
+            inner = part.inner_type if isinstance(part, pydsdl.DelimitedType) else part
+            docs = {f.name: f.doc for f in inner.fields_except_padding}
+            for field in sections.get(name, []):
+                field["doc"] = docs.get(field["name"], "")
+            constants = {c.name: c.doc for c in inner.constants}
+            for constant in detail["constants"]:
+                constant["doc"] = constants.get(constant["name"], constant["doc"])
+            sizes = inner.bit_length_set
+            layouts[name] = {
+                "union": isinstance(inner, pydsdl.UnionType),
+                "sealed": not isinstance(part, pydsdl.DelimitedType),
+                "extent_bytes": (part.extent + 7) // 8,
+                "size_bytes": [(sizes.min + 7) // 8, (sizes.max + 7) // 8],
+            }
+        detail.update(doc=read.doc, deprecated=read.deprecated, layout=layouts if service else layouts[""])
+
+    @staticmethod
+    def _problem(exc: Exception, path: Path) -> Optional[dict[str, Any]]:
+        """Why the compiler refuses the type in ``path``: its message, and the
+        line of ``path`` it is on (None for the file as a whole, or when the
+        fault is in a type it uses, which the message then names). None when
+        pydsdl is missing or failed in some other way."""
+        if isinstance(exc, ImportError):
+            return None
+        import pydsdl
+        if not isinstance(exc, pydsdl.FrontendError):
+            return None
+        where = Path(exc.path) if exc.path else path
+        if where.resolve() != path.resolve():
+            line = f", line {exc.line}" if exc.line else ""
+            return {"message": f"In {where.name}{line}: {exc.text}", "line": None}
+        return {"message": exc.text, "line": exc.line}
+
+    def _read_type(self, path: Path, root: str, custom: bool) -> Any:
+        """The type in ``path`` as the compiler reads it, with the namespaces it
+        may use looked up as a compile looks them up. Only the file and the
+        types it uses are read: 30 to 240 ms, where reading all the public
+        types takes over a second."""
+        import pydsdl
+        own = (self.custom_dir if custom else self.public_types_dir) / root
+        others = [self.public_types_dir / ns for ns in _PUBLIC_ROOTS]
+        if self.custom_dir.is_dir():
+            others += [d for d in sorted(self.custom_dir.iterdir()) if d.is_dir() and not d.name.startswith(".")]
+        lookups = [str(d) for d in others if d.is_dir() and d != own]
+        read, _ = pydsdl.read_files(str(path), [str(own)], lookups)
+        return read[0]
 
     def invalidate_cache(self) -> None:
         self._tree_cache = None
         self._type_index.clear()
+        with self._status_lock:
+            self._status_cache = None
 
     def create_namespace(self, namespace: str) -> dict[str, Any]:
-        self._validate_namespace(namespace)
+        self._validate_custom_namespace(namespace)
         ns_dir = self.custom_dir / Path(*namespace.split("."))
         if ns_dir.is_dir():
             raise ValueError(f"Namespace '{namespace}' already exists")
@@ -196,14 +305,29 @@ class DsdlManager:
         self.invalidate_cache()
         return {"namespace": namespace, "path": str(ns_dir)}
 
+    def delete_namespace(self, namespace: str) -> dict[str, Any]:
+        """Remove a custom namespace with no types left in it, with its empty
+        sub-namespaces. Only its spelling is checked, so one made under uavcan
+        or reg before that was refused can go too."""
+        self._validate_namespace(namespace)
+        ns_dir = self.custom_dir / Path(*namespace.split("."))
+        if not ns_dir.is_dir():
+            raise FileNotFoundError(f"Namespace not found: {namespace}")
+        if any(ns_dir.rglob("*.dsdl")):
+            raise ValueError(f"Namespace '{namespace}' still has types: delete them first")
+        shutil.rmtree(ns_dir)
+        self.invalidate_cache()
+        return {"namespace": namespace, "deleted": True}
+
     def save_type(self, namespace: str, type_name: str, version: str,
                   source_text: str, fixed_port_id: Optional[int] = None,
                   overwrite: bool = False) -> dict[str, Any]:
-        self._validate_namespace(namespace)
+        self._validate_custom_namespace(namespace)
         if not re.match(r"^[A-Z][A-Za-z0-9_]*$", type_name):
             raise ValueError("Type name must start with uppercase letter and contain only alphanumeric/underscore")
         if not re.match(r"^\d+\.\d+$", version):
             raise ValueError("Version must be MAJOR.MINOR (e.g. 1.0)")
+        self._validate_fixed_port_id(fixed_port_id, source_text)
 
         ns_dir = self.custom_dir / Path(*namespace.split("."))
         ns_dir.mkdir(parents=True, exist_ok=True)
@@ -318,7 +442,7 @@ class DsdlManager:
 
             full_ns = ".".join([ns_prefix] + ns_parts) if ns_parts else ns_prefix
             full_name = f"{full_ns}.{type_name}.{version}"
-            kind, field_names = self._quick_parse(dsdl_file)
+            kind, field_names, constant_names = self._quick_parse(dsdl_file)
             self._type_index[full_name] = dsdl_file
 
             if ns_prefix not in tree:
@@ -337,6 +461,7 @@ class DsdlManager:
                 "fixed_port_id": fixed_port_id,
                 "source": source,
                 "field_names": field_names,
+                "constant_names": constant_names,
                 "compiled": self._is_compiled(full_name),
             })
 
@@ -372,14 +497,15 @@ class DsdlManager:
         return type_name, f"{major}.{minor}", fixed_port_id
 
     @staticmethod
-    def _quick_parse(path: Path) -> tuple[str, list[str]]:
-        """Single-pass scan: returns (kind, field_names)."""
+    def _quick_parse(path: Path) -> tuple[str, list[str], list[str]]:
+        """Single-pass scan: returns (kind, field_names, constant_names), the names for search."""
         kind = "message"
         field_names: list[str] = []
+        constant_names: list[str] = []
         try:
             text = path.read_text(encoding="utf-8")
         except OSError:
-            return kind, field_names
+            return kind, field_names, constant_names
         for line in text.split("\n"):
             stripped = line.strip()
             if stripped == "---":
@@ -388,12 +514,15 @@ class DsdlManager:
             if not stripped or stripped.startswith("#") or stripped.startswith("@"):
                 continue
             m = _FIELD_RE.match(stripped)
-            if not m or m.group("value") is not None:
+            if not m:
+                continue
+            if m.group("value") is not None:
+                constant_names.append(m.group("name"))
                 continue
             if m.group("type").startswith("void"):
                 continue
             field_names.append(m.group("name"))
-        return kind, field_names
+        return kind, field_names, constant_names
 
     def _resolve_dependencies(self, raw_deps: list[str], namespace: str) -> list[str]:
         """Resolve relative dependency names to full type names."""
@@ -482,9 +611,31 @@ class DsdlManager:
         return any((root / relative).is_file() for root in (self.compiled_dir, self.custom_compiled_dir))
 
     @staticmethod
+    def _validate_fixed_port_id(port_id: Any, source_text: str) -> None:
+        """A port the compiler would refuse, or a non-number, names no file it can read."""
+        if port_id is None:
+            return
+        if isinstance(port_id, bool) or not isinstance(port_id, int):
+            raise ValueError("Fixed port ID must be a whole number")
+        kind = "service" if any(line.strip() == "---" for line in source_text.split("\n")) else "message"
+        low, high = _FIXED_PORT_RANGES[kind]
+        if not low <= port_id <= high:
+            raise ValueError(f"A fixed port ID for a {kind} of your own must be from {low} to {high}")
+
+    @staticmethod
     def _validate_namespace(namespace: str) -> None:
         if not namespace or not re.match(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$", namespace):
             raise ValueError("Namespace must be lowercase dotted identifiers (e.g. myapp.sensors)")
+
+    @staticmethod
+    def _validate_custom_namespace(namespace: str) -> None:
+        """A namespace new types may go into. Deleting checks only the spelling,
+        so a type saved under uavcan or reg before this was refused can go."""
+        DsdlManager._validate_namespace(namespace)
+        root = namespace.split(".")[0]
+        if root in _PUBLIC_ROOTS:
+            raise ValueError(f"Namespace '{root}' belongs to the public regulated types; "
+                             "start yours with a name of your own (e.g. myapp.sensors)")
 
     def _run_compilation(self, scope: str = "all") -> dict[str, Any]:
         uavcan_dir = self.public_types_dir / "uavcan"
@@ -510,7 +661,7 @@ class DsdlManager:
 
         self.invalidate_cache()
         if errors:
-            return {"ok": False, "errors": errors}
+            return {"ok": False, "error": "\n".join(errors)}
         # Drop Python's cached module objects for any namespace under
         # compiled_dir so the scanner's next import_module() picks up the
         # freshly generated .py files instead of the pre-compile snapshot
@@ -541,22 +692,38 @@ class DsdlManager:
         In-process through pycyphal (which drives nunavut), not by running
         nnvg: the executable bundles the libraries but has no nnvg to run.
         """
-        # pydsdl and nunavut log a line per type at INFO: hundreds for the
-        # public types, which would bury the dashboard's log panel.
-        chatty = [logging.getLogger(name) for name in ("pydsdl", "nunavut")]
-        levels = [lg.level for lg in chatty]
-        for lg in chatty:
-            lg.setLevel(logging.WARNING)
         try:
             import pycyphal.dsdl
             output.mkdir(parents=True, exist_ok=True)
             pycyphal.dsdl.compile(target, [ld for ld in lookups if ld.is_dir()], output_directory=output)
         except Exception as exc:
-            return [f"{label}: {exc}"]
-        finally:
-            for lg, level in zip(chatty, levels):
-                lg.setLevel(level)
+            return [DsdlManager._compile_error(exc, [target, *lookups]) or f"{label}: {exc}"]
         return []
+
+    @staticmethod
+    def _compile_error(exc: Exception, roots: list[Path]) -> Optional[str]:
+        """A fault the compiler (pydsdl) found, as one reads it: the type it is
+        in by its full name, and its line, in place of the file's path on the
+        server. ``roots`` are the root namespace folders the compile read.
+        None for any other failure."""
+        try:
+            import pydsdl
+        except ImportError:
+            return None
+        if not isinstance(exc, pydsdl.FrontendError) or not exc.path:
+            return None
+        path = Path(exc.path).resolve()
+        where = path.name
+        for folder in {root.resolve().parent for root in roots}:
+            if not path.is_relative_to(folder):
+                continue
+            relative = path.relative_to(folder)
+            type_name, version, _ = DsdlManager._parse_filename(relative.name)
+            if type_name:
+                where = ".".join([*relative.parts[:-1], type_name, version])
+                break
+        line = f", line {exc.line}" if exc.line else ""
+        return f"{where}{line}: {exc.text}"
 
     def _adopt_legacy_custom_types(self, legacy_dir: Path) -> None:
         """Copy custom types an earlier version kept in the source tree into the data folder.

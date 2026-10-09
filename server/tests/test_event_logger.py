@@ -208,6 +208,14 @@ class TestEventLogger:
         assert len(history) == 2
 
     @pytest.mark.asyncio
+    async def test_node_history_of_every_node(self, logger):
+        logger._log_node_event_sync(node_id=10, event_type="restart_suspected")
+        logger._log_node_event_sync(node_id=20, event_type="node_id_conflict")
+        logger._log_node_event_sync(node_id=30, event_type="health_change")
+        history = logger._get_node_history_sync(None, event_types=["restart_suspected", "node_id_conflict"])
+        assert sorted(h["node_id"] for h in history) == [10, 20]
+
+    @pytest.mark.asyncio
     async def test_subject_summary_by_unique_id(self, logger):
         uid = "aabbccdd" * 4
         logger._write_events_sync([
@@ -641,24 +649,44 @@ class TestEventLogger:
         assert rec["event_count"] == 2
 
     @pytest.mark.asyncio
-    async def test_service_call_routes_to_recording(self, logger):
+    async def test_service_calls_route_to_the_recordings_that_take_them(self, logger):
+        """By service-ID, or by node: the server's or the client's."""
         await logger.start()
         try:
-            rec_id = await logger.create_recording(
-                name="svc", filter_spec={"service_ids": [384]},
-            )
+            by_service = await logger.create_recording(name="svc", filter_spec={"service_ids": [384]})
+            by_client = await logger.create_recording(name="client", filter_spec={"node_ids": [10]})
+            by_subject = await logger.create_recording(name="subject", filter_spec={"subject_ids": [7509]})
+            call = {"service_id": 384, "service_type": "uavcan.register.Access_1_0", "node_id": 42,
+                    "unique_id": "aaa", "client_node_id": 10, "status": "ok", "latency_ms": 5.0,
+                    "request": '{"name": "x"}', "response": '{"value": 1}', "timestamp_unix": 1700000000.0}
+            assert logger.wants_service_call(call)
+            await logger.log_service_calls([call])
+            for rec_id in (by_service, by_client):
+                events = await logger.get_recording_events(rec_id)
+                assert [(e["kind"], e["service_id"], e["publisher_node_id"], e["unique_id"], e["message_type"])
+                        for e in events] == [("service_call", 384, 42, "aaa", "uavcan.register.Access_1_0")]
+                assert events[0]["attributes"] == {"client_node_id": 10, "status": "ok", "latency_ms": 5.0,
+                                                   "request": '{"name": "x"}', "response": '{"value": 1}'}
+                assert (await logger.get_recording(rec_id))["event_count"] == 1
+            assert await logger.get_recording_events(by_subject) == []
+        finally:
+            await logger.stop()
+
+    @pytest.mark.asyncio
+    async def test_a_services_panel_call_is_not_recorded_from_node_history(self, logger):
+        """The recordings hear every call on the bus, the Services panel's among
+        them: its node-history row must not record it a second time."""
+        await logger.start()
+        try:
+            rec_id = await logger.create_recording(name="svc", filter_spec={"service_ids": [384]})
             await logger.log_node_event(
                 node_id=42, event_type="service_call",
-                detail={"service_id": 384, "service_type": "GetInfo", "status": "ok",
-                        "latency_ms": 5.0, "response": {"x": 1}},
+                detail={"service_id": 384, "service_type": "uavcan.register.Access_1_0", "status": "ok",
+                        "latency_ms": 5.0, "response": "{}"},
                 unique_id="aaa",
             )
-            await asyncio.sleep(0.05)
-            events = await logger.get_recording_events(rec_id)
-            assert len(events) == 1
-            assert events[0]["kind"] == "service_call"
-            assert events[0]["service_id"] == 384
-            assert events[0]["message_type"] == "GetInfo"
+            assert await logger.get_recording_events(rec_id) == []
+            assert [e["event_type"] for e in await logger.get_node_history(42)] == ["service_call"]
         finally:
             await logger.stop()
 

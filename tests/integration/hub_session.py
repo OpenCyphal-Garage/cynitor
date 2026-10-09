@@ -19,9 +19,12 @@ Checks, in order:
   4. bus load is measured by the hub, not canbusload;
      and a raw log of the frames reads back through python-can;
   4a. a firmware update: node 50 accepts the command and reads the whole
-     file from Cynitor with uavcan.file.Read, as a bootloader does;
+     file from Cynitor with uavcan.file.Read, as a bootloader does; a
+     recording holds both sides' calls, heard on the bus and decoded;
   4b. a subject no register names is not decoded; guessing its type from
      its payloads offers the right one, and setting it decodes the subject;
+  4c. Cyphal v1.1 transfers on the wire (16-bit subject-IDs) are noticed,
+     though not decoded;
   5. an adapter that disappears ends the session with an error;
   6. the databases are written to the session's data folder.
 
@@ -40,6 +43,7 @@ the databases a session writes do not land in the checkout.
 """
 
 import asyncio
+import json
 import os
 import sys
 import tempfile
@@ -232,6 +236,10 @@ async def run() -> None:
               f"raw log {log.path.name}: {len(logged)} frames, the device's and Cynitor's own "
               f"({'CAN FD' if FD else 'Classic CAN'}), read back by python-can")
 
+        # Cynitor's command to the device and the device's reads from Cynitor,
+        # as an analyzer on the bus would hear them.
+        calls_recording = await session.event_logger.create_recording(
+            name="update calls", filter_spec={"service_ids": [408, 435]})
         image = os.urandom(3000)  # eleven full chunks and a short one
         session.firmware_folder.mkdir()
         (session.firmware_folder / "integration-2.0.app.bin").write_bytes(image)
@@ -244,6 +252,23 @@ async def run() -> None:
               f"node {DEVICE_NODE_ID} read the whole firmware file from Cynitor ({len(image)} bytes)")
         check(update["state"] == "transferred" and update["read"] == len(image),
               f"the update's progress followed the reads: {update['state']}, {update['read']} bytes")
+        await asyncio.sleep(0.5)  # the recorder hands calls over every 50 ms
+        calls = [e for e in await session.event_logger.get_recording_events(calls_recording)
+                 if e["kind"] == "service_call"]
+        commands = [c for c in calls if c["service_id"] == 435]
+        check(len(commands) == 1 and commands[0]["publisher_node_id"] == DEVICE_NODE_ID
+              and commands[0]["attributes"]["client_node_id"] == int(own_id)
+              and commands[0]["attributes"]["status"] == "ok"
+              and json.loads(commands[0]["attributes"]["request"])["command"]
+              == Command.Request.COMMAND_BEGIN_SOFTWARE_UPDATE,
+              f"the recording holds Cynitor's update command to node {DEVICE_NODE_ID}, decoded")
+        reads = [c for c in calls if c["service_id"] == 408]
+        recorded = bytes(b for c in reads for b in json.loads(c["attributes"]["response"])["data"]["value"])
+        check(all(c["publisher_node_id"] == int(own_id) and c["attributes"]["client_node_id"] == DEVICE_NODE_ID
+                  and c["message_type"] == "uavcan.file.Read_1_1" for c in reads)
+              and [json.loads(c["attributes"]["request"])["offset"] for c in reads] == list(range(0, len(image), 256))
+              and recorded == image,
+              f"and node {DEVICE_NODE_ID}'s {len(reads)} reads from Cynitor, their responses the whole file")
 
         listed = await wait_for(lambda: UNNAMED_SUBJECT_ID in
                                 (session.telemetry.get_all_nodes_info()["nodes"][DEVICE_NODE_ID]["publishers"]))
@@ -262,6 +287,17 @@ async def run() -> None:
         decoded = await wait_for(lambda: UNNAMED_SUBJECT_ID in session.telemetry.latest_by_subject)
         values = decoded and session.telemetry.latest_by_subject[UNNAMED_SUBJECT_ID]["attributes"][0]["value"]
         check(values == [1.0, 2.0, 3.5], f"subject {UNNAMED_SUBJECT_ID} decodes once its type is set: {values}")
+
+        # A Cyphal v1.1 node: 16-bit subject-IDs, a frame format v1.0 lacks.
+        check(session.v11.status() is None, "no Cyphal v1.1 traffic seen yet")
+        for subject in (0x1234, 0xBEEF):
+            tap.send(can.Message(arbitration_id=(4 << 26) | (subject << 8) | (1 << 7) | 77,
+                                 data=b"v1.1" + bytes([0xE0]), is_fd=FD))  # one whole transfer
+        seen = await wait_for(lambda: session.v11.status() is not None and session.v11.status()["transfers"] == 2,
+                              timeout=5)
+        v11 = session.v11.status()
+        check(seen and v11["nodes"] == [77] and v11["subject_ids"] == [0x1234, 0xBEEF],
+              f"Cyphal v1.1 traffic noticed: {v11}")
 
         session.hub._still_present = lambda: False  # the adapter goes away
         gone = await wait_for(lambda: not session.is_running, timeout=10.0)

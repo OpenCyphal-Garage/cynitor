@@ -272,10 +272,112 @@ class TestSessionHealth:
         import main
         checked = []
         monkeypatch.setattr(main, "_check_can_health", lambda iface: checked.append(iface))
+        monkeypatch.setattr(main, "socketcan_supports_fd", lambda device: False)
         s = main.CANSession()
         s.can_interface = "socketcan:vcan0"
         assert await main._session_health_error(s) is None
         assert checked == ["vcan0"]
+
+    @pytest.mark.parametrize("connected_fd, now_fd, said", [
+        (True, False, "Interface vcan0 was switched to Classic CAN; connect again to use it"),
+        (False, True, "Interface vcan0 was switched to CAN FD; connect again to use it"),
+        (True, True, None),
+        (False, False, None),
+    ])
+    async def test_socketcan_switched_between_fd_and_classic_ends_the_session(
+            self, monkeypatch, connected_fd, now_fd, said):
+        # The session's MTU is fixed when it connects. An interface switched
+        # under it (`ip link set can0 down; ... fd off; ... up`, quicker than
+        # the watchdog's look at it being down) went unnoticed: the session
+        # kept the other MTU and the dashboard said CAN FD.
+        import main
+        monkeypatch.setattr(main, "_check_can_health", lambda iface: None)
+        monkeypatch.setattr(main, "socketcan_supports_fd", lambda device: now_fd)
+        s = main.CANSession()
+        s.can_interface = "vcan0"
+        s.can_fd = connected_fd
+        assert await main._session_health_error(s) == said
+
+
+class TestControllerState:
+    """The controller's state as `ip` prints it; only one off the bus ends the session."""
+
+    @pytest.fixture
+    def ip_says(self, monkeypatch, tmp_path):
+        import types
+        import main
+        (tmp_path / "can0").mkdir()
+        (tmp_path / "can0" / "operstate").write_text("up\n")
+        real_path = main.Path
+        monkeypatch.setattr(main, "Path", lambda p: tmp_path if p == "/sys/class/net" else real_path(p))
+        monkeypatch.setattr(main, "IS_LINUX", True)
+
+        def say(line):
+            out = ("141: can0: <NOARP,UP,LOWER_UP,ECHO> mtu 72 qdisc pfifo_fast state UP mode DEFAULT\n"
+                   f"    link/can  promiscuity 0 minmtu 0 maxmtu 0\n    {line}\n")
+            monkeypatch.setattr(main.subprocess, "run",
+                                lambda *args, **kwargs: types.SimpleNamespace(returncode=0, stdout=out))
+        return say
+
+    @pytest.mark.parametrize("line, state", [
+        ("can state ERROR-ACTIVE restart-ms 0", "ERROR-ACTIVE"),
+        # A CAN FD interface: its modes come between, and the state went unread.
+        ("can <FD> state ERROR-WARNING (berr-counter tx 0 rx 126) restart-ms 0", "ERROR-WARNING"),
+        ("can <LISTEN-ONLY,FD> state ERROR-PASSIVE (berr-counter tx 0 rx 135) restart-ms 0", "ERROR-PASSIVE"),
+    ])
+    def test_state_is_read_with_the_controllers_modes_between(self, ip_says, line, state):
+        import main
+        ip_says(line)
+        assert main.get_can_link_diagnostics("can0")["state"] == state
+
+    @pytest.mark.parametrize("modes", ["", "<FD> "])
+    @pytest.mark.parametrize("state, said", [
+        ("ERROR-WARNING", None),
+        ("ERROR-PASSIVE", None),  # still passes frames: the dashboard shows the errors instead
+        ("BUS-OFF", "Interface can0: CAN state is BUS-OFF"),
+    ])
+    def test_only_a_controller_off_the_bus_ends_the_session(self, ip_says, modes, state, said):
+        import main
+        ip_says(f"can {modes}state {state} (berr-counter tx 0 rx 135) restart-ms 0")
+        assert main._check_can_health("can0") == said
+
+
+class TestBusErrorSamples:
+    """What the register loop gives the session's BusErrors every few seconds."""
+
+    async def test_hub_counters(self):
+        import main
+        from bus_errors import BusErrors
+        s = main.CANSession()
+        s.can_interface = "gs_usb:0"
+        s.hub = FakeHub("gs_usb:0", 500_000)
+        s.bus_errors = BusErrors("gs_usb:0")
+        for frames in (0, 25):
+            s.hub.link_diagnostics = lambda frames=frames: {"adapter_error_frames": frames}
+            await main._sample_bus_errors(s)
+        assert s.bus_errors.status() is not None
+
+    async def test_socketcan_by_device_name(self, monkeypatch):
+        import main
+        from bus_errors import BusErrors
+        asked = []
+        monkeypatch.setattr(main, "get_can_link_diagnostics",
+                            lambda device: asked.append(device) or {"state": "ERROR-PASSIVE"})
+        s = main.CANSession()
+        s.can_interface = "socketcan:can0"
+        s.bus_errors = BusErrors("socketcan:can0")
+        await main._sample_bus_errors(s)
+        assert asked == ["can0"] and s.bus_errors.status()["state"] == "ERROR-PASSIVE"
+
+    async def test_a_failed_sample_is_no_error(self, monkeypatch):
+        import main
+        from bus_errors import BusErrors
+        monkeypatch.setattr(main, "get_can_link_diagnostics", lambda device: 1 / 0)
+        s = main.CANSession()
+        s.can_interface = "can0"
+        s.bus_errors = BusErrors("can0")
+        await main._sample_bus_errors(s)  # the register loop goes on
+        assert s.bus_errors.status() is None
 
 
 class TestQuietCompletionOfCancelledFutures:
@@ -369,3 +471,17 @@ class TestDroppedEvents:
         s.event_logger = MagicMock(dropped_events=3)
         with patch.object(CANSession, "is_running", new_callable=PropertyMock, return_value=True):
             assert s.dropped_events() == {"scanner": 1, "logger": 5, "clients": 7}
+
+
+class TestEventLogger:
+
+    @pytest.mark.asyncio
+    async def test_first_uses_at_once_start_one_logger(self, tmp_path):
+        # The dashboard asks for the recordings and the buffer at once on opening the tab.
+        from main import CANSession
+        s = CANSession(data_dir=tmp_path)
+        first, second = await asyncio.gather(s.ensure_event_logger(), s.ensure_event_logger())
+        try:
+            assert first is second is s.event_logger
+        finally:
+            await first.stop()

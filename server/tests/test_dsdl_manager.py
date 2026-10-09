@@ -1,11 +1,13 @@
 """Tests for DsdlManager: the module-cache refresh, where custom types live, and compiling them."""
 
 import sys
+import threading
 import types
 from pathlib import Path
 
 import pytest
 
+import dsdl_manager
 from dsdl_manager import DsdlManager
 
 
@@ -98,7 +100,7 @@ class TestRunCompilationRefreshHook:
         try:
             result = mgr._run_compilation(scope="public")
             assert result["ok"] is False
-            assert "errors" in result
+            assert "exit code 1" in result["error"]
             assert "myapp" in sys.modules
         finally:
             sys.modules.pop("myapp", None)
@@ -112,7 +114,274 @@ class TestRunCompilationRefreshHook:
         (mgr.custom_dir / "myapp" / "Foo.1.0.dsdl").write_text("@sealed\n")
         result = mgr.compile_custom()
         assert result["ok"] is False
-        assert "syntax error" in result["errors"][0]
+        assert "syntax error" in result["error"]
+
+
+class TestCompileErrors:
+    """A failed compile names each type it fails in as one reads it, not by
+    where its file is on the server."""
+
+    def test_the_type_and_its_line(self, project_root, data_dir, monkeypatch) -> None:
+        # pycyphal is stubbed in these tests; the errors come from its front
+        # end, pydsdl, reading each namespace, which this does for real.
+        import pycyphal.dsdl
+        import pydsdl
+        monkeypatch.setattr(pycyphal.dsdl, "compile", lambda target, lookups, output_directory:
+                            pydsdl.read_namespace(str(target), [str(d) for d in lookups]), raising=False)
+        mgr = DsdlManager(project_root, data_dir=data_dir)
+        mgr.save_type("myapp.sensors", "Reading", "1.0", "uint8 x\nnot_a_type y\n@sealed\n", 6200)
+        mgr.save_type("other", "Sealless", "1.0", "uint8 x\n")
+        error = mgr.compile_custom()["error"]
+        syntax, sealless = error.split("\n")
+        assert syntax == "myapp.sensors.Reading.1.0, line 2: Syntax error", error
+        assert sealless.startswith("other.Sealless.1.0: ") and "@sealed" in sealless, error
+        assert str(data_dir) not in error
+
+
+class TestTreeEntries:
+
+    def test_a_type_lists_its_field_and_constant_names_for_search(self, mgr: DsdlManager) -> None:
+        mgr.save_type("myapp", "Reading", "1.0", "uint8 MAX = 3   # the most\nuint8 value\nvoid8\n@sealed\n")
+        [entry] = mgr.get_namespaces()["namespaces"]["myapp"]["types"]
+        assert (entry["field_names"], entry["constant_names"]) == (["value"], ["MAX"])
+
+
+class TestStatus:
+    """Each open DSDL tab asks for the status every 4 s; reading it walks
+    every source and compiled file, so it is kept until something changes."""
+
+    @staticmethod
+    def _count_walks(monkeypatch) -> list:
+        walks = []
+        walk = DsdlManager._max_compiled_mtime
+        monkeypatch.setattr(DsdlManager, "_max_compiled_mtime",
+                            lambda self, *a, **kw: walks.append(1) or walk(self, *a, **kw))
+        return walks
+
+    def test_polls_read_the_folders_once(self, mgr: DsdlManager, monkeypatch) -> None:
+        walks = self._count_walks(monkeypatch)
+        first = mgr.get_status()
+        once = len(walks)
+        assert (mgr.get_status(), len(walks)) == (first, once)
+
+    def test_a_change_made_here_shows_at_once(self, mgr: DsdlManager) -> None:
+        assert mgr.get_status()["custom_types"] == 0
+        mgr.save_type("myapp", "Reading", "1.0", "uint8 x\n@sealed\n")
+        assert mgr.get_status()["custom_types"] == 1
+
+    def test_one_made_elsewhere_within_half_a_minute(self, mgr: DsdlManager, monkeypatch) -> None:
+        # Such as the public types, compiled when CAN connects if they are not yet.
+        clock = types.SimpleNamespace(now=1000.0)
+        monkeypatch.setattr(dsdl_manager, "time", types.SimpleNamespace(monotonic=lambda: clock.now))
+        assert mgr.get_status()["compiled"] is False
+        for root in ("uavcan", "reg"):
+            (mgr.compiled_dir / root).mkdir()
+        clock.now += 31
+        assert mgr.get_status()["compiled"] is True
+
+    def test_a_read_a_change_overlaps_is_not_kept(self, mgr: DsdlManager, monkeypatch) -> None:
+        # A poll reading while a compile ends would otherwise keep what it read
+        # before the compile, after the compile had reset it.
+        reading, release = threading.Event(), threading.Event()
+        walk = DsdlManager._max_compiled_mtime
+
+        def slow_walk(self, *a, **kw):
+            reading.set()
+            release.wait(5)
+            return walk(self, *a, **kw)
+
+        monkeypatch.setattr(DsdlManager, "_max_compiled_mtime", slow_walk)
+        poll = threading.Thread(target=mgr.get_status)
+        poll.start()
+        reading.wait(5)
+        change = threading.Thread(target=mgr.invalidate_cache)
+        change.start()
+        change.join(0.2)  # done by now, unless it waits for the poll to end
+        release.set()
+        poll.join(5)
+        change.join(5)
+        walks = self._count_walks(monkeypatch)
+        mgr.get_status()
+        assert walks, "not read again after the change"
+
+
+class TestDeleteNamespace:
+    """A custom namespace with no types left in it can go, with its empty
+    sub-namespaces; one that still has types cannot."""
+
+    def test_an_empty_one_goes_with_its_empty_sub_namespaces(self, mgr: DsdlManager) -> None:
+        mgr.create_namespace("myapp.sensors")
+        assert mgr.delete_namespace("myapp") == {"namespace": "myapp", "deleted": True}
+        assert mgr.list_custom_namespaces() == []
+
+    def test_one_with_types_stays(self, mgr: DsdlManager) -> None:
+        mgr.save_type("myapp.sensors", "Reading", "1.0", "uint8 x\n@sealed\n")
+        with pytest.raises(ValueError):
+            mgr.delete_namespace("myapp")
+        assert mgr.list_custom_namespaces() == ["myapp", "myapp.sensors"]
+
+    def test_an_empty_sub_namespace_alone(self, mgr: DsdlManager) -> None:
+        mgr.save_type("myapp", "Reading", "1.0", "uint8 x\n@sealed\n")
+        mgr.create_namespace("myapp.spare")
+        mgr.delete_namespace("myapp.spare")
+        assert mgr.list_custom_namespaces() == ["myapp"]
+
+    def test_one_not_there(self, mgr: DsdlManager) -> None:
+        with pytest.raises(FileNotFoundError):
+            mgr.delete_namespace("nowhere")
+
+
+_MESSAGE = "uint8 x\n@sealed\n"
+_SERVICE = "uint8 x\n@sealed\n---\nuint8 y\n@sealed\n"
+
+
+class TestFixedPortId:
+    """Outside the uavcan namespace the compiler accepts fixed port-IDs only in
+    the vendor ranges: 6144-7167 for a message, 256-383 for a service."""
+
+    @pytest.mark.parametrize("port, source", [
+        (-5, _MESSAGE), ("abc", _MESSAGE), (True, _MESSAGE), (100, _MESSAGE),
+        (7509, _MESSAGE), (300, _MESSAGE), (7000, _SERVICE),
+    ])
+    def test_refused_and_nothing_written(self, mgr: DsdlManager, port, source) -> None:
+        with pytest.raises(ValueError):
+            mgr.save_type("myapp", "Foo", "1.0", source, fixed_port_id=port)
+        assert not list(mgr.custom_dir.rglob("*.dsdl"))
+
+    @pytest.mark.parametrize("port, source", [
+        (None, _MESSAGE), (6144, _MESSAGE), (7167, _MESSAGE), (256, _SERVICE), (383, _SERVICE),
+    ])
+    def test_accepted(self, mgr: DsdlManager, port, source) -> None:
+        mgr.save_type("myapp", "Foo", "1.0", source, fixed_port_id=port)
+        [saved] = mgr.get_namespaces()["namespaces"]["myapp"]["types"]
+        assert (saved["full_name"], saved["fixed_port_id"]) == ("myapp.Foo.1.0", port)
+
+
+class TestPublicRootNamespaces:
+    """A custom namespace under uavcan or reg would merge into the public
+    types' own, in the tree and in the compiled code."""
+
+    @pytest.mark.parametrize("namespace", ["uavcan", "reg", "uavcan.myext", "reg.udral.mine"])
+    def test_not_created(self, mgr: DsdlManager, namespace: str) -> None:
+        with pytest.raises(ValueError):
+            mgr.create_namespace(namespace)
+        assert not list(mgr.custom_dir.iterdir())
+
+    def test_no_type_saved_into_them(self, mgr: DsdlManager) -> None:
+        with pytest.raises(ValueError):
+            mgr.save_type("uavcan.node", "Heartbeat", "1.0", "uint8 x\n@sealed\n")
+        assert not list(mgr.custom_dir.iterdir())
+
+    def test_names_that_only_start_alike_are_fine(self, mgr: DsdlManager) -> None:
+        mgr.create_namespace("uavcanx")
+        mgr.create_namespace("regulator")
+        assert mgr.list_custom_namespaces() == ["regulator", "uavcanx"]
+
+    def test_one_saved_before_can_still_be_deleted(self, mgr: DsdlManager) -> None:
+        old = mgr.custom_dir / "uavcan" / "node"
+        old.mkdir(parents=True)
+        (old / "Heartbeat.1.0.dsdl").write_text("uint8 x\n@sealed\n")
+        mgr.delete_type("uavcan.node", "Heartbeat", "1.0")
+        assert not (old / "Heartbeat.1.0.dsdl").exists()
+
+
+_PUBLIC_TYPES = {
+    "uavcan/node/7509.Heartbeat.1.0.dsdl": """\
+# Abstract node status information.
+#
+# Every node publishes it.
+
+uint16 MAX_PUBLICATION_PERIOD = 1   # [second]
+
+uint32 uptime                       # [second]
+# Seconds since the node started.
+
+uint8 vendor_specific_status_code
+@extent 12 * 8
+""",
+    "uavcan/primitive/Empty.1.0.dsdl": "@sealed\n",
+    "uavcan/register/Value.1.0.dsdl": """\
+# One value of several kinds.
+@union
+uavcan.primitive.Empty.1.0 empty    # Tag 0: nothing
+uint8 natural8                      # Tag 1: a small number
+@sealed
+""",
+    "uavcan/node/430.GetInfo.1.0.dsdl": """\
+# Full node info request.
+@sealed
+---
+uint8[<=50] name                    # Human-readable name.
+@extent 448 * 8
+""",
+    "uavcan/node/Old.1.0.dsdl": "@deprecated\nuint8 x\n@sealed\n",
+}
+
+
+class TestTypeDetailFromTheCompiler:
+    """What the compiler (pydsdl) reads in a type beyond its fields: its
+    comments, whether it is a union, sealed or how far it may grow, its
+    size, and whether it is deprecated."""
+
+    @pytest.fixture
+    def mgr(self, project_root: Path) -> DsdlManager:
+        for rel, text in _PUBLIC_TYPES.items():
+            path = project_root / "dsdl_messages" / "public_regulated_data_types" / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        return DsdlManager(project_root)
+
+    def test_a_message(self, mgr: DsdlManager) -> None:
+        detail = mgr.get_type_detail("uavcan.node.Heartbeat.1.0")
+        assert detail["doc"].startswith("Abstract node status information.")
+        assert detail["deprecated"] is False
+        assert detail["layout"] == {"union": False, "sealed": False, "extent_bytes": 12, "size_bytes": [5, 5]}
+        assert [(f["name"], f["doc"]) for f in detail["fields"]] == [
+            ("uptime", "[second]\nSeconds since the node started."), ("vendor_specific_status_code", "")]
+        assert [(c["name"], c["doc"]) for c in detail["constants"]] == [("MAX_PUBLICATION_PERIOD", "[second]")]
+
+    def test_a_union(self, mgr: DsdlManager) -> None:
+        detail = mgr.get_type_detail("uavcan.register.Value.1.0")
+        assert detail["layout"] == {"union": True, "sealed": True, "extent_bytes": 2, "size_bytes": [1, 2]}
+        assert [f["doc"] for f in detail["fields"]] == ["Tag 0: nothing", "Tag 1: a small number"]
+
+    def test_a_service_has_a_layout_each_way(self, mgr: DsdlManager) -> None:
+        detail = mgr.get_type_detail("uavcan.node.GetInfo.1.0")
+        assert detail["doc"] == "Full node info request."
+        assert detail["layout"] == {
+            "request": {"union": False, "sealed": True, "extent_bytes": 0, "size_bytes": [0, 0]},
+            "response": {"union": False, "sealed": False, "extent_bytes": 448, "size_bytes": [1, 51]},
+        }
+        assert detail["fields"]["response"][0]["doc"] == "Human-readable name."
+
+    def test_deprecated(self, mgr: DsdlManager) -> None:
+        assert mgr.get_type_detail("uavcan.node.Old.1.0")["deprecated"] is True
+
+    def test_without_pydsdl_the_detail_is_as_before(self, mgr: DsdlManager, monkeypatch) -> None:
+        monkeypatch.setitem(sys.modules, "pydsdl", None)  # import fails
+        detail = mgr.get_type_detail("uavcan.node.Heartbeat.1.0")
+        assert (detail["doc"], detail["deprecated"], detail["layout"], detail["problem"]) == ("", False, None, None)
+        assert [f["name"] for f in detail["fields"]] == ["uptime", "vendor_specific_status_code"]
+
+    def test_a_type_that_compiles_has_no_problem(self, mgr: DsdlManager) -> None:
+        mgr.save_type("myapp", "Good", "1.0", "uavcan.node.Heartbeat.1.0 beat\n@sealed\n")
+        assert mgr.get_type_detail("myapp.Good.1.0")["problem"] is None
+
+    def test_why_a_type_does_not_compile_and_on_which_line(self, mgr: DsdlManager) -> None:
+        mgr.save_type("myapp", "Typo", "1.0", "uint8 a\nuint9x b\n@sealed\n")
+        mgr.save_type("myapp", "Unsealed", "1.0", "uint8 a\n")
+        typo = mgr.get_type_detail("myapp.Typo.1.0")
+        unsealed = mgr.get_type_detail("myapp.Unsealed.1.0")
+        assert typo["problem"]["line"] == 2 and typo["problem"]["message"]
+        assert unsealed["problem"]["line"] is None and "@sealed" in unsealed["problem"]["message"]
+        # What the source says is still there, as written.
+        assert [f["name"] for f in typo["fields"]] == ["a", "b"]
+
+    def test_a_problem_in_a_type_it_uses_names_that_type(self, mgr: DsdlManager) -> None:
+        mgr.save_type("myapp", "Typo", "1.0", "uint8 a\nuint9x b\n@sealed\n")
+        mgr.save_type("myapp", "User", "1.0", "myapp.Typo.1.0 t\n@sealed\n")
+        problem = mgr.get_type_detail("myapp.User.1.0")["problem"]
+        assert problem["line"] is None and "Typo.1.0.dsdl" in problem["message"]
 
 
 @pytest.fixture

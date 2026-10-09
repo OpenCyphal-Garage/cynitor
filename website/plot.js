@@ -1,11 +1,15 @@
 // D3 line plot — multi-panel time series with crosshair tooltip, legend
 // toggle, and resizable split layout. Extracted from detail-panel.js.
+// The Nodes and Subjects plots and Compare share it; what only Compare
+// uses (its editing rows, derived series, how a graph draws) is in compare-view.js.
 
 const PLOT_MARGIN = { top: 8, right: 12, bottom: 24, left: 48 };
 const PLOT_PANEL_GAP = 8;
 const PLOT_GAP_THRESHOLD = 3;
+const PLOT_SHOWN_MAX = 8;  // series a subject's plot shows at first, at most
 const _safeId = (s) => s.replace(/[^a-zA-Z0-9_-]/g, '_');
-const _safeColor = (c) => /^#[0-9a-fA-F]{3,8}$/.test(c) ? c : '#888';
+// A colour safe to write into a style: hex, or a theme colour (var(--error)).
+const _safeColor = (c) => /^(#[0-9a-fA-F]{3,8}|var\(--[a-z0-9-]+\))$/.test(c) ? c : 'var(--muted)';
 const PLOT_TIME_WINDOWS = [
   { label: '30s', secs: 30 },
   { label: '1m', secs: 60 },
@@ -14,15 +18,9 @@ const PLOT_TIME_WINDOWS = [
   { label: 'All', secs: 0 },
 ];
 
-const DERIVED_TYPES = {
-  delta:       { label: 'Delta (A−B)',   sources: 2, hasWindow: false },
-  rolling_avg: { label: 'Rolling Avg',        sources: 1, hasWindow: true  },
-  min_max:     { label: 'Min/Max',             sources: 1, hasWindow: false },
-  rate:        { label: 'Rate (dv/dt)',       sources: 1, hasWindow: false },
-  ratio:       { label: 'Ratio (A/B)',        sources: 2, hasWindow: false },
-};
-
-const _subjectsPlotCfg = {
+// The detail panel's plot, in the Nodes and Subjects tabs alike: its controls
+// (pause, window, Fill Rate, line, points, grid) are the persisted plot* settings.
+const _detailPlotCfg = {
   get paused() { return state.plotPaused; },
   set paused(v) { state.plotPaused = v; },
   get pausedAt() { return state.plotPausedAt; },
@@ -43,15 +41,19 @@ const _subjectsPlotCfg = {
   set _resumeStart(v) { state._plotResumeStart = v; },
 };
 
+// A colour as a colour box takes it (#rrggbb): a theme colour (var(--error))
+// as the theme in use has it; one it cannot read, the theme's first plot colour.
 const _colorToHex = (str) => {
-  if (!str) return '#58a6ff';
+  const token = /^var\((--[a-z0-9-]+)\)$/.exec(str || '');
+  if (token) str = getComputedStyle(document.documentElement).getPropertyValue(token[1]).trim();
+  if (!str) return PLOT_COLORS[0];
   if (str.startsWith('#')) {
     if (str.length === 4) return `#${str[1]}${str[1]}${str[2]}${str[2]}${str[3]}${str[3]}`;
     return str;
   }
   const m = str.match(/\d+/g);
   if (m && m.length >= 3) return '#' + m.slice(0, 3).map(n => (+n).toString(16).padStart(2, '0')).join('');
-  return '#58a6ff';
+  return PLOT_COLORS[0];
 };
 
 const _openSwatchPicker = (swatch, currentColor, onChange) => {
@@ -59,8 +61,8 @@ const _openSwatchPicker = (swatch, currentColor, onChange) => {
   swatch._pickerOpen = true;
   const input = document.createElement('input');
   input.type = 'color';
+  input.className = 'plot-swatch-picker-input';
   input.value = _colorToHex(currentColor);
-  input.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;border:none;padding:0';
   swatch.appendChild(input);
   let committed = false;
   input.addEventListener('input', () => {
@@ -97,6 +99,29 @@ const _resetSmoothCaches = (cfg) => {
   cfg._activeInterps = null;
 };
 
+// Pause a plot where it is (its right edge: now, or a replay's head; see
+// computePlotScales), or resume it, gliding back to live.
+const togglePlotPause = (cfg) => {
+  const now = Date.now() / 1000;
+  if (cfg.paused) {
+    cfg._resumeFrom = cfg.pausedAt;
+    cfg._resumeStart = now;
+    _resetSmoothCaches(cfg);
+  }
+  cfg.paused = !cfg.paused;
+  cfg.pausedAt = cfg.paused ? (cfg._anchor ?? now) : null;
+};
+
+// A plot's pause button shows whether the plot is paused: ▶, lit and pressed
+// while it is; ⏸ while it runs.
+const syncPauseButton = (btn, cfg) => {
+  if (!btn) return;
+  const paused = Boolean(cfg.paused);
+  btn.textContent = paused ? '▶' : '⏸';
+  btn.classList.toggle('active', paused);
+  btn.setAttribute('aria-pressed', String(paused));
+};
+
 const _processSmooth = (cfg, keys) => {
   if (!cfg.smooth || cfg.smooth <= 0) return;
   if (!cfg._smoothBufs) cfg._smoothBufs = new Map();
@@ -105,14 +130,31 @@ const _processSmooth = (cfg, keys) => {
 
   const now = Date.now();
   for (const key of keys) {
-    const raw = state.subjectHistory.get(key);
-    if (!raw || raw.length < 1) continue;
+    const raw = plotData(key);
+    if (!raw?.length) {
+      // Its history was cleared (a disconnect): what Fill Rate made of it goes too.
+      cfg._smoothBufs.delete(key);
+      cfg._rawCursors.delete(key);
+      cfg._activeInterps.delete(key);
+      continue;
+    }
 
     if (!cfg._smoothBufs.has(key)) cfg._smoothBufs.set(key, []);
     const buf = cfg._smoothBufs.get(key);
-    const cursor = cfg._rawCursors.get(key) || 0;
+    // The cursor is the time of the last raw point taken, not its index: a
+    // full history drops a point at its front for each one it gains, so its
+    // length stops moving. Time going back (history cleared, a replay from
+    // its start) starts the field over.
+    let cursor = cfg._rawCursors.get(key) ?? -Infinity;
+    if (raw[raw.length - 1].t < cursor) {
+      buf.length = 0;
+      cfg._activeInterps.delete(key);
+      cursor = -Infinity;
+    }
+    let first = raw.length;
+    while (first > 0 && raw[first - 1].t > cursor) first--;
 
-    for (let i = cursor; i < raw.length; i++) {
+    for (let i = first; i < raw.length; i++) {
       const pt = raw[i];
       const ip = cfg._activeInterps.get(key);
       if (ip) {
@@ -137,7 +179,7 @@ const _processSmooth = (cfg, keys) => {
         buf.push(pt);
       }
     }
-    cfg._rawCursors.set(key, raw.length);
+    cfg._rawCursors.set(key, raw[raw.length - 1].t);
 
     const ip = cfg._activeInterps.get(key);
     if (ip) {
@@ -161,7 +203,7 @@ const _getSmoothBuf = (cfg, key) => {
     const buf = cfg._smoothBufs.get(key);
     if (buf && buf.length >= 2) return buf;
   }
-  return state.subjectHistory.get(key);
+  return plotData(key);
 };
 
 const _tagGaps = (data) => {
@@ -170,119 +212,80 @@ const _tagGaps = (data) => {
   }
 };
 
-const _ALIGN_TOLERANCE = 2;
+// ── Compare series ──
+//
+// A compare series is a subject's field: from one publisher (`nodeId`) when
+// the subject has several, else from whichever sends it, as are all series
+// saved before publishers were told apart. Its key names its data.
+const compareSeriesKey = (s) => `${s.subjectId}:${s.attribute}${s.nodeId != null ? `@${s.nodeId}` : ''}`;
 
-const _alignSeries = (dataA, dataB) => {
-  if (!dataA?.length || !dataB?.length) return [];
-  const result = [];
-  let j = 0;
-  for (const a of dataA) {
-    while (j < dataB.length - 1 && dataB[j + 1].t <= a.t) j++;
-    let best = dataB[j];
-    if (j + 1 < dataB.length && Math.abs(dataB[j + 1].t - a.t) < Math.abs(best.t - a.t)) {
-      best = dataB[j + 1];
-    }
-    if (Math.abs(best.t - a.t) <= _ALIGN_TOLERANCE) {
-      result.push({ t: a.t, vA: a.v, vB: best.v });
-    }
+// "1300:value@20" -> "S1300 · value · n20": a key as the legend names it.
+const _keyLabel = (key) => {
+  const [base, nid] = String(key).split('@');
+  const at = base.indexOf(':');
+  return `S${base.slice(0, at)} · ${base.slice(at + 1)}${nid != null ? ` · n${nid}` : ''}`;
+};
+
+const compareSeriesName = (s) => _keyLabel(compareSeriesKey(s));
+
+// The points a key names: a field's history, or its one publisher's part of
+// it, filtered once while that history stays as it is (a redraw asks for a
+// series' points more than once). Kept by the history itself: cleared, it
+// takes its filtered parts with it.
+const _publisherParts = new WeakMap();  // a field's history -> node-ID -> {length, last, points}
+const plotData = (key) => {
+  const [base, nid] = key.split('@');
+  const points = state.subjectHistory.get(base);
+  if (nid == null || !points) return points;
+  let parts = _publisherParts.get(points);
+  if (!parts) _publisherParts.set(points, (parts = new Map()));
+  const last = points[points.length - 1];
+  const part = parts.get(nid);
+  if (part && part.length === points.length && part.last === last) return part.points;
+  const mine = points.filter((p) => p.n === Number(nid));
+  parts.set(nid, { length: points.length, last, points: mine });
+  return mine;
+};
+
+// A field's points by the node that published them (`n`, see cacheEvent).
+const _byPublisher = (points) => {
+  const groups = new Map();
+  for (const p of points) {
+    if (!groups.has(p.n)) groups.set(p.n, []);
+    groups.get(p.n).push(p);
   }
-  return result;
+  return groups;
 };
 
-const _computeDerived = (type, dataA, dataB, windowSize) => {
-  switch (type) {
-    case 'delta': {
-      const aligned = _alignSeries(dataA, dataB);
-      return [aligned.map(p => ({ t: p.t, v: p.vA - p.vB }))];
-    }
-    case 'ratio': {
-      const aligned = _alignSeries(dataA, dataB);
-      return [aligned.filter(p => p.vB !== 0).map(p => ({ t: p.t, v: p.vA / p.vB }))];
-    }
-    case 'rate': {
-      if (!dataA || dataA.length < 2) return [[]];
-      const result = [];
-      for (let i = 1; i < dataA.length; i++) {
-        const dt = dataA[i].t - dataA[i - 1].t;
-        if (dt > 0 && dt <= PLOT_GAP_THRESHOLD) {
-          result.push({ t: dataA[i].t, v: (dataA[i].v - dataA[i - 1].v) / dt });
-        }
-      }
-      return [result];
-    }
-    case 'rolling_avg': {
-      if (!dataA || dataA.length < 2) return [[]];
-      const w = Math.max(2, windowSize || 10);
-      const result = [];
-      let sum = 0;
-      for (let i = 0; i < dataA.length; i++) {
-        sum += dataA[i].v;
-        if (i >= w) sum -= dataA[i - w].v;
-        const count = Math.min(i + 1, w);
-        result.push({ t: dataA[i].t, v: sum / count });
-      }
-      return [result];
-    }
-    case 'min_max': {
-      if (!dataA || dataA.length < 2) return [[], []];
-      const tMin = windowSize > 0 ? dataA[dataA.length - 1].t - windowSize : -Infinity;
-      let lo = Infinity, hi = -Infinity;
-      for (const p of dataA) {
-        if (p.t < tMin) continue;
-        if (p.v < lo) lo = p.v;
-        if (p.v > hi) hi = p.v;
-      }
-      if (!isFinite(lo)) return [[], []];
-      const t0 = Math.max(dataA[0].t, tMin === -Infinity ? dataA[0].t : tMin);
-      const t1 = dataA[dataA.length - 1].t;
-      return [
-        [{ t: t0, v: lo }, { t: t1, v: lo }],
-        [{ t: t0, v: hi }, { t: t1, v: hi }],
-      ];
-    }
-    default:
-      return [];
-  }
-};
+const _publisherLabel = (nid) => (nid == null ? 'anonymous' : `n${nid}`);
 
-const _derivedLabel = (d) => {
-  const nameA = d.sourceA ? `S${d.sourceA.split(':')[0]} · ${d.sourceA.split(':')[1]}` : '?';
-  const nameB = d.sourceB ? `S${d.sourceB.split(':')[0]} · ${d.sourceB.split(':')[1]}` : '';
-  switch (d.type) {
-    case 'delta': return `Δ(${nameA} − ${nameB})`;
-    case 'ratio': return `${nameA} / ${nameB}`;
-    case 'rolling_avg': return `Avg${d.window || 10}(${nameA})`;
-    case 'rate': return `d/dt(${nameA})`;
-    default: return '?';
-  }
-};
-
-const _derivedMinMaxLabels = (d) => {
-  const nameA = d.sourceA ? `S${d.sourceA.split(':')[0]} · ${d.sourceA.split(':')[1]}` : '?';
-  return [`Min(${nameA})`, `Max(${nameA})`];
-};
-
-const _nextDerivedId = (graph) => {
-  let max = 0;
-  for (const d of graph.derivedSeries || []) {
-    const m = d.id?.match(/^ds_(\d+)$/);
-    if (m) max = Math.max(max, Number(m[1]));
-  }
-  return `ds_${max + 1}`;
-};
-
-const collectPlotSeries = (sid, cfg = null) => {
+// A subject's series: one per field, or per field and publisher when several
+// nodes publish it; only `publisher`'s own points when one is given. Fill Rate
+// interpolates a field's series only where a single publisher makes it.
+const collectPlotSeries = (sid, cfg = null, publisher = null) => {
   const keys = [];
   for (const key of state.subjectHistory.keys()) {
     if (key.startsWith(sid + ':')) keys.push(key);
   }
   if (cfg) _processSmooth(cfg, keys);
   const allSeries = [];
-  for (const key of keys) {
-    const buf = cfg ? _getSmoothBuf(cfg, key) : state.subjectHistory.get(key);
-    if (!buf || buf.length < 2) continue;
+  // `nodeId`: the series' publisher, when one node makes it (see openPlotInCompare).
+  const add = (name, field, buf, nid) => {
+    if (!buf || buf.length < 2) return;
     _tagGaps(buf);
-    allSeries.push({ name: key.split(':')[1], data: buf });
+    allSeries.push({ name, field, data: buf, nodeId: Number.isInteger(nid) ? nid : null });
+  };
+  for (const key of keys) {
+    const field = key.slice(key.indexOf(':') + 1);
+    const groups = _byPublisher(state.subjectHistory.get(key));
+    if (publisher != null) {
+      add(field, field, groups.get(publisher), publisher);
+    } else if (groups.size <= 1) {
+      add(field, field, cfg ? _getSmoothBuf(cfg, key) : state.subjectHistory.get(key), groups.keys().next().value);
+    } else {
+      const nids = [...groups.keys()].sort((a, b) => (a ?? Infinity) - (b ?? Infinity));
+      for (const nid of nids) add(`${field} · ${_publisherLabel(nid)}`, field, groups.get(nid), nid);
+    }
   }
   return allSeries;
 };
@@ -299,47 +302,36 @@ const computePlotScales = (visible, w, totalPanelsH, compareSeries = [], cfg = n
   if (!isFinite(tDataMax)) tDataMax = now;
   if (!isFinite(tDataMin)) tDataMin = now - 60;
 
-  const RESUME_DURATION = 2;
-  const _resumeAnchor = (resumeFrom, resumeStart) => {
-    if (!resumeFrom || !resumeStart) return now;
-    const elapsed = now - resumeStart;
-    if (elapsed >= RESUME_DURATION) return now;
-    const t = elapsed / RESUME_DURATION;
-    return resumeFrom + (now - resumeFrom) * t * t;
-  };
-
   // During replay, the events carry their original (recorded) timestamps —
   // potentially hours, days, or years before "now". Anchoring the plot's
   // right edge to wall-clock time would push every replay point off the
   // left edge of the visible window. Use the latest event timestamp seen
   // so far instead, so the plot tracks the replay head as events arrive.
-  const replayAnchor = state.replayActive ? tDataMax : null;
+  const live = state.replayActive ? tDataMax : now;
 
-  let windowSecs, anchor;
-  if (cfg) {
-    windowSecs = cfg.timeWindow;
-    if (cfg.paused && cfg.pausedAt) {
-      anchor = cfg.pausedAt;
-    } else if (cfg._resumeFrom) {
-      anchor = _resumeAnchor(cfg._resumeFrom, cfg._resumeStart);
-      if (now - cfg._resumeStart >= RESUME_DURATION) { cfg._resumeFrom = null; cfg._resumeStart = null; }
-    } else {
-      anchor = replayAnchor ?? now;
-    }
-  } else if (state.activeView === 'subjects') {
-    windowSecs = state.plotTimeWindow;
-    if (state.plotPaused && state.plotPausedAt) {
-      anchor = state.plotPausedAt;
-    } else if (state._plotResumeFrom) {
-      anchor = _resumeAnchor(state._plotResumeFrom, state._plotResumeStart);
-      if (now - state._plotResumeStart >= RESUME_DURATION) { state._plotResumeFrom = null; state._plotResumeStart = null; }
-    } else {
-      anchor = replayAnchor ?? now;
-    }
+  // Resumed, a plot glides from where it was paused back to live.
+  const RESUME_DURATION = 2;
+  const _resumeAnchor = (resumeFrom, resumeStart) => {
+    if (!resumeFrom || !resumeStart) return live;
+    const elapsed = now - resumeStart;
+    if (elapsed >= RESUME_DURATION) return live;
+    const t = elapsed / RESUME_DURATION;
+    return resumeFrom + (live - resumeFrom) * t * t;
+  };
+
+  // The detail panel's plot keeps its settings in state (see _detailPlotCfg).
+  const c = cfg || _detailPlotCfg;
+  const windowSecs = c.timeWindow;
+  let anchor;
+  if (c.paused && c.pausedAt) {
+    anchor = c.pausedAt;
+  } else if (c._resumeFrom) {
+    anchor = _resumeAnchor(c._resumeFrom, c._resumeStart);
+    if (now - c._resumeStart >= RESUME_DURATION) { c._resumeFrom = null; c._resumeStart = null; }
   } else {
-    windowSecs = 60;
-    anchor = replayAnchor ?? now;
+    anchor = live;
   }
+  c._anchor = anchor;  // where a pause now holds the plot (togglePlotPause)
 
   let domainLeft, domainRight;
   if (windowSecs === 0) {
@@ -386,7 +378,7 @@ const computePlotScales = (visible, w, totalPanelsH, compareSeries = [], cfg = n
 const _estimateMaxHz = (cfg) => {
   let keys;
   if (cfg.series) {
-    keys = cfg.series.map(s => `${s.subjectId}:${s.attribute}`);
+    keys = cfg.series.map(compareSeriesKey);
   } else {
     const sid = state.selectedPlotSubject;
     if (sid == null) return 0;
@@ -397,7 +389,7 @@ const _estimateMaxHz = (cfg) => {
   }
   let maxHz = 0;
   for (const key of keys) {
-    const buf = state.subjectHistory.get(key);
+    const buf = plotData(key);
     if (!buf || buf.length < 3) continue;
     const n = Math.min(20, buf.length);
     const start = buf.length - n;
@@ -411,28 +403,21 @@ const buildPlotControls = (opts = {}) => {
   const wrap = document.createElement('div');
   wrap.className = 'plot-controls';
 
-  const cfg = opts.cfg || (state.activeView === 'subjects' ? _subjectsPlotCfg : null);
+  const cfg = opts.cfg || _detailPlotCfg;
   if (!cfg) return wrap;
 
   const invalidate = opts.invalidate || _plotInvalidate;
-  const rerender = opts.rerender || (() => renderPlot(el('selectedNodeContent')));
-  const restart = opts.restart || (() => startPlotAnim());
+  const rerender = opts.rerender || _plotRerender;
+  const restart = opts.restart || _plotRestart;
 
   const pauseBtn = document.createElement('button');
-  pauseBtn.className = `plot-pause-btn${cfg.paused ? ' active' : ''}`;
+  pauseBtn.className = 'plot-pause-btn';
   pauseBtn.type = 'button';
   pauseBtn.setAttribute('aria-label', 'Pause plot');
-  pauseBtn.textContent = cfg.paused ? '▶' : '⏸';
+  syncPauseButton(pauseBtn, cfg);
   pauseBtn.addEventListener('click', () => {
-    if (cfg.paused) {
-      cfg._resumeFrom = cfg.pausedAt;
-      cfg._resumeStart = Date.now() / 1000;
-      _resetSmoothCaches(cfg);
-    }
-    cfg.paused = !cfg.paused;
-    cfg.pausedAt = cfg.paused ? Date.now() / 1000 : null;
-    pauseBtn.textContent = cfg.paused ? '▶' : '⏸';
-    pauseBtn.classList.toggle('active', cfg.paused);
+    togglePlotPause(cfg);
+    syncPauseButton(pauseBtn, cfg);
     invalidate();
     if (!cfg.paused) restart();
   });
@@ -580,19 +565,20 @@ const buildPlotControls = (opts = {}) => {
     const drawInfo = document.createElement('span');
     drawInfo.className = 'plot-info-icon';
     drawInfo.textContent = '?';
-    const drawTip = 'Shift+click: add/edit marker · Click on marker: edit · Alt+drag: freehand draw · Alt+dblclick: clear drawings · Click: pause/resume · Dblclick: reset zoom';
+    const drawTip = 'Shift+click: add/edit marker · Click on marker: edit · Alt+drag: freehand draw · Alt+dblclick: clear drawings · Ctrl+wheel: zoom · Drag: pan · Dblclick: reset zoom · Click: pause/resume, with Click pauses on';
     drawInfo.title = drawTip;
     drawInfo.setAttribute('aria-label', drawTip);
     drawGroup.appendChild(drawInfo);
 
     const drawColorWrap = document.createElement('div');
     drawColorWrap.className = 'plot-draw-color-wrap';
+    // Until a colour is picked, drawings take the theme's red (see styles.css).
     const drawSwatch = document.createElement('span');
     drawSwatch.className = 'plot-draw-swatch';
-    drawSwatch.style.background = cfg._drawColor || '#ef4444';
+    if (cfg._drawColor) drawSwatch.style.background = cfg._drawColor;
     const drawColorInput = document.createElement('input');
     drawColorInput.type = 'color';
-    drawColorInput.value = _colorToHex(cfg._drawColor || '#ef4444');
+    drawColorInput.value = _colorToHex(cfg._drawColor || 'var(--error)');
     drawColorInput.setAttribute('aria-label', 'Drawing color');
     drawColorInput.addEventListener('input', () => {
       cfg._drawColor = drawColorInput.value;
@@ -632,292 +618,6 @@ const buildPlotControls = (opts = {}) => {
   return wrap;
 };
 
-const _getCompareSubjects = () => {
-  const subjects = new Map();
-  for (const key of state.subjectHistory.keys()) {
-    const [sidStr, attr] = key.split(':');
-    const sid = Number(sidStr);
-    if (!subjects.has(sid)) subjects.set(sid, []);
-    subjects.get(sid).push(attr);
-  }
-  return subjects;
-};
-
-const _refreshCompareSubjects = (panel) => {
-  const sel = panel.querySelector('.plot-compare-subject');
-  if (!sel) return;
-  const prev = sel.value;
-  const subjects = _getCompareSubjects();
-  sel.innerHTML = '';
-  const def = document.createElement('option');
-  def.value = '';
-  def.textContent = 'Subject…';
-  sel.appendChild(def);
-  for (const [sid] of subjects) {
-    const event = state.latestBySubject.get(sid);
-    const label = event?.message_type ? `S${sid} · ${event.message_type}` : `Subject ${sid}`;
-    const opt = document.createElement('option');
-    opt.value = sid;
-    opt.textContent = label;
-    sel.appendChild(opt);
-  }
-  if (prev && sel.querySelector(`option[value="${prev}"]`)) sel.value = prev;
-};
-
-const buildComparePanel = (graph, onUpdate) => {
-  const panel = document.createElement('div');
-  panel.className = 'plot-compare-panel';
-
-  const hdr = document.createElement('div');
-  hdr.className = 'plot-compare-hdr';
-  const title = document.createElement('span');
-  title.textContent = 'Series';
-  hdr.appendChild(title);
-  panel.appendChild(hdr);
-
-  const picker = document.createElement('div');
-  picker.className = 'plot-compare-picker';
-
-  const subjectSel = document.createElement('select');
-  subjectSel.className = 'plot-compare-subject';
-  subjectSel.setAttribute('aria-label', 'Subject to compare');
-  const defSubj = document.createElement('option');
-  defSubj.value = '';
-  defSubj.textContent = 'Subject…';
-  subjectSel.appendChild(defSubj);
-
-  const attrSel = document.createElement('select');
-  attrSel.className = 'plot-compare-attr';
-  attrSel.disabled = true;
-  attrSel.setAttribute('aria-label', 'Attribute to compare');
-  const defAttr = document.createElement('option');
-  defAttr.value = '';
-  defAttr.textContent = 'Attribute…';
-  attrSel.appendChild(defAttr);
-
-  const addBtn = document.createElement('button');
-  addBtn.className = 'plot-compare-add';
-  addBtn.type = 'button';
-  addBtn.textContent = 'Add';
-  addBtn.disabled = true;
-  addBtn.setAttribute('aria-label', 'Add comparison series');
-
-  subjectSel.addEventListener('mousedown', () => _refreshCompareSubjects(panel));
-
-  subjectSel.addEventListener('change', () => {
-    const sid = Number(subjectSel.value);
-    attrSel.innerHTML = '';
-    const def = document.createElement('option');
-    def.value = '';
-    def.textContent = 'Attribute…';
-    attrSel.appendChild(def);
-    if (sid) {
-      const subjects = _getCompareSubjects();
-      for (const a of subjects.get(sid) || []) {
-        const opt = document.createElement('option');
-        opt.value = a;
-        opt.textContent = a;
-        attrSel.appendChild(opt);
-      }
-      attrSel.disabled = false;
-    } else {
-      attrSel.disabled = true;
-    }
-    addBtn.disabled = true;
-  });
-
-  attrSel.addEventListener('mousedown', () => {
-    const sid = Number(subjectSel.value);
-    if (!sid) return;
-    const prev = attrSel.value;
-    attrSel.innerHTML = '';
-    const def = document.createElement('option');
-    def.value = '';
-    def.textContent = 'Attribute…';
-    attrSel.appendChild(def);
-    const subjects = _getCompareSubjects();
-    for (const a of subjects.get(sid) || []) {
-      const opt = document.createElement('option');
-      opt.value = a;
-      opt.textContent = a;
-      attrSel.appendChild(opt);
-    }
-    if (prev && attrSel.querySelector(`option[value="${prev}"]`)) attrSel.value = prev;
-  });
-
-  attrSel.addEventListener('change', () => {
-    addBtn.disabled = !attrSel.value;
-  });
-
-  addBtn.addEventListener('click', () => {
-    const sid = Number(subjectSel.value);
-    const attr = attrSel.value;
-    if (!sid || !attr) return;
-    if (graph.series.some((c) => c.subjectId === sid && c.attribute === attr)) return;
-    graph.series.push({ subjectId: sid, attribute: attr });
-    onUpdate();
-    _refreshCompareSubjects(panel);
-    subjectSel.value = '';
-    attrSel.innerHTML = '<option value="">Attribute…</option>';
-    attrSel.disabled = true;
-    addBtn.disabled = true;
-  });
-
-  picker.appendChild(subjectSel);
-  picker.appendChild(attrSel);
-  picker.appendChild(addBtn);
-  panel.appendChild(picker);
-
-  const derivedSection = document.createElement('div');
-  derivedSection.className = 'plot-derived-section';
-  const derivedHdr = document.createElement('span');
-  derivedHdr.className = 'plot-threshold-hdr';
-  derivedHdr.textContent = 'Derived';
-  derivedSection.appendChild(derivedHdr);
-
-  const derivedPicker = document.createElement('div');
-  derivedPicker.className = 'plot-compare-picker';
-
-  const typeSel = document.createElement('select');
-  typeSel.className = 'plot-derived-type';
-  typeSel.setAttribute('aria-label', 'Derived series type');
-  for (const [key, info] of Object.entries(DERIVED_TYPES)) {
-    const opt = document.createElement('option');
-    opt.value = key;
-    opt.textContent = info.label;
-    typeSel.appendChild(opt);
-  }
-
-  const srcASel = document.createElement('select');
-  srcASel.className = 'plot-derived-source';
-  srcASel.setAttribute('aria-label', 'Source A');
-
-  const srcBSel = document.createElement('select');
-  srcBSel.className = 'plot-derived-source';
-  srcBSel.setAttribute('aria-label', 'Source B');
-
-  const windowInput = document.createElement('input');
-  windowInput.type = 'number';
-  windowInput.className = 'plot-threshold-input';
-  windowInput.placeholder = 'Window';
-  windowInput.value = '10';
-  windowInput.min = '2';
-  windowInput.max = '200';
-  windowInput.setAttribute('aria-label', 'Window size (samples)');
-
-  const _refreshDerivedSources = () => {
-    const buildOpts = (sel, label) => {
-      const prev = sel.value;
-      sel.innerHTML = '';
-      const def = document.createElement('option');
-      def.value = '';
-      def.textContent = label;
-      sel.appendChild(def);
-      for (const s of graph.series) {
-        const key = `${s.subjectId}:${s.attribute}`;
-        const opt = document.createElement('option');
-        opt.value = key;
-        opt.textContent = `S${s.subjectId} · ${s.attribute}`;
-        sel.appendChild(opt);
-      }
-      if (prev && sel.querySelector(`option[value="${prev}"]`)) sel.value = prev;
-    };
-    buildOpts(srcASel, 'Source A…');
-    buildOpts(srcBSel, 'Source B…');
-  };
-
-  const _updateDerivedVisibility = () => {
-    const info = DERIVED_TYPES[typeSel.value];
-    srcBSel.style.display = info?.sources === 2 ? '' : 'none';
-    windowInput.style.display = info?.hasWindow ? '' : 'none';
-  };
-
-  typeSel.addEventListener('change', _updateDerivedVisibility);
-
-  const derivedAddBtn = document.createElement('button');
-  derivedAddBtn.className = 'plot-compare-add';
-  derivedAddBtn.type = 'button';
-  derivedAddBtn.textContent = 'Add';
-  derivedAddBtn.setAttribute('aria-label', 'Add derived series');
-  derivedAddBtn.addEventListener('click', () => {
-    const type = typeSel.value;
-    const info = DERIVED_TYPES[type];
-    if (!info) return;
-    const srcA = srcASel.value;
-    if (!srcA) return;
-    if (info.sources === 2 && !srcBSel.value) return;
-    const srcB = info.sources === 2 ? srcBSel.value : '';
-    const win = info.hasWindow ? Math.max(2, parseInt(windowInput.value) || 10) : 0;
-    if (!graph.derivedSeries) graph.derivedSeries = [];
-    graph.derivedSeries.push({
-      id: _nextDerivedId(graph),
-      type,
-      sourceA: srcA,
-      sourceB: srcB,
-      window: win,
-      color: '',
-    });
-    onUpdate();
-  });
-
-  derivedPicker.appendChild(typeSel);
-  derivedPicker.appendChild(srcASel);
-  derivedPicker.appendChild(srcBSel);
-  derivedPicker.appendChild(windowInput);
-  derivedPicker.appendChild(derivedAddBtn);
-  derivedSection.appendChild(derivedPicker);
-
-  panel.appendChild(derivedSection);
-
-  panel._refreshDerivedSources = _refreshDerivedSources;
-  _refreshDerivedSources();
-  _updateDerivedVisibility();
-
-  const thSection = document.createElement('div');
-  thSection.className = 'plot-threshold-section';
-  const thLabel = document.createElement('span');
-  thLabel.className = 'plot-threshold-hdr';
-  thLabel.textContent = 'Thresholds';
-  thSection.appendChild(thLabel);
-  const thPicker = document.createElement('div');
-  thPicker.className = 'plot-threshold-picker';
-  const thInput = document.createElement('input');
-  thInput.type = 'number';
-  thInput.className = 'plot-threshold-input';
-  thInput.placeholder = 'Value';
-  thInput.setAttribute('aria-label', 'Threshold value');
-  const thNameInput = document.createElement('input');
-  thNameInput.type = 'text';
-  thNameInput.className = 'plot-threshold-name-input';
-  thNameInput.placeholder = 'Label';
-  thNameInput.setAttribute('aria-label', 'Threshold label');
-  const thAddBtn = document.createElement('button');
-  thAddBtn.className = 'plot-compare-add';
-  thAddBtn.type = 'button';
-  thAddBtn.textContent = 'Add';
-  thAddBtn.setAttribute('aria-label', 'Add threshold line');
-  thAddBtn.addEventListener('click', () => {
-    const val = parseFloat(thInput.value);
-    if (isNaN(val)) return;
-    graph.thresholds.push({
-      value: val,
-      label: thNameInput.value.trim() || String(val),
-      color: '#ef4444',
-      style: 'dashed',
-    });
-    thInput.value = '';
-    thNameInput.value = '';
-    onUpdate();
-  });
-  thPicker.appendChild(thInput);
-  thPicker.appendChild(thNameInput);
-  thPicker.appendChild(thAddBtn);
-  thSection.appendChild(thPicker);
-  panel.appendChild(thSection);
-
-  return panel;
-};
-
 const setupPlotSvg = (plotArea, margin, opts = {}) => {
   plotArea.innerHTML = '';
   const header = document.createElement('div');
@@ -927,6 +627,17 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
   header.appendChild(titleNode);
   if (!opts.noControls) {
     const controls = buildPlotControls(opts);
+    if (!opts.cfg) {  // a Nodes or Subjects plot: its series can go to Compare
+      const sep = document.createElement('span');
+      sep.className = 'plot-controls-sep';
+      const toCompare = document.createElement('button');
+      toCompare.type = 'button';
+      toCompare.className = 'plot-to-compare';
+      toCompare.textContent = 'Compare';
+      toCompare.title = 'Open the series shown here in a new Compare graph';
+      toCompare.addEventListener('click', () => openPlotInCompare(plotArea));
+      controls.append(sep, toCompare);
+    }
     if (controls.childElementCount) header.appendChild(controls);
   }
   const legendNode = document.createElement('div');
@@ -952,26 +663,16 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
       e.stopPropagation();
       const seriesName = btn.dataset.series;
       const th = _legendGetThreshold(btn);
-      _openSwatchPicker(swatch, swatch.dataset.hex || '#58a6ff', (newColor) => {
+      _openSwatchPicker(swatch, swatch.dataset.hex || PLOT_COLORS[0], (newColor) => {
         swatch.dataset.hex = newColor;
         if (th) {
           th.color = newColor;
         } else if (opts.cfg && opts.cfg.series) {
-          const idx = opts.cfg.series.findIndex(s =>
-            `S${s.subjectId} · ${s.attribute}` === seriesName
-          );
-          if (idx >= 0) {
-            opts.cfg.series[idx].color = newColor;
-          } else if (opts.cfg.derivedSeries) {
-            const di = opts.cfg.derivedSeries.findIndex(d => {
-              if (d.type === 'min_max') {
-                const [minL, maxL] = _derivedMinMaxLabels(d);
-                return seriesName === minL || seriesName === maxL;
-              }
-              return _derivedLabel(d) === seriesName;
-            });
-            if (di >= 0) opts.cfg.derivedSeries[di].color = newColor;
-          }
+          // A derived series found by its id, as its style and × buttons find it.
+          const s = btn.dataset.derivedId
+            ? opts.cfg.derivedSeries?.find((d) => d.id === btn.dataset.derivedId)
+            : opts.cfg.series.find((c) => compareSeriesName(c) === seriesName);
+          if (s) s.color = newColor;
         } else {
           const sid = state.selectedPlotSubject;
           if (sid != null) state.plotColorOverrides[`${sid}:${seriesName}`] = newColor;
@@ -998,11 +699,12 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
         const idx = opts.cfg.derivedSeries.findIndex(d => d.id === did);
         if (idx >= 0) { opts.cfg.derivedSeries.splice(idx, 1); removed = true; }
       } else if (seriesName && opts.cfg?.series) {
-        const idx = opts.cfg.series.findIndex(s => `S${s.subjectId} · ${s.attribute}` === seriesName);
+        const idx = opts.cfg.series.findIndex(s => compareSeriesName(s) === seriesName);
         if (idx >= 0) { opts.cfg.series.splice(idx, 1); removed = true; }
         const card = plotArea.closest('.compare-graph-card');
         const panel = card?.querySelector('.plot-compare-panel');
         if (panel?._refreshDerivedSources) panel._refreshDerivedSources();
+        panel?._refreshSeriesList?.();  // its box unticks
       }
       if (removed) _legendCommit();
       return;
@@ -1015,7 +717,8 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
       const styles = LINE_STYLES;
       const th = _legendGetThreshold(sbtn);
       if (th) {
-        th.style = styles[(styles.indexOf(th.style || 'dashed') + 1) % styles.length];
+        const lineStyles = Object.keys(THRESHOLD_STYLES);  // a threshold is a line: no marker shapes
+        th.style = lineStyles[(lineStyles.indexOf(th.style || 'dashed') + 1) % lineStyles.length];
         _legendCommit();
         return;
       }
@@ -1026,7 +729,7 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
         const d = opts.cfg.derivedSeries.find(d => d.id === did);
         if (d) { d.lineStyle = styles[(styles.indexOf(d.lineStyle || 'solid') + 1) % styles.length]; changed = true; }
       } else if (seriesName && opts.cfg?.series) {
-        const s = opts.cfg.series.find(s => `S${s.subjectId} · ${s.attribute}` === seriesName);
+        const s = opts.cfg.series.find(s => compareSeriesName(s) === seriesName);
         if (s) { s.lineStyle = styles[(styles.indexOf(s.lineStyle || 'solid') + 1) % styles.length]; changed = true; }
       }
       if (changed) _legendCommit();
@@ -1048,7 +751,7 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
     else hiddenSet.add(name);
     const isActive = !hiddenSet.has(name);
     btn.classList.toggle('active', isActive);
-    btn.setAttribute('aria-pressed', String(isActive));
+    btn.querySelector('.plot-legend-label')?.setAttribute('aria-pressed', String(isActive));
     if (opts.restart) opts.restart();
     else _plotRestart();
   });
@@ -1064,10 +767,9 @@ const setupPlotSvg = (plotArea, margin, opts = {}) => {
   g.append('g').attr('class', 'plot-panels');
   g.append('g').attr('class', 'plot-x-axis');
   g.append('line').attr('class', 'plot-crosshair').attr('opacity', 0);
-  g.append('rect').attr('class', 'plot-overlay').attr('fill', 'none').style('pointer-events', 'all');
+  g.append('rect').attr('class', 'plot-overlay').attr('fill', 'none').attr('pointer-events', 'all');
   const tooltip = document.createElement('div');
-  tooltip.className = 'plot-tooltip';
-  tooltip.style.display = 'none';
+  tooltip.className = 'plot-tooltip hidden';
   plotArea.appendChild(tooltip);
   return g.node();
 };
@@ -1094,6 +796,8 @@ const _renderGrid = (container, xScale, yScale, w, h) => {
 };
 
 const THRESHOLD_STYLES = { solid: 'none', dashed: '6 3', dotted: '2 3', dashdot: '6 3 2 3', longdash: '12 4' };
+// A threshold's name in the legend: its label, else its value.
+const thresholdName = (th) => `${th.label || th.value}`;
 const MARKER_SHAPES = {
   circle: (x, y, r) => `M${x - r},${y}a${r},${r} 0 1,0 ${r * 2},0a${r},${r} 0 1,0 -${r * 2},0`,
   square: (x, y, r) => `M${x - r},${y - r}h${r * 2}v${r * 2}h-${r * 2}Z`,
@@ -1117,14 +821,14 @@ const _renderThresholds = (container, thresholds, yScale, w) => {
   merged.select('line')
     .attr('x1', 0).attr('x2', w)
     .attr('y1', d => yScale(d.value)).attr('y2', d => yScale(d.value))
-    .attr('stroke', d => d.color || '#ef4444')
+    .attr('stroke', d => d.color || 'var(--error)')
     .attr('stroke-width', 1)
     .attr('stroke-dasharray', d => THRESHOLD_STYLES[d.style] || THRESHOLD_STYLES.dashed);
   merged.select('text')
     .attr('x', w - 4).attr('y', d => yScale(d.value) - 3)
     .attr('text-anchor', 'end')
     .attr('class', 'plot-threshold-label')
-    .attr('fill', d => d.color || '#ef4444')
+    .attr('fill', d => d.color || 'var(--error)')
     .text(d => d.label || String(d.value));
   lines.exit().remove();
 };
@@ -1177,7 +881,7 @@ const _renderDrawings = (container, drawings, xScale, panelH) => {
   paths.enter().append('path')
     .attr('fill', 'none')
     .merge(paths)
-    .attr('stroke', d => d.color || '#ef4444')
+    .attr('stroke', d => d.color || 'var(--error)')
     .attr('stroke-width', d => d.width || 2)
     .attr('stroke-dasharray', d => _drawDashFor(d.dash, d.width || 2))
     .attr('stroke-linecap', d => d.dash === 'dotted' ? 'round' : (d.dash === 'dashed' ? 'butt' : 'round'))
@@ -1199,6 +903,13 @@ const _openMarkerForm = (plotArea, cfg, marker, isNew, onDone) => {
 
   const form = document.createElement('div');
   form.className = 'plot-marker-form';
+  const closeForm = () => {
+    form.remove();
+    document.removeEventListener('mousedown', closeIfOutside);
+  };
+  const closeIfOutside = (e) => {
+    if (!form.contains(e.target)) closeForm();
+  };
 
   const labelInput = document.createElement('input');
   labelInput.type = 'text';
@@ -1214,14 +925,17 @@ const _openMarkerForm = (plotArea, cfg, marker, isNew, onDone) => {
 
   const colorWrap = document.createElement('div');
   colorWrap.className = 'plot-marker-form-color';
+  // Until a colour is picked, a marker takes the theme's accent (see styles.css).
   const colorSwatch = document.createElement('span');
   colorSwatch.className = 'plot-marker-form-swatch';
-  colorSwatch.style.background = marker.color || 'var(--accent)';
+  if (marker.color) colorSwatch.style.background = marker.color;
   const colorInput = document.createElement('input');
   colorInput.type = 'color';
-  colorInput.value = _colorToHex(marker.color || '#0969da');
+  colorInput.value = _colorToHex(marker.color || 'var(--accent)');
   colorInput.setAttribute('aria-label', 'Marker color');
+  let picked = Boolean(marker.color);
   colorInput.addEventListener('input', () => {
+    picked = true;
     colorSwatch.style.background = colorInput.value;
   });
   colorWrap.appendChild(colorSwatch);
@@ -1248,20 +962,20 @@ const _openMarkerForm = (plotArea, cfg, marker, isNew, onDone) => {
     if (!label) { labelInput.focus(); return; }
     marker.label = label;
     marker.note = noteInput.value.trim() || '';
-    marker.color = colorInput.value;
+    marker.color = picked ? colorInput.value : '';
     marker.lineStyle = styleSel.value;
     if (isNew) {
       if (!cfg.markers) cfg.markers = [];
       cfg.markers.push(marker);
     }
-    form.remove();
+    closeForm();
     onDone();
   });
 
   const cancelBtn = document.createElement('button');
   cancelBtn.type = 'button';
   cancelBtn.textContent = 'Cancel';
-  cancelBtn.addEventListener('click', () => form.remove());
+  cancelBtn.addEventListener('click', () => closeForm());
 
   btnRow.appendChild(saveBtn);
   if (!isNew) {
@@ -1272,7 +986,7 @@ const _openMarkerForm = (plotArea, cfg, marker, isNew, onDone) => {
     delBtn.addEventListener('click', () => {
       const idx = cfg.markers.indexOf(marker);
       if (idx >= 0) cfg.markers.splice(idx, 1);
-      form.remove();
+      closeForm();
       onDone();
     });
     btnRow.appendChild(delBtn);
@@ -1291,13 +1005,18 @@ const _openMarkerForm = (plotArea, cfg, marker, isNew, onDone) => {
   plotArea.appendChild(form);
   labelInput.focus();
 
-  const close = (e) => {
-    if (!form.contains(e.target) && form.parentNode) {
-      form.remove();
-      document.removeEventListener('mousedown', close);
+  // Enter in a text box saves, Escape cancels, as does a click outside.
+  form.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.type === 'text') {
+      e.preventDefault();
+      saveBtn.click();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeForm();
     }
-  };
-  setTimeout(() => document.addEventListener('mousedown', close), 0);
+  });
+  setTimeout(() => document.addEventListener('mousedown', closeIfOutside), 0);
 };
 
 const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPanelsH) => {
@@ -1313,8 +1032,6 @@ const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPane
   panelsEnter.append('text').attr('class', 'panel-label').attr('x', 4).attr('y', 11);
   panels.exit().remove();
 
-  const isSubjects = state.activeView === 'subjects';
-
   panelsG.selectAll('.plot-panel').each(function (d, i) {
     const yScale = yScales[i];
     const color = d.color || PLOT_COLORS[i % PLOT_COLORS.length];
@@ -1325,18 +1042,18 @@ const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPane
     if (state.plotGrid) _renderGrid(panel, xScale, yScale, w, panelH);
     else panel.select('.plot-grid').remove();
     const lineGen = d3.line().defined((p) => !p._gap).x((p) => xScale(p.t)).y((p) => yScale(p.v)).curve(d3.curveLinear);
-    const showLine = isSubjects ? !state.plotDisconnectPoints : true;
+    const showLine = !state.plotDisconnectPoints;
     panel.select('.panel-line')
       .attr('clip-path', `url(#panel-clip-${sid}-${_safeId(d.name)})`)
       .select('path')
       .attr('stroke', color)
-      .attr('stroke-width', isSubjects ? state.plotStroke : 1.5)
+      .attr('stroke-width', state.plotStroke)
       .attr('d', showLine && d.data.length >= 2 ? lineGen(d.data) : null)
       .attr('opacity', showLine && d.data.length >= 2 ? 1 : 0);
 
     const dotsG = panel.select('.panel-dots')
       .attr('clip-path', `url(#panel-clip-${sid}-${_safeId(d.name)})`);
-    if (isSubjects && state.plotDisconnectPoints) {
+    if (state.plotDisconnectPoints) {
       const visibleData = d.data.filter((p) => xScale(p.t) >= 0 && xScale(p.t) <= w);
       const maxDots = 600;
       const step = visibleData.length > maxDots ? Math.ceil(visibleData.length / maxDots) : 1;
@@ -1361,125 +1078,10 @@ const renderPanelLines = (g, sid, visible, xScale, yScales, panelH, w, totalPane
   g.select('.plot-crosshair').attr('y1', 0).attr('y2', totalPanelsH);
 };
 
-const _renderCompareOverlay = (g, compareSeries, xScale, panelH, w, primaryCount, cfg = null) => {
-  let overlay = g.select('.plot-compare-overlay');
-
-  if (!compareSeries.length) {
-    if (!overlay.empty()) overlay.selectAll('*').remove();
-    return;
-  }
-
-  if (overlay.empty()) {
-    overlay = g.insert('g', '.plot-x-axis').attr('class', 'plot-compare-overlay');
-  }
-
-  const yOffset = primaryCount * (panelH + PLOT_PANEL_GAP);
-  overlay.attr('transform', `translate(0, ${yOffset})`);
-
-  let vMin = Infinity, vMax = -Infinity;
-  for (const s of compareSeries) {
-    for (const p of s.data) {
-      if (p.v < vMin) vMin = p.v;
-      if (p.v > vMax) vMax = p.v;
-    }
-  }
-  if (vMin === vMax) { vMin -= 1; vMax += 1; }
-  const pad = (vMax - vMin) * 0.05;
-  const yScale = d3.scaleLinear().domain([vMin - pad, vMax + pad]).range([panelH, 0]);
-
-  let clip = overlay.select('clipPath');
-  if (clip.empty()) {
-    clip = overlay.append('clipPath').attr('id', 'compare-panel-clip');
-    clip.append('rect');
-  }
-  clip.select('rect').attr('width', w).attr('height', panelH);
-
-  let yAxisG = overlay.select('.panel-y-axis');
-  if (yAxisG.empty()) yAxisG = overlay.append('g').attr('class', 'panel-y-axis');
-  yAxisG.call(d3.axisLeft(yScale).ticks(3).tickSize(2));
-
-  const showGrid = cfg ? cfg.grid : false;
-  if (showGrid) _renderGrid(overlay, xScale, yScale, w, panelH);
-  else overlay.select('.plot-grid').remove();
-
-  _renderThresholds(overlay, cfg?.thresholds, yScale, w);
-  _renderMarkers(overlay, cfg?.markers, xScale, panelH);
-  _renderDrawings(overlay, cfg?.drawings, xScale, panelH);
-
-  const strokeW = cfg ? cfg.stroke : 1.5;
-  const showDots = cfg ? cfg.disconnectPoints : false;
-  const lineGen = d3.line().defined((p) => !p._gap).x((p) => xScale(p.t)).y((p) => yScale(p.v)).curve(d3.curveLinear);
-  const showLine = !showDots;
-
-  const lines = overlay.selectAll('.compare-line').data(compareSeries, (d) => d.name);
-  lines.enter().append('path')
-    .attr('class', 'compare-line')
-    .attr('fill', 'none')
-    .attr('clip-path', 'url(#compare-panel-clip)')
-    .merge(lines)
-    .attr('stroke', (d, i) => d.color || PLOT_COLORS[(primaryCount + i) % PLOT_COLORS.length])
-    .attr('stroke-width', strokeW)
-    .attr('stroke-dasharray', (d) => {
-      const st = d._lineStyle || 'solid';
-      if (MARKER_SHAPES[st]) return null;
-      return THRESHOLD_STYLES[st] || null;
-    })
-    .attr('d', (d) => showLine && d.data.length >= 2 ? lineGen(d.data) : null)
-    .attr('opacity', (d) => showLine && d.data.length >= 2 ? 1 : 0);
-  lines.exit().remove();
-
-  const markerR = Math.max(2, strokeW);
-  const maxMarkers = 200;
-  compareSeries.forEach((s, i) => {
-    const color = s.color || PLOT_COLORS[(primaryCount + i) % PLOT_COLORS.length];
-    const safeN = _safeId(s.name);
-    const shape = MARKER_SHAPES[s._lineStyle];
-    const needMarkers = showLine && shape;
-    const needDots = showDots && !shape;
-    const cls = `compare-markers-${safeN}`;
-    let mG = overlay.select(`.${cls}`);
-    if (!needMarkers && !needDots) {
-      if (!mG.empty()) mG.remove();
-      return;
-    }
-    if (mG.empty()) {
-      mG = overlay.append('g').attr('class', cls)
-        .attr('clip-path', 'url(#compare-panel-clip)');
-    }
-    const vis = s.data.filter((p) => !p._gap && xScale(p.t) >= 0 && xScale(p.t) <= w);
-    const step = vis.length > maxMarkers ? Math.ceil(vis.length / maxMarkers) : 1;
-    const sampled = step > 1 ? vis.filter((_, j) => j % step === 0) : vis;
-    if (needMarkers) {
-      mG.selectAll('circle').remove();
-      const paths = mG.selectAll('path').data(sampled, (p) => p.t);
-      paths.enter().append('path')
-        .merge(paths)
-        .attr('d', (p) => shape(xScale(p.t), yScale(p.v), markerR))
-        .attr('fill', color)
-        .attr('stroke', 'none');
-      paths.exit().remove();
-    } else {
-      mG.selectAll('path').remove();
-      const dots = mG.selectAll('circle').data(sampled, (p) => p.t);
-      dots.enter().append('circle').attr('fill', color)
-        .merge(dots)
-        .attr('r', strokeW)
-        .attr('cx', (p) => xScale(p.t))
-        .attr('cy', (p) => yScale(p.v));
-      dots.exit().remove();
-    }
-  });
-  const activeMarkerClasses = new Set(compareSeries.map(s => `compare-markers-${_safeId(s.name)}`));
-  overlay.selectAll('[class^="compare-markers-"]').each(function () {
-    if (!activeMarkerClasses.has(this.getAttribute('class'))) d3.select(this).remove();
-  });
-
-  let label = overlay.select('.compare-panel-label');
-  if (label.empty()) {
-    label = overlay.append('text').attr('class', 'panel-label compare-panel-label').attr('x', 4).attr('y', 11);
-  }
-  label.text('Compare').attr('fill', 'var(--muted)');
-};
+// A value as a tooltip reads it: a whole number as it is, others to six
+// significant digits, so a small one keeps its digits (0.00095, not 0.00).
+const formatPlotValue = (v) => (typeof v === 'number' && !Number.isInteger(v)
+  ? String(Number(v.toPrecision(6))) : String(v));
 
 const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = null, restart = null) => {
   plotArea._plotCtx = { visible, xScale, w };
@@ -1491,36 +1093,41 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
   const card = plotArea.closest('.compare-graph-card');
   const syncContainer = card ? card.closest('.compare-cards') : null;
 
+  // A series' sample at time t: the nearest one where its line is drawn, or
+  // near either end of it; none in a gap, as once it stopped (shown "–").
+  const sampleAt = (data, t) => {
+    const i = bisect(data, t);
+    const a = data[i - 1];
+    const b = data[i];
+    const nearest = !b ? a : !a ? b : (Math.abs(a.t - t) < Math.abs(b.t - t) ? a : b);
+    if (a && b && !b._gap) return nearest;
+    return nearest && Math.abs(nearest.t - t) <= PLOT_GAP_THRESHOLD ? nearest : null;
+  };
+
   const showCrosshairAt = (mx) => {
     if (mx < 0 || mx > w || !visible.length) {
       crosshair.attr('opacity', 0);
-      tooltipEl.style.display = 'none';
+      tooltipEl.classList.add('hidden');
       return;
     }
     const t0 = xScale.invert(mx);
-    const samples = visible.map((s) => {
-      const i = bisect(s.data, t0);
-      const a = s.data[i - 1];
-      const b = s.data[i];
-      const sample = !b ? a : !a ? b : (Math.abs(a.t - t0) < Math.abs(b.t - t0) ? a : b);
-      return { name: s.name, sample };
-    }).filter((x) => x.sample);
-    if (!samples.length) {
+    const samples = visible.map((s) => ({ name: s.name, sample: sampleAt(s.data, t0) }));
+    const first = samples.find((x) => x.sample);
+    if (!first) {
       crosshair.attr('opacity', 0);
-      tooltipEl.style.display = 'none';
+      tooltipEl.classList.add('hidden');
       return;
     }
     crosshair.attr('opacity', 1).attr('x1', mx).attr('x2', mx);
-    const formattedT = formatPlotTime(samples[0].sample.t);
+    const formattedT = formatPlotTime(first.sample.t);
     const rows = samples.map((s) => {
       const idx = visible.findIndex((v) => v.name === s.name);
       const color = visible[idx]?.color || PLOT_COLORS[idx % PLOT_COLORS.length];
-      const v = typeof s.sample.v === 'number' && !Number.isInteger(s.sample.v)
-        ? s.sample.v.toFixed(2) : String(s.sample.v);
+      const v = s.sample ? formatPlotValue(s.sample.v) : '–';
       return `<div class="plot-tooltip-row"><span class="plot-tooltip-swatch" style="background:${_safeColor(color)}"></span><span class="plot-tooltip-name">${escapeHtml(s.name)}</span><span class="plot-tooltip-val">${escapeHtml(v)}</span></div>`;
     }).join('');
     tooltipEl.innerHTML = `<div class="plot-tooltip-time">${formattedT}</div>${rows}`;
-    tooltipEl.style.display = 'block';
+    tooltipEl.classList.remove('hidden');
     let tx = mx + PLOT_MARGIN.left + 12;
     const tw = tooltipEl.offsetWidth;
     if (tx + tw > rect.width - 4) tx = mx + PLOT_MARGIN.left - 12 - tw;
@@ -1536,19 +1143,26 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
 
   const hideCrosshair = () => {
     crosshair.attr('opacity', 0);
-    tooltipEl.style.display = 'none';
+    tooltipEl.classList.add('hidden');
   };
 
   if (syncContainer) {
     if (plotArea._crosshairSync) syncContainer.removeEventListener('crosshair-sync', plotArea._crosshairSync);
     if (plotArea._crosshairHide) syncContainer.removeEventListener('crosshair-hide', plotArea._crosshairHide);
+    // A removed graph's handlers go at the next event: nothing else removes them.
+    const removed = () => {
+      if (plotArea.isConnected) return false;
+      syncContainer.removeEventListener('crosshair-sync', plotArea._crosshairSync);
+      syncContainer.removeEventListener('crosshair-hide', plotArea._crosshairHide);
+      return true;
+    };
     plotArea._crosshairSync = (e) => {
-      if (e.detail.source === plotArea) return;
+      if (removed() || e.detail.source === plotArea) return;
       plotArea._syncedT = e.detail.t;
       showAtTimestamp(e.detail.t);
     };
     plotArea._crosshairHide = (e) => {
-      if (e.detail.source === plotArea) return;
+      if (removed() || e.detail.source === plotArea) return;
       plotArea._syncedT = null;
       hideCrosshair();
     };
@@ -1608,7 +1222,10 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
 
   if (cfg && svgEl && !svgEl._zoomBound) {
     svgEl._zoomBound = true;
+    // Ctrl+wheel zooms (a trackpad pinch sends it too); the wheel alone
+    // scrolls the page on, past graphs that fill it.
     svgEl.addEventListener('wheel', (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
       const [mx] = d3.pointer(e, overlay.node());
       const ctx = plotArea._plotCtx || {};
@@ -1636,20 +1253,16 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
     let clickTimer = null;
     const DRAG_THRESHOLD = 3;
 
-    const _syncPauseBtn = () => {
-      const pb = plotArea.querySelector('.plot-pause-btn');
-      if (pb) {
-        pb.textContent = cfg.paused ? '▶' : '⏸';
-        pb.classList.toggle('active', cfg.paused);
-      }
-    };
-
     let downMx = 0;
     let downShift = false;
     let drawingStroke = null;
 
+    // The page follows the pointer only while a button is down on the plot:
+    // listeners left on it would outlive the graph.
     svgEl.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
+      window.addEventListener('mousemove', onDragMove);
+      window.addEventListener('mouseup', onDragEnd);
       const [mx, my] = d3.pointer(e, overlay.node());
       if (e.altKey) {
         e.preventDefault();
@@ -1660,14 +1273,14 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
         const style = cfg._drawStyle || 'solid';
         drawingStroke = {
           points: [{ t: curXScale.invert(mx), y: my / totalH }],
-          color: cfg._drawColor || '#ef4444',
+          color: cfg._drawColor || '',  // the theme's red, unless one is picked
           width,
           dash: style,
           _totalH: totalH,
           _dashArray: _drawDashFor(style, width),
           _linecap: style === 'dashed' ? 'butt' : 'round',
         };
-        svgEl.style.cursor = 'crosshair';
+        svgEl.classList.add('plot-drawing');
         return;
       }
       dragStart = e.clientX;
@@ -1676,7 +1289,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
       downShift = e.shiftKey;
       downMx = mx;
     });
-    window.addEventListener('mousemove', (e) => {
+    const onDragMove = (e) => {
       if (drawingStroke) {
         const [mx, my] = d3.pointer(e, overlay.node());
         const ctx = plotArea._plotCtx || {};
@@ -1687,8 +1300,10 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
         const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${curXScale(p.t)},${p.y * drawingStroke._totalH}`).join('');
         if (tempPath.empty()) {
           const ov = g.select('.plot-compare-overlay');
+          const lines = ov.select('.compare-lines');  // their clip keeps a drawing to the plot
           (ov.empty() ? g : ov).append('path').attr('class', 'plot-drawing-temp')
-            .attr('fill', 'none').attr('stroke', drawingStroke.color)
+            .attr('clip-path', lines.empty() ? null : lines.attr('clip-path'))
+            .attr('fill', 'none').attr('stroke', drawingStroke.color || 'var(--error)')
             .attr('stroke-width', drawingStroke.width)
             .attr('stroke-dasharray', drawingStroke._dashArray)
             .attr('stroke-linecap', drawingStroke._linecap).attr('stroke-linejoin', 'round').attr('pointer-events', 'none')
@@ -1702,7 +1317,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
       if (!didDrag && Math.abs(e.clientX - dragStart) < DRAG_THRESHOLD) return;
       if (!didDrag) {
         didDrag = true;
-        svgEl.style.cursor = 'grabbing';
+        svgEl.classList.add('plot-grabbing');
       }
       const ctx = plotArea._plotCtx || {};
       const curXScale = ctx.xScale || xScale;
@@ -1712,8 +1327,10 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
       cfg._panOffset = dragPanStart - dx / pxPerSec;
       cfg._fingerprint = '';
       if (plotArea._zoomRestart) plotArea._zoomRestart();
-    });
-    window.addEventListener('mouseup', (e) => {
+    };
+    const onDragEnd = () => {
+      window.removeEventListener('mousemove', onDragMove);
+      window.removeEventListener('mouseup', onDragEnd);
       if (drawingStroke) {
         g.select('.plot-drawing-temp').remove();
         if (drawingStroke.points.length >= 2) {
@@ -1725,7 +1342,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
           if (plotArea._zoomRestart) plotArea._zoomRestart();
         }
         drawingStroke = null;
-        svgEl.style.cursor = '';
+        svgEl.classList.remove('plot-drawing');
         return;
       }
       if (dragStart === null) return;
@@ -1733,7 +1350,7 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
       const wasShift = downShift;
       const mx = downMx;
       dragStart = null;
-      svgEl.style.cursor = '';
+      svgEl.classList.remove('plot-grabbing');
       const _markerDone = () => {
         cfg._fingerprint = '';
         saveSettings();
@@ -1774,22 +1391,18 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
           _openMarkerForm(plotArea, cfg, near, false, _markerDone);
           return;
         }
+        if (!cfg.clickPauses) return;  // a click pauses only where the graph asks it to
         if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; return; }
         clickTimer = setTimeout(() => {
           clickTimer = null;
-          if (cfg.paused) {
-            cfg._resumeFrom = cfg.pausedAt;
-            cfg._resumeStart = Date.now() / 1000;
-            _resetSmoothCaches(cfg);
-          }
-          cfg.paused = !cfg.paused;
-          cfg.pausedAt = cfg.paused ? Date.now() / 1000 : null;
-          _syncPauseBtn();
+          togglePlotPause(cfg);
+          // A Compare graph's pause button is in its card's header, not in the plot.
+          syncPauseButton((plotArea.closest('.compare-graph-card') || plotArea).querySelector('.plot-pause-btn'), cfg);
           cfg._fingerprint = '';
           if (plotArea._zoomRestart) plotArea._zoomRestart();
         }, 250);
       }
-    });
+    };
 
     svgEl.addEventListener('dblclick', (e) => {
       e.preventDefault();
@@ -1809,47 +1422,97 @@ const bindPlotTooltip = (g, plotArea, visible, xScale, w, HEADER_H, rect, cfg = 
   }
 };
 
+// The values a Compare legend row gives, and how a cell reads one: blank for a
+// threshold, – for a series with nothing in view (see _statsInView).
+const LEGEND_STATS = ['last', 'min', 'max'];
+const _legendValue = (s, stat) => (s._stats === undefined ? '' : s._stats ? formatPlotValue(s._stats[stat]) : '–');
+
 const updatePlotLegend = (plotArea, allSeries, hidden) => {
   const legend = plotArea.querySelector('.plot-legend');
   if (!legend) return;
   const isCompare = !!plotArea.closest('.compare-graph-card');
-  const seriesKey = allSeries.map((s) => `${s.name}:${s.color || ''}:${s._lineStyle || ''}:${s._derivedId || ''}:${s._thresholdIdx ?? ''}`).join('|');
+  // Compare's legend is a table: a row a series, its last, lowest and highest
+  // value in view in columns that line up across the rows.
+  legend.classList.toggle('plot-legend--table', isCompare);
+  const seriesKey = allSeries.map((s) => `${s.name}:${s.color || ''}:${s._lineStyle || ''}:${s._derivedId || ''}:${s._thresholdIdx ?? ''}:${s._silent ? 's' : ''}:${s._unit || ''}`).join('|');
   if (legend.dataset.seriesKey !== seriesKey) {
     legend.dataset.seriesKey = seriesKey;
-    legend.innerHTML = allSeries.map((s, i) => {
+    const head = isCompare ? '<div class="plot-legend-head" aria-hidden="true"><span class="plot-legend-head-name">in view</span>'
+      + `${LEGEND_STATS.map((stat) => `<span class="plot-legend-value">${stat}</span>`).join('')}<span class="plot-legend-head-end"></span></div>` : '';
+    legend.innerHTML = head + allSeries.map((s, i) => {
       const isActive = !hidden.has(s.name);
       const color = s.color || PLOT_COLORS[i % PLOT_COLORS.length];
       const derivedAttr = s._derivedId ? ` data-derived-id="${escapeHtml(s._derivedId)}"` : '';
       const threshAttr = s._threshold ? ` data-threshold-idx="${s._thresholdIdx}"` : '';
       let styleHtml = '';
       let removeHtml = '';
+      // Buttons, so the keyboard reaches them: show or hide, line style, remove.
+      const name = escapeHtml(s.name);
       if (s._derived || s._threshold || isCompare) {
         const st = s._lineStyle || 'solid';
-        styleHtml = `<span class="plot-legend-style" data-style="${st}" title="Click to change line style"></span>`;
-        removeHtml = `<span class="plot-legend-remove" aria-label="Remove series">×</span>`;
+        styleHtml = `<button type="button" class="plot-legend-style" data-style="${st}" title="Click to change line style" aria-label="Line style of ${name}"></button>`;
+        removeHtml = `<button type="button" class="plot-legend-remove" aria-label="Remove ${name}">×</button>`;
       }
-      const cls = s._derived ? ' plot-legend-derived' : s._threshold ? ' plot-legend-threshold' : '';
-      return `<div class="plot-legend-item${isActive ? ' active' : ''}${cls}" data-series="${escapeHtml(s.name)}"${derivedAttr}${threshAttr} aria-pressed="${isActive}"><span class="plot-legend-swatch" style="background:${_safeColor(color)}" data-hex="${escapeHtml(color)}"></span>${styleHtml}<span class="plot-legend-label">${escapeHtml(s.name)}</span>${removeHtml}</div>`;
+      const cls = (s._derived ? ' plot-legend-derived' : s._threshold ? ' plot-legend-threshold' : '')
+        + (s._silent ? ' plot-legend-silent' : '');
+      const silentAttr = s._silent ? ' title="Nothing to plot: no data from it yet, or none kept"' : '';
+      const unitHtml = s._unit ? `<span class="plot-legend-unit">${escapeHtml(s._unit)}</span>` : '';
+      const valuesHtml = isCompare ? LEGEND_STATS.map((stat) =>
+        `<span class="plot-legend-value" data-stat="${stat}">${escapeHtml(_legendValue(s, stat))}</span>`).join('') : '';
+      return `<div class="plot-legend-item${isActive ? ' active' : ''}${cls}" data-series="${name}"${derivedAttr}${threshAttr}${silentAttr}><span class="plot-legend-swatch" style="background:${_safeColor(color)}" data-hex="${escapeHtml(color)}"></span>${styleHtml}<button type="button" class="plot-legend-label" aria-pressed="${isActive}">${name}${unitHtml}</button>${valuesHtml}${removeHtml}</div>`;
     }).join('');
   } else {
     for (const item of legend.querySelectorAll('.plot-legend-item[data-series]')) {
       const isActive = !hidden.has(item.dataset.series);
       item.classList.toggle('active', isActive);
-      item.setAttribute('aria-pressed', String(isActive));
+      item.querySelector('.plot-legend-label')?.setAttribute('aria-pressed', String(isActive));
     }
   }
+  if (!isCompare) return;
+  // The values change with every draw: written into their cells, the rows stay.
+  const byName = new Map(allSeries.map((s) => [s.name, s]));
+  for (const item of legend.querySelectorAll('.plot-legend-item[data-series]')) {
+    const s = byName.get(item.dataset.series);
+    for (const cell of item.querySelectorAll('.plot-legend-value')) {
+      const text = s ? _legendValue(s, cell.dataset.stat) : '';
+      if (cell.textContent !== text) cell.textContent = text;
+    }
+  }
+};
+
+// A note over a plot saying why it shows nothing; none when `text` is empty.
+const setPlotNote = (plotArea, text) => {
+  let note = plotArea.querySelector('.plot-empty-window');
+  if (!text) {
+    note?.remove();
+    return;
+  }
+  if (!note) {
+    note = document.createElement('div');
+    note.className = 'plot-empty-window';
+    plotArea.appendChild(note);
+  }
+  if (note.textContent !== text) note.textContent = text;
 };
 
 let _lastPlotFingerprint = '';
 
 const _plotInvalidate = () => { _lastPlotFingerprint = ''; };
+
+// The theme changed: the plots on show draw again in its colours, paused ones too.
+const redrawPlotsInTheme = () => {
+  refreshPlotColors();
+  if (state.activeView === 'nodes' || state.activeView === 'subjects') startPlotAnim();
+  for (const graph of state.compareGraphs) graph._fingerprint = '';
+  if (state.activeView === 'compare') startCompareAnim();
+};
 const _plotRerender = () => { renderPlot(el('selectedNodeContent')); };
 const _plotRestart = () => { startPlotAnim(); };
 
 const renderPlot = (container) => {
   const plotArea = container.querySelector('.detail-plot-area');
   if (!plotArea) return;
-  _subjectsPlotCfg._updateFillRate?.();
+  _detailPlotCfg._updateFillRate?.();
 
   const sid = state.selectedPlotSubject;
   if (sid == null) {
@@ -1859,7 +1522,10 @@ const renderPlot = (container) => {
   }
 
   const isSubjects = state.activeView === 'subjects';
-  const allSeries = collectPlotSeries(sid, isSubjects ? _subjectsPlotCfg : null);
+  // A node's own card plots that node's messages, not the subject's other publishers'.
+  const publisher = !isSubjects && state.selectedDetailTab === 'publishers'
+    && Number.isInteger(state.selectedNodeId) ? state.selectedNodeId : null;
+  const allSeries = collectPlotSeries(sid, _detailPlotCfg, publisher);
   allSeries.forEach((s, i) => {
     s.color = state.plotColorOverrides[`${sid}:${s.name}`] || PLOT_COLORS[i % PLOT_COLORS.length];
   });
@@ -1870,21 +1536,29 @@ const renderPlot = (container) => {
   }
 
   const lastPts = allSeries.map((s) => s.data.length ? s.data[s.data.length - 1].t : 0);
-  const fp = isSubjects
-    ? `${sid}:${allSeries.length}:${lastPts.join(',')}:v:s:w${state.plotTimeWindow}:p${state.plotPaused ? state.plotPausedAt : 0}:s${state.plotSmooth}:d${state.plotDisconnectPoints}:k${state.plotStroke}:g${state.plotGrid}`
-    : `${sid}:${allSeries.length}:${lastPts.join(',')}:v:n`;
+  const fp = `${sid}:${state.activeView}:${publisher ?? '-'}:${allSeries.length}:${lastPts.join(',')}`
+    + `:w${state.plotTimeWindow}:p${state.plotPaused ? state.plotPausedAt : 0}:s${state.plotSmooth}`
+    + `:d${state.plotDisconnectPoints}:k${state.plotStroke}:g${state.plotGrid}`;
   const rect = plotArea.getBoundingClientRect();
   const sizeKey = `${Math.round(rect.width)}x${Math.round(rect.height)}`;
   const fullFp = `${fp}:${sizeKey}`;
   if (fullFp === _lastPlotFingerprint) return;
   _lastPlotFingerprint = fullFp;
 
-  if (!state.hiddenPlotSeries.has(sid)) {
-    // A timestamp is metadata, not a signal (in uavcan.si types usually 0):
-    // start it hidden; its legend pill shows it on demand.
-    state.hiddenPlotSeries.set(sid, new Set(allSeries.filter((s) => s.name === 'timestamp').map((s) => s.name)));
-  }
+  // A series starts hidden, its legend pill showing it on demand, when it is a
+  // timestamp (metadata, in uavcan.si types usually 0) or more than fit: a
+  // field per publisher makes dozens on Heartbeat, which every node sends.
+  if (!state.hiddenPlotSeries.has(sid)) state.hiddenPlotSeries.set(sid, new Set());
+  if (!state.plotSeriesSeen.has(sid)) state.plotSeriesSeen.set(sid, new Set());
   const hidden = state.hiddenPlotSeries.get(sid);
+  const seen = state.plotSeriesSeen.get(sid);
+  let shown = allSeries.filter((s) => seen.has(s.name) && !hidden.has(s.name)).length;
+  for (const s of allSeries) {
+    if (seen.has(s.name)) continue;
+    seen.add(s.name);
+    if (s.field === 'timestamp' || shown >= PLOT_SHOWN_MAX) hidden.add(s.name);
+    else shown++;
+  }
   const visible = allSeries.filter((s) => !hidden.has(s.name));
 
   const w = rect.width - PLOT_MARGIN.left - PLOT_MARGIN.right;
@@ -1903,18 +1577,8 @@ const renderPlot = (container) => {
     }
     if (inWindow) break;
   }
-  let emptyOverlay = plotArea.querySelector('.plot-empty-window');
-  if (!inWindow && visible.length) {
-    const windowSecs = Math.max(0, Math.round(tRight - tLeft));
-    if (!emptyOverlay) {
-      emptyOverlay = document.createElement('div');
-      emptyOverlay.className = 'plot-empty-window';
-      plotArea.appendChild(emptyOverlay);
-    }
-    emptyOverlay.textContent = `No data in last ${windowSecs}s`;
-  } else if (emptyOverlay) {
-    emptyOverlay.remove();
-  }
+  setPlotNote(plotArea, !inWindow && visible.length
+    ? `No data in last ${Math.max(0, Math.round(tRight - tLeft))}s` : '');
 
   let gNode = plotArea.querySelector('.plot-root');
   if (!gNode || !gNode.querySelector('.plot-panels') || !plotArea.querySelector('.plot-header') || plotArea.dataset.plotView !== state.activeView) {
@@ -1927,11 +1591,8 @@ const renderPlot = (container) => {
 
   const titleEl = plotArea.querySelector('.plot-title');
   if (titleEl) {
-    let next = `Subject ${sid}`;
-    if (state.activeView === 'subjects') {
-      const event = state.latestBySubject.get(sid);
-      next += ` · ${event?.message_type || 'network'}`;
-    } else if (state.selectedDetailTab === 'subscribers') {
+    let next = `Subject ${sid} · ${subjectTypeName(sid, state.latestBySubject.get(sid))}`;
+    if (state.activeView !== 'subjects' && state.selectedDetailTab === 'subscribers') {
       next += ' · network broadcast';
     }
     if (titleEl.textContent !== next) titleEl.textContent = next;
@@ -1955,13 +1616,13 @@ const startPlotAnim = () => {
   stopPlotAnim();
   if (state.detailPanelCollapsed || state.selectedPlotSubject == null) return;
   const container = el('selectedNodeContent');
-  if (state.activeView === 'subjects' && state.plotPaused) {
+  if (state.plotPaused) {
     renderPlot(container);
     return;
   }
   const tick = () => {
     if (state.detailPanelCollapsed) { state.plotTimer = null; return; }
-    if (state.activeView === 'subjects' && state.plotPaused) { state.plotTimer = null; return; }
+    if (state.plotPaused) { state.plotTimer = null; return; }
     if (state.activeView !== 'subjects') {
       const node = getSelectedNode();
       if (node?.has_disappeared) { state.plotTimer = null; return; }

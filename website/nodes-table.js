@@ -3,26 +3,35 @@
 // stored on the global `nodesTabulator` (declared in state.js) so other
 // files can read column widths/header filters when persisting settings.
 
-const deleteGhostNode = async (uniqueIdHex) => {
+// Forgets, for good, an offline node that lost its node-ID: asks first.
+const deleteGhostNode = async (row) => {
+  const label = `${row.name || 'this node'} (last node-ID ${row._lastNodeId ?? '-'})`;
+  if (!window.confirm(`Forget ${label}? Cynitor drops what it remembers of this device.`)) return;
   try {
-    await requestJson(`/api/identity/${uniqueIdHex}`, { method: 'DELETE' });
-    if (state.selectedNodeId === `uid:${uniqueIdHex}`) clearSelectedNode();
+    await requestJson(`/api/identity/${row._uid}`, { method: 'DELETE' });
+    if (state.selectedNodeId === `uid:${row._uid}`) clearSelectedNode();
   } catch (e) {
-    console.error('Failed to delete ghost node:', e);
+    showToast(`Could not forget ${label}: ${e.message}`, 'error');
   }
 };
 
+// IDs in a filter are whole: "10, 20" finds 10 or 20 in a cell's list, not 110 or 7510.
+const idList = (text) => String(text ?? '').split(',').map((t) => t.trim()).filter(Boolean);
 const idsHeaderFilter = (headerValue, rowValue) => {
-  if (!headerValue) return true;
-  const terms = headerValue.split(',').map((t) => t.trim()).filter(Boolean);
+  const terms = idList(headerValue);
   if (!terms.length) return true;
-  const cellStr = String(rowValue);
-  return terms.some((t) => cellStr.includes(t));
+  const ids = idList(rowValue);
+  return terms.some((t) => ids.includes(t));
 };
+
+// Health and state sort by how much they need a look, not alphabetically.
+const HEALTH_ORDER = ['-', 'NOMINAL', 'ADVISORY', 'CAUTION', 'WARNING'];
+const STATE_ORDER = ['active', 'idle', 'caution', 'warning', 'offline'];
+const severitySorter = (order) => (a, b) => order.indexOf(a) - order.indexOf(b);
 
 const stateFormatter = (cell) => {
   const v = cell.getValue();
-  return `<span class="state-cell"><span class="state-dot ${escapeHtml(v)}"></span><span class="state-label">${escapeHtml(v)}</span></span>`;
+  return `<span class="state-cell ${escapeHtml(v)}"><span class="state-dot ${escapeHtml(v)}"></span><span class="state-label">${escapeHtml(v)}</span></span>`;
 };
 
 // Uptime of a live node; for an offline one, since when it has been gone,
@@ -47,12 +56,15 @@ const healthFormatter = (cell) => {
   return `<span class="health-text health-${escapeHtml(cls)}">${icon}${escapeHtml(v)}</span>`;
 };
 
-const portsFormatter = (cell) => {
+// A node's own ports first, the standard ones (fixed port-IDs) muted after
+// them: those every node has say least about it. The first few, then how
+// many more; the tooltip lists them all.
+const portsFormatter = (kind) => (cell) => {
   const text = cell.getValue() || '-';
-  const cls = text !== '-' ? 'has-ports' : '';
-  // Long lists scroll within the cell; the tooltip shows them whole.
-  const title = text !== '-' ? ` title="${escapeHtml(text)}"` : '';
-  return `<span class="port-ids ${cls}"${title}>${escapeHtml(text)}</span>`;
+  if (text === '-') return '<span class="port-ids">-</span>';
+  const html = shortIdList(text.split(', ').map(Number),
+    (id) => (isFixedPortId(kind, id) ? `<span class="port-std">${id}</span>` : String(id)));
+  return `<span class="port-ids has-ports" title="${escapeHtml(text)}">${html}</span>`;
 };
 
 // Pass these to Tabulator as pre-joined strings, not fresh arrays. Each
@@ -61,12 +73,33 @@ const portsFormatter = (cell) => {
 // diff would treat the value as changed every time and re-render the
 // cell. That re-render briefly destroys the cell's overflow state and
 // makes the horizontal scrollbar blink. Strings compare by value.
-const portsToString = (arr) => (Array.isArray(arr) && arr.length ? arr.join(', ') : '-');
+const portsToString = (arr, kind) => {
+  if (!Array.isArray(arr) || !arr.length) return '-';
+  const own = arr.filter((id) => !isFixedPortId(kind, id)).sort((a, b) => a - b);
+  const std = arr.filter((id) => isFixedPortId(kind, id)).sort((a, b) => a - b);
+  return [...own, ...std].join(', ');
+};
 
+// A message rate; no messages (or an offline node) is no rate at all.
 const rateFormatter = (cell) => {
   const v = Number(cell.getValue());
-  if (v > 0 && v < 1) return '&lt;1 Hz';
+  if (!(v > 0)) return '<span class="text-muted">-</span>';
+  if (v < 1) return '&lt;1 Hz';
   return `${escapeHtml(v.toFixed(1))} Hz`;
+};
+
+// Mode as the heartbeat names it; OPERATIONAL, the usual one, is muted.
+const modeFormatter = (cell) => {
+  const v = cell.getValue() || '-';
+  const cls = v === 'OPERATIONAL' || v === '-' ? 'mode-usual' : 'mode-other';
+  return `<span class="mode-text ${cls}">${escapeHtml(v)}</span>`;
+};
+
+// The heartbeat's vendor-specific status code; 0, the usual, is muted.
+const vsscFormatter = (cell) => {
+  const v = cell.getValue();
+  if (v == null) return '<span class="text-muted">-</span>';
+  return `<span class="${v === 0 ? 'text-muted' : ''}" title="0x${v.toString(16).toUpperCase()}">${v}</span>`;
 };
 
 const favFormatter = (cell) => {
@@ -82,12 +115,16 @@ const nameFormatter = (cell) => {
     const node = nodes[row.id];
     return node?.name || null;
   })();
-  const display = alias || original || '-';
-  const tooltip = alias && original ? ` title="${escapeHtml(original)}"` : '';
   const editIcon = row._uid?.length
     ? '<span class="name-edit-icon" aria-hidden="true">✎</span>'
     : '';
-  return `<span class="name-cell">${editIcon}<span class="name-display"${tooltip}>${escapeHtml(display)}</span></span>`;
+  if (!alias && !original) {
+    // Heartbeats arrive, but GetInfo (which carries the name) does not answer.
+    const why = row._noInfo ? 'no name: GetInfo unanswered' : '-';
+    return `<span class="name-cell">${editIcon}<span class="name-display name-missing">${why}</span></span>`;
+  }
+  const tooltip = alias && original ? ` title="${escapeHtml(original)}"` : '';
+  return `<span class="name-cell">${editIcon}<span class="name-display"${tooltip}>${escapeHtml(alias || original)}</span></span>`;
 };
 
 const startNameEdit = (cell) => {
@@ -123,9 +160,10 @@ const startNameEdit = (cell) => {
     done = true;
     cellEl.innerHTML = nameFormatter(cell);
   };
+  const rowEl = cell.getRow().getElement();  // where the keyboard goes back to
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); save(); }
-    if (e.key === 'Escape') { e.preventDefault(); discard(); }
+    if (e.key === 'Enter') { e.preventDefault(); save(); rowEl.focus(); }
+    if (e.key === 'Escape') { e.preventDefault(); discard(); rowEl.focus(); }
   });
   input.addEventListener('blur', discard);
 };
@@ -134,7 +172,7 @@ const EYE_ICON = '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24
 const EYE_OFF_ICON = '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
 
 const actionsFormatter = (cell) => {
-  const hide = `<button type="button" class="action-hide" aria-label="Hide node">${EYE_ICON}</button>`;
+  const hide = `<button type="button" class="action-hide" aria-label="Hide node" title="Hide">${EYE_OFF_ICON}</button>`;
   if (!cell.getRow().getData()._ghost) return hide;
   // An offline node that lost its node-ID can also be forgotten for good.
   return `${hide}<button type="button" class="ghost-delete-btn" aria-label="Remove offline node" title="Remove">✕</button>`;
@@ -282,6 +320,51 @@ const toggleHiddenPopover = () => {
   }
 };
 
+// What needs a look in the Nodes table, as the Graph's strip counts it, and
+// nodes that send heartbeats but answer no request (GetInfo).
+const NODE_FOCUS_KINDS = [
+  { key: 'offline', label: 'offline', level: 'err', test: (r) => r._offline && !r._ghost },
+  { key: 'displaced', label: 'displaced', level: 'err', test: (r) => r._ghost },
+  { key: 'health', label: 'unusual health', level: 'warn', test: (r) => !r._offline && !!getStatusClass('health', r.health) },
+  { key: 'mode', label: 'unusual mode', level: 'warn',
+    test: (r) => !r._offline && r.mode !== '-' && !!getStatusClass('mode', r.mode) },
+  { key: 'noinfo', label: 'not answering', level: 'warn', test: (r) => !r._offline && r._noInfo },
+];
+
+// Compact rows, for a long table: both tables, toggled in either's strip. A
+// hidden table measures its rows again when shown; redrawing it while hidden
+// is what left tables blank.
+const applyRowDensity = () => {
+  for (const [id, tabulator] of [['nodesTable', nodesTabulator], ['subjectsTable', subjectsTabulator]]) {
+    el(id).classList.toggle('table-compact', state.compactRows);
+    if (tabulator && !el(id).classList.contains('hidden')) tabulator.redraw(true);
+  }
+};
+
+const toggleRowDensity = () => {
+  state.compactRows = !state.compactRows;
+  saveSettings();
+  applyRowDensity();
+};
+
+const setNodesFocus = (key) => {
+  state.nodesFocus = key;
+  const kind = NODE_FOCUS_KINDS.find((k) => k.key === key);
+  if (kind) nodesTabulator.setFilter(kind.test);
+  else nodesTabulator.clearFilter();
+};
+
+const renderNodesStatus = (rows) => {
+  const strip = el('nodesStatus');
+  if (!rows.length) {
+    strip.replaceChildren();
+    return;
+  }
+  const counts = renderStatusStrip(strip, `${rows.length} node${rows.length === 1 ? '' : 's'}`,
+    NODE_FOCUS_KINDS, rows, state.nodesFocus);
+  if (state.nodesFocus && !counts.some((k) => k.key === state.nodesFocus)) setNodesFocus(null);
+};
+
 const tablePlaceholder = () => {
   return eventSourcePlaceholder('discover CAN nodes')
     || svcStateMsg('<span class="svc-spinner"></span>', 'Waiting for nodes…', 'Listening on the CAN bus. Nodes will appear as they send heartbeats.');
@@ -296,9 +379,10 @@ const buildTableData = () => {
     if (state.hiddenNodeIds.has(nodeStableKey(node))) continue;
     const isGhost = node._ghost === true;
     const nodeState = getNodeVisualState(node);
-    const alias = getNodeAlias(isGhost ? null : node.unique_id);
+    const alias = getNodeAlias(isGhost ? node.unique_id_hex : node.unique_id);
     const offline = isGhost || node.has_disappeared;
     const lastSeen = offline ? formatLastSeen(node.last_seen) : '-';
+    const vssc = Number.parseInt(getNodeHeartbeatValue(node.node_id, 'vssc'), 10);
     rows.push({
       id: isGhost ? key : node.node_id,
       _sortId: isGhost ? (node.last_node_id ?? Infinity) : node.node_id,
@@ -307,19 +391,32 @@ const buildTableData = () => {
       _ghost: isGhost,
       _lastNodeId: isGhost ? node.last_node_id : null,
       _offline: offline,
-      name: alias || node.name || '-',
+      _noInfo: !isGhost && !node.has_responded_to_getinfo,
+      name: alias || node.name || '',
       state: nodeState,
-      health: (isGhost || node.has_disappeared) ? '-' : (getNodeHealthValue(node.node_id) || '-'),
-      rate: isGhost ? 0 : getNodeRate(node.node_id),
+      health: offline ? '-' : (getNodeHealthValue(node.node_id) || '-'),
+      mode: offline ? '-' : (getNodeModeValue(node.node_id) || '-'),
+      vssc: offline || Number.isNaN(vssc) ? null : vssc,
+      sw: node.software_version ? `${node.software_version.major}.${node.software_version.minor}` : '-',
+      rate: offline ? 0 : getNodeRate(node.node_id),
       uptime: offline ? (lastSeen !== '-' ? `last seen ${lastSeen}` : '-') : formatUptime(node.uptime),
-      publishers: portsToString(node.publishers),
-      subscribers: portsToString(node.subscribers),
-      servers: portsToString(node.servers),
-      clients: portsToString(node.clients),
+      // Sorting: seconds up, then the offline nodes.
+      _uptimeS: offline ? Infinity : Number(node.uptime ?? Infinity),
+      publishers: portsToString(node.publishers, 'subject'),
+      subscribers: portsToString(node.subscribers, 'subject'),
+      servers: portsToString(node.servers, 'service'),
+      clients: portsToString(node.clients, 'service'),
       _actions: nodeState,
     });
   }
   return rows;
+};
+
+// Selects a row's node, or lets it go if it is the one selected: a click, or Enter.
+const toggleNodeRow = (row) => {
+  const id = row.getData().id;
+  if (id === state.selectedNodeId) clearSelectedNode();
+  else setSelectedNode(id);
 };
 
 const initNodesTable = () => {
@@ -331,6 +428,7 @@ const initNodesTable = () => {
   const settings = readSettings();
 
   const favPinSorter = makeFavPinSorter({ ghostField: '_ghost' });
+  el('nodesTable').classList.toggle('table-compact', state.compactRows);  // measured so from the start
 
   const colDef = (title, field, opts = {}) => {
     const def = { title, field, headerFilter: 'input', ...opts };
@@ -341,35 +439,43 @@ const initNodesTable = () => {
   nodesTabulator = new Tabulator('#nodesTable', {
     data: [],
     layout: 'fitColumns',
+    // At narrow widths the least telling columns hide first (highest
+    // `responsive`), instead of every column shrinking until none reads.
+    responsiveLayout: 'hide',
     resizableColumns: true,
     selectable: 1,
-    placeholder: tablePlaceholder(),
+    rowFormatter: focusableRow,
+    keybindings: false,  // its Home/End move the focus off the rows; see bindRowKeys
+    // A function: Tabulator builds its placeholder anew each time it shows
+    // it, so it says what is true then, not what was at build.
+    placeholder: tablePlaceholder,
     initialSort,
     columns: [
-      { title: '', field: '_fav', formatter: favFormatter, width: 36, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-fav', cellClick: (_e, cell) => { toggleFavourite(cell.getRow().getData().id); } },
-      colDef('ID', '_sortId', { sorter: 'number', minWidth: 50, widthGrow: 0.5, headerFilterPlaceholder: 'id', cssClass: 'cell-scroll', formatter: (cell) => {
+      { title: '', field: '_fav', responsive: 0, formatter: favFormatter, width: 36, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-fav', cellClick: (_e, cell) => { toggleFavourite(cell.getRow().getData().id); } },
+      colDef('ID', '_sortId', { responsive: 0, sorter: 'number', minWidth: 50, widthGrow: 0.5, headerFilterPlaceholder: 'id', cssClass: 'cell-scroll', formatter: (cell) => {
         const row = cell.getRow().getData();
         if (!row._ghost) return escapeHtml(String(row.id));
         // An offline node that lost its node-ID: the one it last had.
         return `<span class="ghost-id" title="Last node-ID; the node is offline">${escapeHtml(String(row._lastNodeId ?? '-'))}</span>`;
-      }, headerFilterFunc: (headerValue, _rowValue, rowData) => {
-        if (!headerValue) return true;
-        return String(rowData._ghost ? (rowData._lastNodeId ?? '') : rowData.id).includes(headerValue);
-      } }),
-      colDef('Name', 'name', { sorter: 'string', minWidth: 100, widthGrow: 2, formatter: nameFormatter, headerFilterPlaceholder: 'name', cssClass: 'cell-scroll cell-name', cellDblClick: (_e, cell) => { startNameEdit(cell); } }),
-      colDef('State', 'state', { sorter: 'string', minWidth: 40, widthGrow: 0.7, formatter: stateFormatter, headerFilterPlaceholder: 'state', cssClass: 'td-state' }),
-      colDef('Health', 'health', { sorter: 'string', minWidth: 70, widthGrow: 0.8, formatter: healthFormatter, headerFilterPlaceholder: 'health', cssClass: 'cell-scroll' }),
-      colDef('Rate', 'rate', { sorter: 'number', minWidth: 70, widthGrow: 0.7, formatter: rateFormatter, headerFilterPlaceholder: 'rate', cssClass: 'cell-scroll', headerFilterFunc: (headerValue, rowValue) => { if (!headerValue) return true; return Number(rowValue).toFixed(1).includes(headerValue); } }),
-      colDef('Uptime', 'uptime', { sorter: 'string', minWidth: 100, widthGrow: 1, formatter: uptimeFormatter, headerFilterPlaceholder: 'uptime', cssClass: 'cell-scroll' }),
-      colDef('Publishers', 'publishers', { minWidth: 80, widthGrow: 1, formatter: portsFormatter, headerFilterPlaceholder: 'pub', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
-      colDef('Subscribers', 'subscribers', { minWidth: 80, widthGrow: 1, formatter: portsFormatter, headerFilterPlaceholder: 'sub', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
-      colDef('Servers', 'servers', { minWidth: 80, widthGrow: 1, formatter: portsFormatter, headerFilterPlaceholder: 'srv', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
-      colDef('Clients', 'clients', { minWidth: 80, widthGrow: 1, formatter: portsFormatter, headerFilterPlaceholder: 'clt', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
-      { title: '', field: '_actions', formatter: actionsFormatter, width: 56, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-actions', titleFormatter: () => { const btn = document.createElement('button'); btn.type = 'button'; btn.id = 'hiddenNodesChip'; btn.className = 'hidden-chip hidden'; btn.setAttribute('aria-label', 'Show hidden nodes'); btn.addEventListener('click', (e) => { e.stopPropagation(); toggleHiddenPopover(); }); return btn; }, cellClick: (e, cell) => {
+      }, headerFilterFunc: (headerValue, _rowValue, rowData) =>
+        idsHeaderFilter(headerValue, rowData._ghost ? rowData._lastNodeId : rowData.id) }),
+      colDef('Name', 'name', { responsive: 0, sorter: 'string', minWidth: 120, widthGrow: 2, formatter: nameFormatter, headerFilterPlaceholder: 'name', cssClass: 'cell-scroll cell-name', cellDblClick: (_e, cell) => { startNameEdit(cell); } }),
+      colDef('State', 'state', { responsive: 0, sorter: severitySorter(STATE_ORDER), minWidth: 90, widthGrow: 0.7, formatter: stateFormatter, headerFilterPlaceholder: 'state', cssClass: 'td-state' }),
+      colDef('Health', 'health', { responsive: 1, sorter: severitySorter(HEALTH_ORDER), minWidth: 100, widthGrow: 0.8, formatter: healthFormatter, headerFilterPlaceholder: 'health', cssClass: 'cell-scroll' }),
+      colDef('Mode', 'mode', { responsive: 5, sorter: 'string', minWidth: 110, widthGrow: 0.8, formatter: modeFormatter, headerFilterPlaceholder: 'mode', cssClass: 'cell-scroll' }),
+      colDef('VSSC', 'vssc', { responsive: 6, sorter: 'number', minWidth: 64, widthGrow: 0.4, formatter: vsscFormatter, headerFilterPlaceholder: 'vssc', headerTooltip: 'Vendor-specific status code, from the heartbeat' }),
+      colDef('SW', 'sw', { responsive: 6, sorter: 'string', minWidth: 56, widthGrow: 0.4, headerFilterPlaceholder: 'sw', cssClass: 'cell-scroll', headerTooltip: 'Software version' }),
+      colDef('Rate', 'rate', { responsive: 2, sorter: 'number', minWidth: 70, widthGrow: 0.7, formatter: rateFormatter, headerFilterPlaceholder: 'rate', cssClass: 'cell-scroll', headerFilterFunc: (headerValue, rowValue) => { if (!headerValue) return true; return Number(rowValue).toFixed(1).includes(headerValue); } }),
+      colDef('Uptime', 'uptime', { responsive: 3, sorter: (_a, _b, aRow, bRow) => { const a = aRow.getData()._uptimeS, b = bRow.getData()._uptimeS; return a === b ? 0 : a - b; }, minWidth: 110, widthGrow: 1, formatter: uptimeFormatter, headerFilterPlaceholder: 'uptime', cssClass: 'cell-scroll' }),
+      colDef('Publishers', 'publishers', { responsive: 4, minWidth: 80, widthGrow: 1, formatter: portsFormatter('subject'), headerFilterPlaceholder: 'pub', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
+      colDef('Subscribers', 'subscribers', { responsive: 8, minWidth: 80, widthGrow: 1, formatter: portsFormatter('subject'), headerFilterPlaceholder: 'sub', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
+      colDef('Servers', 'servers', { responsive: 7, minWidth: 80, widthGrow: 1, formatter: portsFormatter('service'), headerFilterPlaceholder: 'srv', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
+      colDef('Clients', 'clients', { responsive: 9, minWidth: 80, widthGrow: 1, formatter: portsFormatter('service'), headerFilterPlaceholder: 'clt', headerFilterFunc: idsHeaderFilter, cssClass: 'cell-scroll' }),
+      { title: '', field: '_actions', responsive: 0, formatter: actionsFormatter, width: 56, resizable: false, headerSort: false, headerFilter: false, hozAlign: 'center', cssClass: 'cell-actions', titleFormatter: () => { const btn = document.createElement('button'); btn.type = 'button'; btn.id = 'hiddenNodesChip'; btn.className = 'hidden-chip hidden'; btn.setAttribute('aria-label', 'Show hidden nodes'); btn.addEventListener('click', (e) => { e.stopPropagation(); toggleHiddenPopover(); }); return btn; }, cellClick: (e, cell) => {
         e.stopPropagation();
         const row = cell.getRow().getData();
         if (e.target.closest('.ghost-delete-btn')) {
-          if (row._uid) deleteGhostNode(row._uid);
+          if (row._uid) deleteGhostNode(row);
           return;
         }
         hideNode(row.id);
@@ -379,13 +485,9 @@ const initNodesTable = () => {
 
   nodesTabulator.on('rowClick', (_e, row) => {
     if (_e.target.closest('.name-input') || _e.target.closest('.action-hide')) return;
-    const clickedId = row.getData().id;
-    if (clickedId === state.selectedNodeId) {
-      clearSelectedNode();
-    } else {
-      setSelectedNode(clickedId);
-    }
+    toggleNodeRow(row);
   });
+  bindRowKeys(nodesTabulator, toggleNodeRow, { F2: (row) => startNameEdit(row.getCell('name')) });
   nodesTabulator.on('dataSorted', (sorters) => {
     if (sorters.length > 0) {
       state.tableSort = { key: sorters[0].field, dir: sorters[0].dir };
@@ -394,6 +496,14 @@ const initNodesTable = () => {
   });
   nodesTabulator.on('dataFiltered', () => {
     saveSettings();
+  });
+
+  el('nodesStatus').addEventListener('click', (e) => {
+    const key = e.target.closest('[data-focus]')?.dataset.focus;
+    if (e.target.closest('[data-density]')) toggleRowDensity();
+    else if (key) setNodesFocus(state.nodesFocus === key ? null : key);
+    else return;
+    renderNodesTable();
   });
 
   nodesTabulator.on('tableBuilt', () => {
@@ -417,6 +527,7 @@ const renderNodesTable = () => {
   if (!nodesTabulator || !_nodesTableReady) return;
 
   const data = buildTableData();
+  renderNodesStatus(data);
 
   if (!data.length) {
     nodesTabulator.clearData();
@@ -427,7 +538,7 @@ const renderNodesTable = () => {
     return;
   }
 
-  diffUpdateTable(nodesTabulator, data, 'id');
+  resortChanged(nodesTabulator, diffUpdateTable(nodesTabulator, data, 'id'));
 
   for (const row of nodesTabulator.getRows()) {
     row.getElement().classList.toggle('selected-row', row.getData().id === state.selectedNodeId);

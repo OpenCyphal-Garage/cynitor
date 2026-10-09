@@ -89,6 +89,15 @@ class TestResolvePortRegister:
         assert fake.reads == ["uavcan.pub.bad.id"]
 
     @pytest.mark.asyncio
+    async def test_unset_id_is_an_inactive_port_not_a_warning(self, caplog):
+        # 65535 is the standard's "unset": a port the node has but does not use.
+        node, fake = make_node({"uavcan.pub.uavcan.node.heartbeat.id": ("natural16", [65535])})
+        with caplog.at_level("WARNING"):
+            assert await resolve(node, "uavcan.pub.uavcan.node.heartbeat.id") is None
+        assert caplog.text == ""
+        assert fake.reads == ["uavcan.pub.uavcan.node.heartbeat.id"]
+
+    @pytest.mark.asyncio
     async def test_rejects_service_id_above_service_range(self):
         # 1000 is a valid subject-ID but not a valid service-ID.
         node, _ = make_node({
@@ -239,6 +248,24 @@ class TestRate:
             node._track_rate(1, 5, float(t))
         _, subject_rate = node._track_rate(1, 6, 100.0)
         assert subject_rate == 0.0
+
+    def test_publisher_that_stops_leaves_subject_rate_within_three_periods(self):
+        """Not 10 s later, when its messages leave the window: the dashboard calls it silent by then."""
+        node = make_rate_node()
+        for tick in range(50):  # both publishers at 10 Hz for 5 s
+            node._track_rate(1, 5, tick / 10)
+            node._track_rate(1, 6, tick / 10 + 0.05)
+        for tick in range(50, 80):  # 5 stops; 6 goes on for 3 s
+            _, subject_rate = node._track_rate(1, 6, tick / 10 + 0.05)
+        assert subject_rate == 10.0
+
+    def test_slow_publisher_still_counts_between_its_messages(self):
+        node = make_rate_node()
+        for t in (0.0, 5.0):  # 0.2 Hz: three periods are 15 s
+            node._track_rate(1, 5, t)
+        node._track_rate(1, 6, 8.0)
+        _, subject_rate = node._track_rate(1, 6, 9.0)
+        assert subject_rate == 1.2  # 0.2 Hz from 5, 1 Hz from 6
 
 
 class TestTransferTimes:
@@ -519,3 +546,17 @@ class TestArrayAttributes:
         assert results == [{"attribute": "meter_per_second", "value": [1.0, 2.0, 3.5]},
                            {"attribute": "counts", "value": [1, 300]},
                            {"attribute": "text", "value": "hello"}]
+
+    def test_array_of_composites_is_json_an_id_as_its_value(self):
+        """port.List's SubjectID[] holds DSDL objects, which broke the event log and the dashboard's socket."""
+        import numpy as np
+        node = ScannerNode.__new__(ScannerNode)
+        ids = np.array([types.SimpleNamespace(value=7509), types.SimpleNamespace(value=7510)], dtype=object)
+        pairs = np.array([types.SimpleNamespace(a=1, b=2)], dtype=object)
+        results = []
+        with patch.object(scanner_node, "to_builtin", side_effect=vars):  # a DSDL object's fields, as a dict
+            node._extract_value("publishers.sparse_list", ids, results)
+            node._extract_value("pairs", pairs, results)
+        assert results == [{"attribute": "publishers.sparse_list", "value": [7509, 7510]},
+                           {"attribute": "pairs", "value": [{"a": 1, "b": 2}]}]
+        json.dumps(results)

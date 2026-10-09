@@ -21,7 +21,7 @@
         <button class="theme-toggle" id="themeToggle" role="switch" aria-checked="false" aria-label="Dark mode"></button>
       </div>
 
-      <div class="sidebar-section">
+      <div class="sidebar-section" role="group" aria-label="Server">
         <div class="sidebar-group-header">
           <div class="sidebar-group-label">
             <span class="semaphore" id="serverSemaphore"></span>
@@ -30,12 +30,13 @@
           <span class="throughput-value hidden" id="serverThroughput"></span>
         </div>
         <div class="sidebar-connect">
-          <input id="apiBase" type="text" value="http://localhost:8080" placeholder="http://localhost:8080" />
+          <input id="apiBase" type="text" value="http://localhost:8080" placeholder="http://localhost:8080"
+                 aria-label="Backend URL" />
           <button id="connectDashboardBtn" class="sidebar-action btn-primary">Connect</button>
         </div>
       </div>
 
-      <div class="sidebar-section">
+      <div class="sidebar-section" role="group" aria-label="CAN">
         <div class="sidebar-group-header">
           <div class="sidebar-group-label">
             <span class="semaphore" id="canSemaphore"></span>
@@ -43,9 +44,11 @@
           </div>
           <span class="throughput-value hidden" id="canUtilization"></span>
         </div>
+        <div class="can-v11-notice hidden" id="canV11Notice" role="status"></div>
+        <div class="can-bus-notice hidden" id="canBusNotice" role="status"></div>
         <div class="sidebar-connect">
           <div class="sparkline-wrap">
-            <select id="interfacesSelect"></select>
+            <select id="interfacesSelect" aria-label="CAN interface"></select>
             <canvas id="busLoadSparkline" class="bus-load-sparkline hidden" role="img"
                     aria-label="Bus load over the last minute"
                     title="Bus load over the last minute; the numbers mark its peaks"></canvas>
@@ -55,7 +58,7 @@
             </div>
           </div>
           <input id="canSpecInput" type="text" class="hidden" spellcheck="false" autocomplete="off"
-                 placeholder="e.g. pcan:PCAN_USBBUS1, slcan:COM5" aria-label="CAN interface" />
+                 placeholder="e.g. pcan:PCAN_USBBUS1, slcan:COM5" aria-label="CAN interface spec" />
           <div id="canBitrateRow" class="can-bitrate-row hidden">
             <select id="canBitrateSelect" aria-label="CAN bitrate">
               <option value="">Bitrate…</option>
@@ -84,6 +87,7 @@
             </select>
           </div>
           <button id="connectCanBtn" class="sidebar-action btn-primary">Connect</button>
+          <div id="canError" class="can-error hidden"></div>
         </div>
       </div>
 
@@ -161,7 +165,9 @@
     <main class="main-area">
       <div id="staleBanner" class="stale-banner hidden" role="status" aria-live="polite"></div>
       <div id="replayStrip" class="replay-strip hidden" role="region" aria-label="Replay controls"></div>
+      <div id="nodesStatus" class="table-status-bar" role="status" aria-label="Nodes that need a look"></div>
       <div id="nodesTable" role="tabpanel" aria-labelledby="viewTabNodes"></div>
+      <div id="subjectsStatus" class="table-status-bar hidden" role="status" aria-label="Subjects that need a look"></div>
       <div id="subjectsTable" class="hidden" role="tabpanel" aria-labelledby="viewTabSubjects"></div>
       <div id="graphContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabGraph"></div>
       <div id="compareContainer" class="hidden" role="tabpanel" aria-labelledby="viewTabCompare"></div>
@@ -190,7 +196,7 @@
       </div>
     </main>
 
-    <!-- ── Right log panel (Phase 1 shell) ── -->
+    <!-- ── Right log panel ── -->
     <aside class="log-panel collapsed" id="logPanel" aria-label="Log panel">
       <div class="log-panel-resize-handle" id="logPanelResizeHandle" aria-hidden="true"></div>
       <div class="log-panel-header">
@@ -205,6 +211,8 @@
           </button>
         </div>
         <div class="log-panel-controls">
+          <input type="search" id="logFilterInput" class="log-filter-input" placeholder="Filter"
+                 aria-label="Filter log messages" autocomplete="off" spellcheck="false">
           <label class="log-severity-wrap">
             <span class="log-severity-label">Min</span>
             <select id="logSeveritySelect" class="log-severity-select" aria-label="Minimum severity">
@@ -242,7 +250,7 @@
       </div>
       <div class="log-panel-body" id="logPanelBody">
         <div class="log-empty" id="logEmpty">Waiting for log messages…</div>
-        <div class="log-list" id="logList" role="log" aria-live="polite"></div>
+        <div class="log-list" id="logList" role="log" aria-live="off"></div>
       </div>
     </aside>
 
@@ -254,7 +262,7 @@
 
   </div><!-- /app-shell -->
 
-  <div id="toastContainer" class="toast-container"></div>
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
   <div id="easterEggOverlay" class="easter-overlay hidden">
     <img src="./images/easter_bus_1.gif" alt="" />
@@ -263,9 +271,10 @@
   <div id="serverDownOverlay" class="server-down-overlay hidden">
     <div class="server-down-card">
       <div class="server-down-icon">!</div>
-      <h2>Frontend Server Unavailable</h2>
-      <p>The web server at <code>localhost:5500</code> is not responding.</p>
-      <p class="server-down-hint">Start it with: <code>cd website && python3 -m http.server 5500</code></p>
+      <h2>Server Unavailable</h2>
+      <p>The server at <code id="serverDownHost"></code>, which serves this page, is not responding.</p>
+      <p class="server-down-hint" id="serverDownHint">Start Cynitor again: this page reloads once it answers.</p>
+      <p class="server-down-hint hidden" id="serverDownDevHint">Start it with: <code>cd website && python3 -m http.server 5500</code></p>
       <div class="server-down-status">Reconnecting<span class="server-down-dots"></span></div>
     </div>
   </div>
@@ -280,6 +289,7 @@
       <input type="password" id="authModalInput" class="auth-modal-input" autocomplete="off" spellcheck="false" />
       <div id="authModalError" class="auth-modal-error hidden"></div>
       <div class="auth-modal-actions">
+        <button class="auth-modal-cancel" id="authModalCancel">Cancel</button>
         <button class="auth-modal-btn" id="authModalSave">Save and retry</button>
       </div>
     </div>
@@ -301,6 +311,7 @@
   <script src="./compare-view.js"></script>
   <script src="./subjects-panel.js"></script>
   <script src="./graph-view.js"></script>
+  <script src="./dsdl-editor.js"></script>
   <script src="./dsdl-view.js"></script>
   <script src="./record-view.js"></script>
   <script src="./replay-strip.js"></script>

@@ -13,6 +13,8 @@ from aiohttp import web, WSCloseCode
 
 from can_config import is_explicit_spec, is_socketcan, resolve_bitrate, resolve_data_bitrate, socketcan_device
 from version import __version__
+from bus_errors import BusErrors
+from cyphal_v11 import V11Traffic
 from firmware import MAX_FIRMWARE_BYTES, firmware_path, list_firmware
 from raw_log import list_logs, log_path, sidecar_path
 
@@ -119,6 +121,8 @@ class WebSocketServer:
         self.port = port
         self.log_store = log_store
         self.dsdl_manager = dsdl_manager
+        # One DSDL compile at a time: two would write the same files at once.
+        self._dsdl_compile_lock = asyncio.Lock()
         # When present, the dashboard is served from this server so a single
         # binary is all a deployment needs. None means API-only, which is what
         # --no-frontend selects and what a checkout without website/ gets.
@@ -262,6 +266,7 @@ class WebSocketServer:
         self.app.router.add_get('/api/registers/{node_id}', self._get_registers)
         self.app.router.add_post('/api/registers/{node_id}/set', self._set_register)
         self.app.router.add_post('/api/services/{node_id}/{service_id}/call', self._call_service)
+        self.app.router.add_get('/api/nodes/events', self._get_recent_node_events)
         self.app.router.add_get('/api/nodes/{node_id}/history', self._get_node_history)
         self.app.router.add_get('/api/nodes/{node_id}/history/subjects', self._get_node_subject_summary)
         self.app.router.add_get('/api/services/{service_id}/history', self._get_service_call_history)
@@ -307,6 +312,7 @@ class WebSocketServer:
         self.app.router.add_get('/api/dsdl/namespaces', self._dsdl_namespaces)
         self.app.router.add_get('/api/dsdl/type/{full_name:.+}', self._dsdl_type_detail)
         self.app.router.add_post('/api/dsdl/custom/namespace', self._dsdl_create_namespace)
+        self.app.router.add_delete('/api/dsdl/custom/namespace/{namespace}', self._dsdl_delete_namespace)
         self.app.router.add_post('/api/dsdl/custom/type', self._dsdl_save_type)
         self.app.router.add_delete('/api/dsdl/custom/type/{full_name:.+}', self._dsdl_delete_type)
         self.app.router.add_get('/api/dsdl/custom/namespaces', self._dsdl_list_custom_namespaces)
@@ -394,6 +400,9 @@ class WebSocketServer:
             "bus_utilization": bus_load.utilization if bus_load else None,
             "dropped": self.session.dropped_events(),
             "last_error": self.session.last_error,
+            "cyphal_v11": v11.status() if isinstance(v11 := getattr(self.session, "v11", None), V11Traffic) else None,
+            "bus_errors": (errors.status() if isinstance(errors := getattr(self.session, "bus_errors", None), BusErrors)
+                           else None),
         })
 
     async def _get_adapters(self, request: web.Request) -> web.Response:
@@ -654,6 +663,7 @@ class WebSocketServer:
             return web.json_response({"connected": False})
 
         info = self.session.scanner.get_transport_info()
+        capture = self.session.frame_capture
         iface = self.session.can_interface
         # iproute2 only knows SocketCAN devices; an adapter behind the hub
         # reports what the hub knows about it instead.
@@ -669,17 +679,17 @@ class WebSocketServer:
             "interface": iface,
             "protocol": info.get("protocol"),
             "statistics": info.get("statistics"),
-            "capture_active": info.get("capture_active", False),
+            "capture_active": capture is not None and capture.active,
             "link": link,
             "bus_utilization": bus_load.utilization if bus_load else None,
         })
 
     async def _get_capture(self, request: web.Request) -> web.Response:
-        """Snapshot of the raw frame-capture ring buffer + counters.
+        """Snapshot of the raw frame-capture ring buffer + counters, for scripts.
 
-        Used by the Debugging view to backfill the frame monitor on open or
-        after a reconnect. Returns an inactive empty result when no CAN session
-        exists. Live frames arrive via the WebSocket ``can_frame`` stream.
+        The Debugging view gets the same frames with its ``capture_status``
+        reply. Returns an inactive empty result when no CAN session exists.
+        Live frames arrive via the WebSocket ``can_frame`` stream.
         """
         mgr = self.session.frame_capture
         if mgr is None:
@@ -887,6 +897,33 @@ class WebSocketServer:
         )
         return web.json_response({"node_id": node_id, "events": events})
 
+    async def _get_recent_node_events(self, request: web.Request) -> web.Response:
+        """Lifecycle events of every node, newest first, for an overview of the bus.
+
+        ``now_unix`` is the server's clock, so that a client can tell an
+        event's age without trusting its own.
+        """
+        if not self.session.event_logger:
+            return web.json_response({"error": "Event logger not available"}, status=503)
+
+        offset = self._TIME_RANGE_MAP.get(request.query.get("range", "15m"))
+        if offset is None:
+            return web.json_response({"error": "Invalid range parameter"}, status=400)
+        types_str = request.query.get("types")
+        event_types = types_str.split(",") if types_str else None
+        try:
+            limit = min(int(request.query.get("limit", "500")), 2000)
+        except (ValueError, TypeError):
+            return web.json_response({"error": "Invalid limit parameter"}, status=400)
+        if limit < 1:
+            return web.json_response({"error": "Invalid limit parameter"}, status=400)
+
+        now = time.time()
+        events = await self.session.event_logger.get_node_history(
+            None, since_unix=now - offset, event_types=event_types, limit=limit,
+        )
+        return web.json_response({"now_unix": now, "events": events})
+
     async def _get_node_subject_summary(self, request: web.Request) -> web.Response:
         node_id, err = _parse_int(request.match_info.get('node_id'), 'node_id', 0, MAX_NODE_ID)
         if err:
@@ -957,18 +994,11 @@ class WebSocketServer:
             return None, web.json_response({"error": "JSON body must be an object"}, status=400)
         return body, None
 
-    def _require_event_logger(self) -> Optional[web.Response]:
-        if not self.session.event_logger:
-            return web.json_response({"error": "Event logger not available"}, status=503)
-        return None
+    # Recordings live in the data folder: every recording route works with CAN
+    # disconnected too, starting the session's event logger if need be.
 
     async def _get_recordings(self, request: web.Request) -> web.Response:
-        # Before CAN is connected the event logger doesn't exist yet. Listing is a
-        # read-only poll the frontend runs continuously, so return an empty list
-        # (rather than 503) to avoid a spurious "Failed to load recordings" toast
-        # at startup. The list populates once CAN connects and the logger starts.
-        if not self.session.event_logger:
-            return web.json_response({"recordings": []})
+        await self.session.ensure_event_logger()
         recs = await self.session.event_logger.list_recordings()
         return web.json_response({"recordings": recs})
 
@@ -993,9 +1023,7 @@ class WebSocketServer:
         return max_length, max_events, stop_on_limit, None
 
     async def _post_recording(self, request: web.Request) -> web.Response:
-        err = self._require_event_logger()
-        if err:
-            return err
+        await self.session.ensure_event_logger()
         body, err = await self._read_json_body(request)
         if err:
             return err
@@ -1018,9 +1046,7 @@ class WebSocketServer:
         return web.json_response({"recording": rec}, status=201)
 
     async def _post_quick_recording(self, request: web.Request) -> web.Response:
-        err = self._require_event_logger()
-        if err:
-            return err
+        await self.session.ensure_event_logger()
         body, err = await self._read_json_body(request)
         if err:
             return err
@@ -1043,9 +1069,7 @@ class WebSocketServer:
         return web.json_response({"recording": rec}, status=201)
 
     async def _get_recordings_buffer(self, request: web.Request) -> web.Response:
-        err = self._require_event_logger()
-        if err:
-            return err
+        await self.session.ensure_event_logger()
         stats = await self.session.event_logger.get_buffer_stats()
         return web.json_response({"buffer": stats})
 
@@ -1053,8 +1077,7 @@ class WebSocketServer:
         rec_id, err = _parse_int(request.match_info.get('rec_id'), 'recording_id', 1, self._MAX_REC_ID)
         if err:
             return err
-        if (e := self._require_event_logger()):
-            return e
+        await self.session.ensure_event_logger()
         ok = await self.session.event_logger.stop_recording(rec_id)
         if not ok:
             return web.json_response({"error": "Recording not found or already stopped"}, status=404)
@@ -1065,8 +1088,7 @@ class WebSocketServer:
         rec_id, err = _parse_int(request.match_info.get('rec_id'), 'recording_id', 1, self._MAX_REC_ID)
         if err:
             return err
-        if (e := self._require_event_logger()):
-            return e
+        await self.session.ensure_event_logger()
         body, err = await self._read_json_body(request)
         if err:
             return err
@@ -1110,8 +1132,7 @@ class WebSocketServer:
         rec_id, err = _parse_int(request.match_info.get('rec_id'), 'recording_id', 1, self._MAX_REC_ID)
         if err:
             return err
-        if (e := self._require_event_logger()):
-            return e
+        await self.session.ensure_event_logger()
         rec = await self.session.event_logger.get_recording_stats(rec_id)
         if not rec:
             return web.json_response({"error": "Recording not found"}, status=404)
@@ -1121,8 +1142,7 @@ class WebSocketServer:
         rec_id, err = _parse_int(request.match_info.get('rec_id'), 'recording_id', 1, self._MAX_REC_ID)
         if err:
             return err
-        if (e := self._require_event_logger()):
-            return e
+        await self.session.ensure_event_logger()
         purge = request.query.get("purge", "false").lower() == "true"
         ok = await self.session.event_logger.delete_recording(rec_id, purge_events=purge)
         if not ok:
@@ -1133,8 +1153,7 @@ class WebSocketServer:
         rec_id, err = _parse_int(request.match_info.get('rec_id'), 'recording_id', 1, self._MAX_REC_ID)
         if err:
             return err
-        if (e := self._require_event_logger()):
-            return e
+        await self.session.ensure_event_logger()
         fmt = request.query.get("format", "csv").lower()
         if fmt not in ("csv", "jsonl"):
             return web.json_response({"error": "format must be csv or jsonl"}, status=400)
@@ -1155,7 +1174,7 @@ class WebSocketServer:
             }
         )
         await resp.prepare(request)
-        header = "recording_id,timestamp_unix,timestamp,subject_id,publisher_node_id,unique_id,message_type,rate,attribute,value,unit\n"
+        header = "recording_id,timestamp_unix,timestamp,subject_id,service_id,publisher_node_id,unique_id,message_type,rate,attribute,value,unit\n"
         await resp.write(header.encode("utf-8"))
 
         offset = 0
@@ -1172,12 +1191,15 @@ class WebSocketServer:
                     f"{ev['timestamp_unix']:.6f}" if ev.get("timestamp_unix") is not None else "",
                     _csv_escape(ev.get("timestamp")),
                     _csv_escape(ev.get("subject_id")),
+                    _csv_escape(ev.get("service_id")),
                     _csv_escape(ev.get("publisher_node_id")),
                     _csv_escape(ev.get("unique_id")),
                     _csv_escape(ev.get("message_type")),
                     _csv_escape(ev.get("rate")),
                 ]
                 attrs = ev.get("attributes") or []
+                if isinstance(attrs, dict):  # a service call's fields, a row each
+                    attrs = [{"attribute": name, "value": value} for name, value in attrs.items()]
                 if not attrs:
                     lines.append(",".join(base + ["", "", ""]))
                 else:
@@ -1372,9 +1394,14 @@ class WebSocketServer:
             logger.debug(f"Metrics loop ended: {e}")
 
     # Batch window for the raw frame stream. Captured frames are coalesced into
-    # one message per window to bound message rate under heavy bus load.
+    # one message per window to bound message rate under heavy bus load. A
+    # message takes all that is queued, up to about 16,000 frames a second,
+    # more than a 1 Mbit/s bus carries: with less, a busy bus outran the
+    # stream, which fell behind and dropped frames.
     _CAPTURE_BATCH_WINDOW = 0.12
-    _CAPTURE_BATCH_MAX = 250
+    _CAPTURE_BATCH_MAX = 2000
+    # Frames caught before a client subscribed, sent with the reply.
+    _CAPTURE_EARLIER = 500
 
     async def _capture_loop(self, ws: web.WebSocketResponse) -> None:
         """Forward raw captured frames to a client that opted in via a
@@ -1410,27 +1437,39 @@ class WebSocketServer:
             logger.debug(f"Capture loop ended: {e}")
 
     async def _handle_capture_message(self, ws: web.WebSocketResponse, enabled: bool) -> None:
-        """Enable/disable raw frame forwarding for this client. Enabling also
-        starts transport-level capture if it is not already active (sticky)."""
+        """Enable/disable raw frame forwarding for this client. The first client
+        to enable starts capture, and the last to disable (or leave) stops it.
+
+        Each reply says both: ``capturing`` (capture runs, for any client) and
+        ``forwarding`` (frames sent to this client). ``active`` stays for
+        dashboards from before those two."""
         mgr = self.session.frame_capture
         if enabled:
             if mgr is None:
-                await ws.send_json({"type": "capture_status", "active": False,
-                                    "error": "CAN not connected"})
+                await ws.send_json({"type": "capture_status", "active": False, "capturing": False,
+                                    "forwarding": False, "error": "CAN not connected"})
                 return
-            mgr.start()
+            earlier = []
             if ws not in self.capture_clients:
-                self.capture_clients[ws] = mgr.subscribe()
-            await ws.send_json({"type": "capture_status", "active": mgr.active,
-                                "stats": mgr.stats()})
+                try:
+                    self.capture_clients[ws] = mgr.subscribe()
+                except Exception as exc:  # the tap would not open
+                    logger.warning("Cannot capture CAN frames: %s", exc)
+                    await ws.send_json({"type": "capture_status", "active": False, "capturing": mgr.active,
+                                        "forwarding": False, "error": f"Cannot capture frames: {exc}"})
+                    return
+                # Taken in the same step as subscribing: frames reach the ring and
+                # the queues on this event loop, so none falls between the two or
+                # comes twice.
+                earlier = mgr.snapshot(self._CAPTURE_EARLIER)
+            await ws.send_json({"type": "capture_status", "active": mgr.active, "capturing": mgr.active,
+                                "forwarding": True, "stats": mgr.stats(), "frames": earlier})
         else:
             q = self.capture_clients.pop(ws, None)
             if q is not None and mgr is not None:
                 mgr.unsubscribe(q)
-            # Note: transport capture itself cannot be stopped without a CAN
-            # disconnect; we only stop forwarding to this client.
             await ws.send_json({"type": "capture_status", "active": False,
-                                "forwarding": False})
+                                "capturing": mgr is not None and mgr.active, "forwarding": False})
 
     async def _receive_client_messages(self, ws: web.WebSocketResponse) -> None:
         async for msg in ws:
@@ -1516,6 +1555,7 @@ class WebSocketServer:
                     "/api/can/transport": "Transport-layer diagnostics (MTU, frame stats, bus state)",
                     "/api/can/capture": "Raw frame-capture ring-buffer snapshot (WS 'capture' message streams live)",
                     "/api/nodes": "Get info about all discovered nodes",
+                    "/api/nodes/events": "Recent lifecycle events of every node (?range=15m&types=a,b&limit=500)",
                     "/api/latest/subject/{subject_id}": "Get latest event for a subject",
                     "/api/latest/node/{node_id}": "Get latest events from a node",
                     "/api/identity-map": "Get unique_id to node_id mappings",
@@ -1659,11 +1699,14 @@ class WebSocketServer:
         replay = self.session.replay
         if replay is not None and self.session.event_logger is not None:
             try:
-                nodes_info = await asyncio.to_thread(
-                    _synthesize_nodes_from_recording,
-                    self.session.event_logger.db_path, replay.recording_id,
-                )
-                return web.json_response(nodes_info)
+                # Read once per replay: the dashboard asks every second, and a
+                # big recording takes seconds to read.
+                if replay.nodes_payload is None:
+                    replay.nodes_payload = await asyncio.to_thread(
+                        _synthesize_nodes_from_recording,
+                        self.session.event_logger.db_path, replay.recording_id,
+                    )
+                return web.json_response(replay.nodes_payload)
             except Exception as e:
                 logger.error(f"Error synthesising replay nodes: {e}", exc_info=True)
                 return web.json_response({"error": str(e)}, status=500)
@@ -1789,6 +1832,17 @@ class WebSocketServer:
             return web.json_response({"error": str(e)}, status=400)
         return web.json_response(data, status=201)
 
+    async def _dsdl_delete_namespace(self, request: web.Request) -> web.Response:
+        if not self.dsdl_manager:
+            return web.json_response({"error": "DSDL manager not available"}, status=503)
+        try:
+            data = await asyncio.to_thread(self.dsdl_manager.delete_namespace, request.match_info["namespace"])
+        except FileNotFoundError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        return web.json_response(data)
+
     async def _dsdl_save_type(self, request: web.Request) -> web.Response:
         if not self.dsdl_manager:
             return web.json_response({"error": "DSDL manager not available"}, status=503)
@@ -1858,13 +1912,15 @@ class WebSocketServer:
         except Exception:
             body = {}
         scope = body.get("scope", "all")
-        if scope == "custom":
-            data = await asyncio.to_thread(self.dsdl_manager.compile_custom)
-        elif scope == "public":
-            data = await asyncio.to_thread(self.dsdl_manager.compile_public)
-        else:
-            data = await asyncio.to_thread(self.dsdl_manager.compile_all)
-        if data.get("ok") and hasattr(self.session, "rescan_registrations"):
+        async with self._dsdl_compile_lock:
+            if scope == "custom":
+                data = await asyncio.to_thread(self.dsdl_manager.compile_custom)
+            elif scope == "public":
+                data = await asyncio.to_thread(self.dsdl_manager.compile_public)
+            else:
+                data = await asyncio.to_thread(self.dsdl_manager.compile_all)
+        if not data["ok"]:
+            return web.json_response({"error": data["error"]}, status=422)
+        if hasattr(self.session, "rescan_registrations"):
             self.session.rescan_registrations()
-        status = 200 if data.get("ok") else 422
-        return web.json_response(data, status=status)
+        return web.json_response(data)

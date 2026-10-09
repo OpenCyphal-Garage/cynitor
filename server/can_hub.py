@@ -28,6 +28,8 @@ from typing import Callable, Optional
 
 import can
 
+from cyphal_v11 import V11Traffic
+
 logger = logging.getLogger(__name__)
 
 _RECV_TIMEOUT = 0.1
@@ -176,9 +178,12 @@ class CANHub:
         self.frames_to_bus = 0
         self.send_failures = 0
         self.error_frames = 0  # reported by the adapter's driver, if it reports them
-        # Called from the pump threads with every frame on the wire, both ways
-        # (raw_log.RawLog.write while a raw log runs).
-        self.on_frame: Optional[Callable[[can.Message], None]] = None
+        # Called from the pump threads with every frame on the wire, both ways:
+        # raw_log.RawLog.write while a raw log runs, frame capture while a
+        # dashboard captures. A tuple, replaced whole, for the threads to read.
+        self._listeners: tuple[Callable[[can.Message], None], ...] = ()
+        # Cyphal v1.1 traffic among the received frames (see cyphal_v11).
+        self.v11 = V11Traffic()
         # Seconds the forwarded frames occupied the wire, for bus load. One
         # counter per pump thread, so that neither can overwrite the other's.
         self.busy_from_bus = 0.0
@@ -264,10 +269,16 @@ class CANHub:
             "adapter_error_frames": self.error_frames,
         }
 
+    def add_listener(self, listener: Callable[[can.Message], None]) -> None:
+        """Call ``listener`` with every frame on the wire, from the pump threads."""
+        self._listeners = self._listeners + (listener,)
+
+    def remove_listener(self, listener: Callable[[can.Message], None]) -> None:
+        self._listeners = tuple(known for known in self._listeners if known != listener)
+
     def _tell(self, msg: can.Message) -> None:
-        on_frame = self.on_frame
-        if on_frame is not None:
-            on_frame(msg)
+        for listener in self._listeners:
+            listener(msg)
 
     def _fail(self, message: str) -> None:
         if self._stop.is_set():
@@ -295,6 +306,7 @@ class CANHub:
             # does). Forwarding the echo would hand each node its own frames.
             if not msg.is_rx:
                 continue
+            self.v11.observe(msg)
             try:
                 self._local.send(msg)
             except Exception as exc:
@@ -326,7 +338,7 @@ class CANHub:
                 continue
             self.frames_to_bus += 1
             self.busy_to_bus += self._wire_seconds(msg)
-            if self.on_frame is not None:
+            if self._listeners:
                 msg.is_rx = False           # sent by Cynitor
                 msg.timestamp = time.time()  # pycyphal leaves it unset
                 self._tell(msg)

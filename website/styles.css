@@ -1,4 +1,60 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+/* IBM Plex, vendored (see vendor/README.md): the dashboard works offline. */
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./vendor/fonts/ibm-plex-sans-latin-400-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('./vendor/fonts/ibm-plex-sans-latin-500-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('./vendor/fonts/ibm-plex-sans-latin-600-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('./vendor/fonts/ibm-plex-sans-latin-700-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('./vendor/fonts/ibm-plex-mono-latin-400-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('./vendor/fonts/ibm-plex-mono-latin-500-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('./vendor/fonts/ibm-plex-mono-latin-600-normal.woff2') format('woff2');
+}
 
 :root {
   color-scheme: light;
@@ -38,7 +94,7 @@
   --row-bg: var(--surface);
   --row-alt-bg: #f6f8fa;
   --row-hover-bg: #e8ecf0;
-  --row-select-bg: #e8ecf0;
+  --row-select-bg: rgba(221, 238, 255, 0.65);
   --row-select-border: rgba(0, 0, 0, 0.06);
 }
 
@@ -77,7 +133,7 @@
   --row-bg: var(--bg);
   --row-alt-bg: #262b33;
   --row-hover-bg: rgba(255, 255, 255, 0.06);
-  --row-select-bg: rgba(255, 255, 255, 0.07);
+  --row-select-bg: rgba(88, 166, 255, 0.10);
   --row-select-border: rgba(255, 255, 255, 0.10);
 }
 
@@ -166,6 +222,9 @@ body {
   opacity: 0;
   border-right: none;
   padding: 0;
+  /* Hidden once the collapse has played, so its controls leave the Tab order. */
+  visibility: hidden;
+  transition: width 0.2s, min-width 0.2s, opacity 0.2s, visibility 0s 0.2s;
 }
 
 .sidebar.collapsed ~ .sidebar-collapse-btn {
@@ -313,10 +372,22 @@ body {
 }
 
 .log-panel-controls {
-  margin-left: auto;
+  flex: 1 1 100%;
   display: flex;
   align-items: center;
   gap: 0.375rem;
+}
+
+.log-filter-input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  padding: 0.1875rem 0.5rem;
 }
 
 .log-severity-wrap {
@@ -390,24 +461,18 @@ body {
   flex-direction: column;
 }
 
+/* time · severity · message; the left inset clears the collapse button. */
 .log-row {
   display: grid;
+  grid-template-columns: 3.75rem 3rem minmax(0, 1fr);
   gap: 0.5rem;
   align-items: baseline;
-  padding: 0.1875rem 0.875rem;
+  padding: 0.1875rem 0.875rem 0.1875rem 1.375rem;
   font-family: var(--mono);
   font-size: 0.75rem;
   line-height: 1.4;
   border-top: 1px solid transparent;
   border-bottom: 1px solid var(--border);
-}
-
-.log-row-src-server {
-  grid-template-columns: max-content max-content max-content 1fr;
-}
-
-.log-row-src-cyphal {
-  grid-template-columns: max-content max-content max-content minmax(0, max-content) 1fr;
 }
 
 .log-row.hidden {
@@ -427,24 +492,30 @@ body {
   white-space: nowrap;
 }
 
-.log-row-node {
-  color: var(--text);
-  opacity: 0.8;
-  white-space: nowrap;
-}
-
-.log-row-subj {
-  color: var(--text);
-  opacity: 0.7;
-  white-space: nowrap;
-}
-
-.log-row-type {
+/* Who said it, leading the message: a node (its ID, then its name) or a
+   backend logger. */
+.log-row-src {
+  margin-right: 0.25rem;
   color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 9rem;
+}
+
+.log-row-src-cyphal .log-row-src {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.log-row-nid {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.log-row-tag {
+  margin-right: 0.125rem;
+  padding: 0 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.1875rem;
+  color: var(--muted);
+  font-size: 0.6875rem;
 }
 
 .log-row-text {
@@ -463,11 +534,14 @@ body {
 .log-row-sev-alert    .log-row-sev { color: var(--error); font-weight: 800; }
 .log-row-sev-none     .log-row-sev { color: var(--muted); }
 
-.log-row-sev-alert    { background: var(--error-muted); }
-.log-row-sev-critical { background: var(--error-muted); }
+/* A bar on the left edge marks what needs a look when scanning. */
+.log-row-sev-warning  { box-shadow: inset 0.1875rem 0 0 var(--warn); }
+.log-row-sev-error    { box-shadow: inset 0.1875rem 0 0 var(--error); }
+.log-row-sev-critical,
+.log-row-sev-alert    { box-shadow: inset 0.1875rem 0 0 var(--error); background: var(--error-muted); }
 
 .log-subject-popover {
-  min-width: 10rem;
+  min-width: 15rem;
   max-height: 24rem;
   overflow-y: auto;
 }
@@ -494,6 +568,16 @@ body {
 
 .log-subject-row:hover {
   background: var(--surface-2);
+}
+
+.log-subject-type {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .log-subject-checkbox {
@@ -867,11 +951,16 @@ body {
   line-height: 1.2;
 }
 
+/* The image's lower third is transparent: cut off the box (2.8rem of its
+   4rem shown, at the same scale), it no longer hangs below the sidebar, which
+   then took a scrollbar. The wordmark stays where it was. */
 .cyphal-logo {
-  height: 4rem;
+  width: 8rem;
+  height: 2.8rem;
+  object-fit: cover;
+  object-position: top;
   margin-left: 1.0rem;
-  margin-bottom: -1.7rem;
-  width: auto;
+  margin-bottom: -0.5rem;
   opacity: 0.6;
   align-self: flex-end;
 }
@@ -889,12 +978,16 @@ body {
   align-self: flex-end;
 }
 
+/* Big enough to read off for a bug report, clear of the hammer; it takes no
+   width of the column, over whose free space it reads. */
 .version-tag {
+  width: 0;
+  white-space: nowrap;
   font-family: var(--mono);
-  font-size: 0.4rem;
+  font-size: 0.5625rem;
   font-weight: 600;
   margin-bottom: -2.1rem;
-  margin-left: 1.5rem;
+  margin-left: 2.4rem;
   color: var(--muted);
   letter-spacing: 0.1em;
 }
@@ -904,6 +997,11 @@ body {
 [data-theme="dark"] .cyphal-logo {
   filter: invert(1) hue-rotate(180deg);
   opacity: 0.85;
+}
+
+/* The hammer is black, lost on the dark sidebar too: white there. */
+[data-theme="dark"] .cordicor-logo {
+  filter: invert(1);
 }
 
 .powered-by-label {
@@ -1206,37 +1304,83 @@ button:focus-visible,
   width: 100%;
 }
 
-/* ── Subject inline service detail ── */
-.subject-inline-detail {
-  padding: 0.75rem;
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
+/* ── Subjects: the detail panel's plot and call card, side by side ── */
+.subjects-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
 }
 
-.svc-detail-header {
+.subjects-detail.has-plot.has-service {
+  grid-template-columns: minmax(0, 1fr) minmax(22rem, 34%);
+}
+
+.subjects-detail-plot,
+.subjects-detail-service {
+  min-width: 0;
+  min-height: 0;
+}
+
+.subjects-detail-service {
+  overflow-y: auto;
+}
+
+.subjects-detail.has-plot.has-service .subjects-detail-service {
+  border-left: 1px solid var(--border);
+  padding-left: 0.5rem;
+}
+
+.subjects-detail:not(.has-plot) .subjects-detail-plot,
+.subjects-detail:not(.has-service) .subjects-detail-service {
+  display: none;
+}
+
+/* ── Subjects: a service's call card, in the detail panel ── */
+.subject-service-card {
+  padding: 0.5rem 0.75rem 0.75rem;
+}
+
+.subject-service-head {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   margin-bottom: 0.625rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
 }
 
-.svc-detail-header > .svc-node-selector {
-  margin-bottom: 0;
-}
-
-.svc-collapse-bar {
+.subject-service-title {
   flex: 1;
-  min-width: 2rem;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subject-service-id {
+  margin-right: 0.375rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.subject-service-close {
+  flex: none;
+  width: 1.75rem;
   height: 1.75rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px dashed var(--border-subtle);
+  padding: 0;
+  border: 1px solid transparent;
   border-radius: var(--radius);
   background: none;
   color: var(--muted);
   cursor: pointer;
+}
+
+.subject-service-close:hover {
+  border-color: var(--border);
+  color: var(--text);
 }
 
 .svc-node-selector {
@@ -1537,6 +1681,7 @@ button:focus-visible,
 
 .plot-controls {
   display: flex;
+  flex-wrap: wrap;  /* beside the Nodes tab's cards, the plot is narrow */
   gap: 0.25rem;
   align-items: center;
   margin-left: 1rem;
@@ -1569,7 +1714,12 @@ button:focus-visible,
   color: var(--accent);
 }
 
-.plot-window-btn {
+/* A card's Edit toggle in Compare, and a plot's Compare button, look like
+   the time-window buttons beside them. */
+.plot-window-btn,
+.compare-edit-btn,
+.compare-sync-btn,
+.plot-to-compare {
   font-family: var(--mono);
   font-size: 0.625rem;
   font-weight: 500;
@@ -1582,12 +1732,17 @@ button:focus-visible,
   transition: all 0.12s;
 }
 
-.plot-window-btn:hover {
+.plot-window-btn:hover,
+.compare-edit-btn:hover,
+.compare-sync-btn:hover,
+.plot-to-compare:hover {
   background: var(--surface-2);
   color: var(--text);
 }
 
-.plot-window-btn.active {
+.plot-window-btn.active,
+.compare-edit-btn.active,
+.compare-sync-btn.active {
   background: var(--accent-muted);
   border-color: var(--accent);
   color: var(--accent);
@@ -1708,6 +1863,7 @@ button:focus-visible,
   height: 1rem;
   border-radius: var(--radius);
   border: 1px solid var(--border);
+  background: var(--error);  /* drawings' colour until one is picked */
   cursor: pointer;
 }
 
@@ -1739,6 +1895,16 @@ button:focus-visible,
 }
 
 .plot-overlay {
+  cursor: crosshair;
+}
+
+/* While a plot is dragged (panned), or drawn on with Alt+drag. */
+.detail-plot-area svg.plot-grabbing,
+.detail-plot-area svg.plot-grabbing .plot-overlay {
+  cursor: grabbing;
+}
+
+.detail-plot-area svg.plot-drawing {
   cursor: crosshair;
 }
 
@@ -1812,6 +1978,7 @@ button:focus-visible,
   height: 1.25rem;
   border-radius: var(--radius);
   border: 1px solid var(--border);
+  background: var(--accent);  /* a marker's colour until one is picked */
   cursor: pointer;
 }
 
@@ -1920,13 +2087,17 @@ button:focus-visible,
   margin-left: auto;
   flex: 0 1 auto;
   justify-content: flex-end;
+  /* A subject many nodes publish has a pill per field and node: a few rows
+     show, the rest scroll, and the plot keeps its room. */
+  max-height: 5.5rem;
+  overflow-y: auto;
 }
 
 .plot-legend-item {
   display: inline-flex;
   align-items: stretch;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 999rem;
   background: transparent;
   font-family: var(--mono);
   font-size: 0.6875rem;
@@ -1972,6 +2143,35 @@ button:focus-visible,
   opacity: 1;
 }
 
+/* A swatch's colour picker, unseen over it while it is open. */
+.plot-swatch-picker-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+/* A pill's parts are buttons, for the keyboard: bare here, drawn below. */
+.plot-legend-label,
+.plot-legend-style,
+.plot-legend-remove {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+}
+
+.plot-legend-item button:focus-visible {
+  outline: 0.125rem solid var(--accent);
+  outline-offset: -0.125rem;
+}
+
 .plot-legend-label {
   display: flex;
   align-items: center;
@@ -2004,7 +2204,7 @@ button:focus-visible,
   content: '';
   display: block;
   width: 0.75rem;
-  border-top: 2px solid currentColor;
+  border-top: 0.125rem solid currentColor;
 }
 
 .plot-legend-style:hover {
@@ -2022,14 +2222,14 @@ button:focus-visible,
 
 .plot-legend-style[data-style="dashdot"]::after {
   border-top: none;
-  height: 2px;
-  background: repeating-linear-gradient(90deg, currentColor 0 4px, transparent 4px 6px, currentColor 6px 8px, transparent 8px 10px);
+  height: 0.125rem;
+  background: repeating-linear-gradient(90deg, currentColor 0 0.25rem, transparent 0.25rem 0.375rem, currentColor 0.375rem 0.5rem, transparent 0.5rem 0.625rem);
 }
 
 .plot-legend-style[data-style="longdash"]::after {
   border-top-style: dashed;
-  border-top-width: 2px;
-  border-image: repeating-linear-gradient(90deg, currentColor 0 8px, transparent 8px 11px) 1;
+  border-top-width: 0.125rem;
+  border-image: repeating-linear-gradient(90deg, currentColor 0 0.5rem, transparent 0.5rem 0.6875rem) 1;
 }
 
 .plot-legend-style[data-style="circle"]::after {
@@ -2087,6 +2287,101 @@ button:focus-visible,
   border-style: dashed;
 }
 
+/* A Compare series with nothing to plot: listed, so it can be removed. */
+.plot-legend-silent .plot-legend-label {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.plot-legend-unit {
+  margin-left: 0.375rem;
+  color: var(--muted);
+}
+
+/* Compare's legend: a table, a row a series, its values in columns. */
+.plot-legend--table {
+  flex: 1 1 100%;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  gap: 0;
+  margin-left: 0;
+  max-height: 7.5rem;
+}
+
+.plot-legend--table .plot-legend-item,
+.plot-legend-head {
+  display: flex;
+  align-items: center;
+  border: none;
+  border-radius: 0;
+  overflow: visible;
+}
+
+.plot-legend--table .plot-legend-item:hover {
+  background: var(--surface-hover);
+}
+
+.plot-legend--table .plot-legend-swatch {
+  width: 0.75rem;
+  height: 0.75rem;
+  margin: 0 0.25rem 0 0.375rem;
+  border-radius: 0.125rem;
+}
+
+.plot-legend--table .plot-legend-style {
+  height: 1.25rem;
+  border-right: none;
+}
+
+.plot-legend--table .plot-legend-label {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  padding: 0.125rem 0.25rem;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plot-legend--table .plot-legend-item.active .plot-legend-label,
+.plot-legend--table .plot-legend-label:hover {
+  background: none;
+}
+
+.plot-legend--table .plot-legend-remove {
+  height: 1.25rem;
+  border-left: none;
+}
+
+.plot-legend-value {
+  width: 5.5rem;
+  flex-shrink: 0;
+  padding: 0 0.375rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.plot-legend-head {
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Under the swatch, style and name columns; then over the remove column. */
+.plot-legend-head-name {
+  flex: 1;
+  padding-left: 2.875rem;
+}
+
+.plot-legend-head-end {
+  width: 1.25rem;
+  flex-shrink: 0;
+}
+
 /* ── Compare view ── */
 
 #compareContainer {
@@ -2104,23 +2399,23 @@ button:focus-visible,
   flex-shrink: 0;
 }
 
+/* Everyday buttons are plain, as the Graph tab's: colour is for the unusual. */
 .compare-add-btn {
   font-family: var(--mono);
   font-size: 0.6875rem;
-  font-weight: 600;
   height: 1.625rem;
   line-height: 1;
   padding: 0 0.5rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--accent);
+  background: var(--surface-2);
+  color: var(--text);
   cursor: pointer;
   transition: background 0.12s;
 }
 
 .compare-add-btn:hover {
-  background: var(--accent-muted);
+  background: var(--surface-3);
 }
 
 .compare-pause-all {
@@ -2144,14 +2439,14 @@ button:focus-visible,
   padding: 0 0.5rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--surface);
+  background: var(--surface-2);
   color: var(--text);
   cursor: pointer;
   transition: background 0.12s;
 }
 
 .compare-saved-btn:hover {
-  background: var(--surface-2);
+  background: var(--surface-3);
 }
 
 .compare-saved-menu {
@@ -2163,7 +2458,7 @@ button:focus-visible,
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.15);
   z-index: 20;
   overflow: hidden;
 }
@@ -2193,6 +2488,13 @@ button:focus-visible,
 .compare-saved-name {
   flex: 1;
   min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2224,13 +2526,22 @@ button:focus-visible,
   min-height: 0;
 }
 
+/* No graph yet: how to start, in the middle of the tab. */
+.compare-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Graphs share the view and never get shorter than their content: with more
+   than fit, the list scrolls. */
 .compare-graph-card {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
   display: flex;
   flex-direction: column;
-  min-height: 16rem;
   flex: 1;
 }
 
@@ -2250,7 +2561,7 @@ button:focus-visible,
   border-radius: var(--radius);
   background: var(--surface-2);
   color: var(--text);
-  width: 6rem;
+  width: 10rem;
   min-width: 0;
 }
 
@@ -2263,19 +2574,18 @@ button:focus-visible,
 .compare-graph-save {
   font-family: var(--mono);
   font-size: 0.625rem;
-  font-weight: 600;
   padding: 0.125rem 0.375rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
-  color: var(--accent);
+  color: var(--text);
   cursor: pointer;
   transition: background 0.12s;
   flex-shrink: 0;
 }
 
 .compare-graph-save:hover {
-  background: var(--accent-muted);
+  background: var(--surface-2);
 }
 
 .compare-graph-clone {
@@ -2308,40 +2618,247 @@ button:focus-visible,
   color: var(--error);
 }
 
-.compare-time-controls,
-.compare-visual-controls {
+/* A card's header: Edit, its name and time window, its actions at the end. */
+.compare-card-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.25rem;
+  gap: 0.375rem 0.5rem;
   padding: 0.25rem 0.5rem;
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
-  flex-wrap: wrap;
 }
 
-.compare-visual-controls {
-  gap: 0.375rem;
-}
-
-.compare-graph-card > .detail-plot-area {
-  flex: 1;
-  min-height: 8rem;
-}
-
-.compare-graph-card > .plot-compare-panel {
+.compare-time-controls {
   display: flex;
-  flex-direction: row;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/* A window longer than the history kept (_syncKept): dashed, and said. */
+.compare-time-controls .plot-window-btn--beyond {
+  border-style: dashed;
+}
+
+.compare-kept {
+  margin-left: 0.25rem;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Its editing rows, folded away under Edit: a row each, their names aligned. */
+.compare-card-editor {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.compare-card-editor > .plot-compare-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.plot-series-section,
+.compare-visual-controls {
+  display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.375rem;
-  padding: 0.375rem 0.5rem;
-  border-bottom: 1px solid var(--border-subtle);
-  overflow-y: visible;
+  padding: 0.25rem 0.5rem;
+}
+
+.compare-visual-controls {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.compare-card-editor .plot-compare-hdr,
+.compare-card-editor .plot-threshold-hdr {
+  width: 5rem;
   flex-shrink: 0;
+}
+
+/* The series row: its name beside a filter over a list of every series heard. */
+.plot-series-section {
+  align-items: flex-start;
+}
+
+.plot-series-section > .plot-compare-hdr {
+  padding-top: 0.25rem;
+}
+
+.plot-series-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex: 1;
+  min-width: 0;
+  max-width: 40rem;
+}
+
+.plot-series-filter {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  padding: 0.25rem 0.375rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.plot-series-filter:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.plot-series-list {
+  max-height: 9rem;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+}
+
+.plot-series-option {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.125rem 0.375rem;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  cursor: pointer;
+}
+
+.plot-series-option:hover {
+  background: var(--surface-hover);
+}
+
+.plot-series-option input[type="checkbox"] {
+  width: 0.75rem;
+  height: 0.75rem;
+  margin: 0;
+  padding: 0;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.plot-series-key {
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.plot-series-about {
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plot-series-none {
+  padding: 0.375rem;
+  font-family: var(--sans);
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
+/* A card's plot, and the column of controls beside it when collapsed. Room to
+   draw under a full legend (5.5rem); the plot sized by the card alone, so a
+   drawing never holds the card at an old size. */
+.compare-card-body {
+  flex: 1;
+  display: flex;
+  min-height: 11rem;
+}
+
+.compare-card-body > .detail-plot-area {
+  flex: 1;
+  min-width: 0;
+  contain: size;
+}
+
+/* Collapsed, a graph is its plot: no header, no editing rows; its pause, time
+   window and Sync in a column at its right; its legend a line of names. */
+.compare-side {
+  display: none;
+}
+
+.compare-graph-card.collapsed .compare-card-header,
+.compare-graph-card.collapsed .compare-card-editor {
+  display: none;
+}
+
+.compare-graph-card.collapsed .compare-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.compare-collapse-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0 0.125rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.compare-collapse-btn:hover {
+  color: var(--text);
+}
+
+.compare-side .compare-collapse-btn {
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   background: var(--surface);
 }
 
-.compare-graph-card > .plot-compare-panel .plot-compare-hdr {
+.compare-window-select {
+  width: 2.75rem;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  padding: 0.125rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.compare-graph-card.collapsed .plot-legend--table {
+  flex-direction: row;
+  gap: 0.75rem;
+  max-height: none;
+  overflow: hidden;
+}
+
+.compare-graph-card.collapsed .plot-legend--table .plot-legend-item {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.compare-graph-card.collapsed .plot-legend-head,
+.compare-graph-card.collapsed .plot-legend-value,
+.compare-graph-card.collapsed .plot-legend-style,
+.compare-graph-card.collapsed .plot-legend-remove,
+.compare-graph-card.collapsed .plot-legend-unit {
+  display: none;
+}
+
+/* A Compare plot is named on itself, by its graph's name: no title over it. */
+.compare-graph-card .plot-title {
+  display: none;
+}
+
+.compare-card-editor .plot-compare-hdr {
   font-family: var(--mono);
   font-size: 0.6875rem;
   font-weight: 500;
@@ -2350,7 +2867,7 @@ button:focus-visible,
   padding: 0;
 }
 
-.compare-graph-card > .plot-compare-panel .plot-compare-picker {
+.compare-card-editor .plot-compare-picker {
   display: flex;
   flex-direction: row;
   gap: 0.25rem;
@@ -2359,7 +2876,7 @@ button:focus-visible,
   align-items: center;
 }
 
-.compare-graph-card > .plot-compare-panel .plot-compare-picker select {
+.compare-card-editor .plot-compare-picker select {
   font-family: var(--mono);
   font-size: 0.625rem;
   padding: 0.25rem;
@@ -2371,33 +2888,21 @@ button:focus-visible,
   min-width: 6rem;
 }
 
-
-.plot-compare-picker select:disabled {
-  opacity: 0.5;
-}
-
 .plot-compare-add {
   font-family: var(--mono);
   font-size: 0.625rem;
-  font-weight: 600;
   padding: 0.25rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
-  color: var(--accent);
+  color: var(--text);
   cursor: pointer;
   transition: background 0.12s;
 }
 
-.plot-compare-add:hover:not(:disabled) {
-  background: var(--accent-muted);
+.plot-compare-add:hover {
+  background: var(--surface-2);
 }
-
-.plot-compare-add:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
 
 .plot-derived-section {
   display: flex;
@@ -2407,27 +2912,6 @@ button:focus-visible,
   gap: 0.375rem;
   padding: 0.25rem 0.5rem;
   border-top: 1px solid var(--border-subtle);
-}
-
-.plot-derived-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-}
-
-.plot-derived-tag {
-  font-family: var(--mono);
-  font-size: 0.5625rem;
-  font-weight: 600;
-  color: var(--accent);
-  background: var(--accent-muted);
-  padding: 0.0625rem 0.25rem;
-  border-radius: var(--radius);
-  flex-shrink: 0;
-}
-
-.plot-derived-item {
-  border-left: 2px solid var(--accent);
 }
 
 .plot-threshold-section {
@@ -2454,7 +2938,8 @@ button:focus-visible,
 }
 
 .plot-threshold-input,
-.plot-threshold-name-input {
+.plot-threshold-name-input,
+.plot-derived-window {
   font-family: var(--mono);
   font-size: 0.625rem;
   padding: 0.1875rem 0.25rem;
@@ -2472,6 +2957,74 @@ button:focus-visible,
 .plot-threshold-label {
   font-family: var(--mono);
   font-size: 0.5625rem;
+}
+
+/* A graph's Markers row: a marker each (its time and label, × to delete), the
+   drawings' count, and, while there are none, how to add them. */
+.compare-marks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.5rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.compare-marks-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.compare-mark {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.compare-mark-go,
+.compare-mark-delete {
+  margin: 0;
+  padding: 0.125rem 0.375rem;
+  border: none;
+  background: none;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.compare-mark-delete {
+  padding: 0.125rem 0.25rem;
+  color: var(--muted);
+}
+
+.compare-mark-go:hover,
+.compare-mark-delete:hover {
+  background: var(--surface-hover);
+}
+
+.compare-mark button:focus-visible {
+  outline: 0.125rem solid var(--accent);
+  outline-offset: -0.125rem;
+}
+
+.compare-marks-drawings {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--muted);
+}
+
+.compare-marks .compare-marks-clear {
+  padding: 0.125rem 0.375rem;  /* as tall as a marker beside it */
+}
+
+.compare-marks-hint {
+  font-size: 0.6875rem;
+  color: var(--muted);
 }
 
 
@@ -2637,7 +3190,7 @@ button:focus-visible,
 .status-ok   { color: var(--ok); }
 .status-warn { color: var(--warn); }
 .status-err  { color: var(--error); }
-.status-init { color: #57606a; }
+.status-init { color: var(--warn); }
 
 [data-theme="dark"] .status-init { color: #8b949e; }
 
@@ -2701,6 +3254,12 @@ button:focus-visible,
   background: var(--row-bg);
 }
 
+/* The Midnight theme paints the table #666, which showed through wherever
+   rows do not cover it: a translucent selected row, rows still being drawn. */
+.tabulator .tabulator-tableholder .tabulator-table {
+  background: var(--row-bg);
+}
+
 .tabulator .tabulator-row {
   background: var(--row-bg);
   border-bottom: 1px solid var(--border-subtle);
@@ -2724,14 +3283,17 @@ button:focus-visible,
   padding: 0.5rem 0.75rem;
 }
 
+/* A row reached by keyboard (see bindRowKeys) */
+.tabulator .tabulator-row:focus { outline: none; }
+.tabulator .tabulator-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .tabulator .tabulator-row.selected-row,
 .tabulator .tabulator-row.selected-row:hover {
-  background: rgba(221, 238, 255, 0.65) !important;
+  background: var(--row-select-bg) !important;
   box-shadow: inset 0 0 0 2px var(--accent);
-}
-[data-theme="dark"] .tabulator .tabulator-row.selected-row,
-[data-theme="dark"] .tabulator .tabulator-row.selected-row:hover {
-  background: rgba(88, 166, 255, 0.10) !important;
 }
 
 .ghost-delete-btn {
@@ -2818,10 +3380,17 @@ button:focus-visible,
   vertical-align: middle;
 }
 
+/* Colour says what needs a look: caution and warning (Cyphal health), and
+   green for a node that talks. Idle and offline are quiet; offline hollow. */
 .state-dot.active { background: var(--ok); }
-.state-dot.idle { background: var(--warn); }
-.state-dot.offline { background: var(--error); }
-.state-dot.error { background: var(--error); }
+.state-dot.idle { background: var(--muted); }
+.state-dot.caution { background: var(--warn); }
+.state-dot.warning { background: var(--error); }
+.state-dot.offline { background: transparent; border: 1px solid var(--muted); }
+.state-cell.idle .state-label,
+.state-cell.offline .state-label { color: var(--muted); }
+.state-cell.caution .state-label { color: var(--warn); }
+.state-cell.warning .state-label { color: var(--error); }
 
 
 /* ── Favourite star & actions column ── */
@@ -2924,7 +3493,7 @@ button:focus-visible,
   font-size: 0.8125rem;
 }
 
-.health-nominal { color: var(--ok); }
+.health-nominal { color: var(--muted); }  /* the usual: only the others need colour */
 .health-advisory { color: var(--warn); }
 .health-caution { color: var(--warn); }
 .health-warning { color: var(--error); }
@@ -2943,6 +3512,93 @@ button:focus-visible,
 
 .port-ids.has-ports {
   color: var(--text);
+}
+
+/* Standard ports (fixed port-IDs), after the node's own. */
+.port-ids .port-std {
+  color: var(--muted);
+}
+
+/* "+3": how many more IDs a list has than it shows (see shortIdList). */
+.list-more {
+  color: var(--muted);
+}
+
+.mode-text {
+  font-size: 0.75rem;
+}
+
+.mode-usual { color: var(--muted); }
+.mode-other { color: var(--warn); }
+
+/* Cyphal v1.1 traffic this dashboard cannot decode, and errors on the bus
+   (sidebar, CAN section). */
+.can-v11-notice,
+.can-bus-notice {
+  margin: 0 0 0.5rem;
+  padding: 0.25rem 0.5rem;
+  border-left: 0.1875rem solid var(--warn);
+  background: var(--warn-muted);
+  color: var(--warn);
+  font-size: 0.6875rem;
+  line-height: 1.35;
+  cursor: help;
+}
+
+/* What to check, on a line of its own. */
+.can-bus-notice-hint {
+  display: block;
+}
+
+/* Why the last CAN connect failed, or the session ended (sidebar, CAN section). */
+.can-error {
+  padding: 0.25rem 0.5rem;
+  border-left: 0.1875rem solid var(--error);
+  background: var(--error-muted);
+  color: var(--error);
+  font-size: 0.6875rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+/* ── Subjects table ── */
+
+.kind-badge {
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.kind-badge.kind-service {
+  color: var(--accent);
+}
+
+/* A subject nothing names the type of: not a type name, but a thing to do. */
+.type-unknown {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.type-set-hint {
+  margin-left: 0.5rem;
+  color: var(--accent);
+  font-size: 0.6875rem;
+}
+
+.type-user {
+  margin-left: 0.5rem;
+  padding: 0 0.3125rem;
+  border: 1px solid var(--border);
+  border-radius: 0.1875rem;
+  color: var(--muted);
+  font-size: 0.625rem;
+}
+
+.name-display.name-missing {
+  color: var(--muted);
+  font-style: italic;
 }
 
 .hidden {
@@ -3885,6 +4541,13 @@ details.svc-history-entry[open] > summary::before {
   .log-panel.collapsed ~ .log-panel-collapse-btn {
     right: -0.5rem;
   }
+
+  /* The narrower sidebar takes a smaller Cyphal logo, beside Cordicor's. */
+  .cyphal-logo {
+    width: 7rem;
+    height: 2.45rem;
+    margin-bottom: -0.4375rem;
+  }
 }
 
 @media (max-width: 60rem) {
@@ -4073,7 +4736,14 @@ details.svc-history-entry[open] > summary::before {
 .auth-modal-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 0.5rem;
   margin-top: 1rem;
+}
+
+/* Leaves the dashboard disconnected: a plain button beside the accent one. */
+.auth-modal-cancel {
+  font-weight: 600;
+  padding: 0.5rem 1rem;
 }
 
 .auth-modal-btn {
@@ -4252,7 +4922,8 @@ details.svc-history-entry[open] > summary::before {
   gap: 0.25rem;
 }
 
-.hist-range-btn {
+.hist-range-btn,
+.table-kind-btn {
   font-family: var(--mono);
   font-size: 0.6875rem;
   font-weight: 500;
@@ -4265,12 +4936,14 @@ details.svc-history-entry[open] > summary::before {
   transition: all 0.12s;
 }
 
-.hist-range-btn:hover {
+.hist-range-btn:hover,
+.table-kind-btn:hover {
   background: var(--surface-2);
   color: var(--text);
 }
 
-.hist-range-btn.active {
+.hist-range-btn.active,
+.table-kind-btn.active {
   background: var(--accent-muted);
   border-color: var(--accent);
   color: var(--accent);
@@ -4450,9 +5123,8 @@ details.svc-history-entry[open] > summary::before {
   border-bottom: 1px solid var(--border);
   font-size: 0.75rem;
   flex-shrink: 0;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  white-space: nowrap;
+  /* Wraps rather than scrolls: a scrolling bar would clip the Display menu */
+  flex-wrap: wrap;
 }
 
 .graph-toolbar > * {
@@ -4477,6 +5149,8 @@ details.svc-history-entry[open] > summary::before {
 
 .graph-toggle input[type="checkbox"] {
   accent-color: var(--accent);
+  /* Not the global inputs' 100 %, which spreads a row in the Display menu */
+  width: auto;
 }
 
 .graph-btn {
@@ -4495,8 +5169,16 @@ details.svc-history-entry[open] > summary::before {
   background: var(--surface-3);
 }
 
+/* The canvas and, beside it, the inspector of the selected node */
+.graph-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
 .graph-svg-wrap {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   background: var(--bg);
   position: relative;
@@ -4518,34 +5200,122 @@ details.svc-history-entry[open] > summary::before {
   height: 100%;
 }
 
-/* Links */
+/* Links: traffic, the usual, is plain; a subject gone silent stands out.
+   The width (by message rate) is the stroke-width attribute set in JS,
+   which a stroke-width here would override. */
 .graph-link {
   stroke: var(--border);
-  stroke-width: 1;
   fill: none;
+  /* As wide on screen at any zoom: the width says the rate, not the zoom */
+  vector-effect: non-scaling-stroke;
   transition: opacity 0.15s;
 }
 
-.graph-link--hi {
+.graph-link--live {
+  stroke: var(--muted);
+  stroke-opacity: 0.6;
+}
+
+.graph-link--silent {
+  stroke: var(--warn);
+  stroke-dasharray: 0.25rem 0.1875rem;
+}
+
+/* Client to server: who may call whom, not traffic */
+.graph-link--svc {
+  stroke: var(--muted);
+  stroke-dasharray: 0.0625rem 0.1875rem;
+  stroke-linecap: round;
+}
+
+/* Hover target of an edge: wider than the edge, never drawn */
+.graph-link-hit {
+  stroke: transparent;
+  stroke-width: 0.625rem;
+  vector-effect: non-scaling-stroke;
+  pointer-events: stroke;
+}
+
+.graph-link.graph-link--hover {
   stroke: var(--accent);
-  stroke-width: 1.5;
+  stroke-opacity: 1;
+}
+
+/* What an edge carries, beside the pointer */
+.graph-tooltip {
+  position: absolute;
+  z-index: 3;
+  max-width: 22rem;
+  padding: 0.375rem 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.12);
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--text);
+  pointer-events: none;
+}
+
+.graph-tooltip-muted { color: var(--muted); }
+
+.graph-link.graph-link--hi {
+  stroke: var(--accent);
+  stroke-opacity: 1;
 }
 
 .graph-link.graph-dim {
   opacity: 0.1;
 }
 
-/* Device nodes */
+/* Device nodes: health coloured as in the Nodes table, only when unusual */
 .graph-device-circle {
   fill: var(--surface);
+  stroke: var(--muted);
   stroke-width: 2;
   cursor: grab;
   transition: opacity 0.15s;
 }
 
-.graph-node--pinned .graph-device-circle {
-  stroke-dasharray: 3 2;
+.graph-node--warn .graph-device-circle { stroke: var(--warn); }
+.graph-node--err .graph-device-circle { stroke: var(--error); }
+
+.graph-node--offline .graph-device-circle {
+  stroke: var(--error);
+  stroke-dasharray: 0.25rem 0.1875rem;
 }
+
+.graph-node--offline .graph-node-id { fill: var(--muted); }
+
+/* Heard in Cyphal v1.1 only: present, but nothing about it is decoded */
+.graph-node--v11 .graph-device-circle {
+  stroke: var(--warn);
+  stroke-dasharray: 0.0625rem 0.25rem;
+  stroke-linecap: round;
+}
+
+/* Pinned by a drag: filled, as a dashed ring means offline */
+.graph-node--pinned .graph-device-circle,
+.graph-node--pinned .graph-subject-rect {
+  fill: var(--surface-3);
+}
+
+/* The Nodes table's health icons (~ ! !!), beside the ring */
+.graph-health-badge {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  font-weight: 700;
+  pointer-events: none;
+  user-select: none;
+  paint-order: stroke fill;
+  stroke: var(--bg);
+  stroke-width: 0.1875rem;
+  stroke-linejoin: round;
+}
+
+.graph-node--warn .graph-health-badge { fill: var(--warn); }
+.graph-node--err .graph-health-badge { fill: var(--error); }
 
 .graph-node.graph-hi .graph-device-circle {
   stroke-width: 3;
@@ -4573,6 +5343,9 @@ details.svc-history-entry[open] > summary::before {
   transition: opacity 0.15s;
 }
 
+/* A subject nothing publishes, or whose type nothing names */
+.graph-node--warn .graph-subject-rect { stroke: var(--warn); }
+
 .graph-node.graph-hi .graph-subject-rect {
   stroke: var(--accent);
   stroke-width: 2;
@@ -4582,7 +5355,7 @@ details.svc-history-entry[open] > summary::before {
 /* Labels */
 .graph-label {
   font-family: var(--mono);
-  font-size: 0.5625rem;
+  font-size: 0.625rem;
   fill: var(--muted);
   pointer-events: none;
   user-select: none;
@@ -4616,30 +5389,30 @@ details.svc-history-entry[open] > summary::before {
 }
 
 .graph-label--device {
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
   fill: var(--text);
 }
+
+/* A device's second label line: what is unusual about it */
+.graph-label-status {
+  font-size: 0.5625rem;
+}
+
+.graph-label-status--err { fill: var(--error); }
+.graph-label-status--warn { fill: var(--warn); }
 
 .graph-label.graph-dim {
   opacity: 0.1;
 }
 
-/* Info panel — positioned by JS next to the selected node inside .graph-svg-wrap */
+/* Inspector: docked beside the canvas while a node is selected */
 .graph-info {
-  position: absolute;
-  top: 0.5rem;
-  left: 0.5rem;
-  width: 16rem;
-  max-height: 60%;
+  flex: 0 0 20rem;
   overflow-y: auto;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0.625rem;
+  border-left: 1px solid var(--border);
+  padding: 0.75rem 0.875rem;
   font-size: 0.75rem;
-  box-shadow: 0 0.125rem 0.5rem rgba(0, 0, 0, 0.12);
-  z-index: 10;
-  pointer-events: auto;
 }
 
 .graph-info.hidden {
@@ -4740,22 +5513,72 @@ details.svc-history-entry[open] > summary::before {
   word-break: break-all;
 }
 
-.graph-info-meta {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-family: var(--mono);
-  font-size: 0.6875rem;
-  color: var(--muted);
-  margin-bottom: 0.5rem;
-}
-
 .graph-info-health {
   font-weight: 600;
 }
 
-.graph-info-offline {
+.graph-info-status--err {
   color: var(--error);
+  font-weight: 600;
+}
+
+/* The selected node's facts: label and value, aligned */
+.graph-info-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.1875rem 0.75rem;
+  margin: 0.25rem 0 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+}
+
+.graph-info-facts dt { color: var(--muted); }
+.graph-info-facts dd { margin: 0; color: var(--text); }
+
+.graph-info-note {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+}
+
+.graph-info-buttons {
+  margin: 0.125rem 0 0.375rem;
+}
+
+/* A port's rate over the last minute, beside the rate */
+.graph-spark {
+  flex-shrink: 0;
+  width: 3rem;
+  height: 0.75rem;
+  margin-left: auto;
+  /* Replaced each second: a press must land on its row, which stays */
+  pointer-events: none;
+  /* The slot shows where the minute's history will fill in */
+  background: var(--surface-2);
+  border-radius: 0.125rem;
+}
+
+.graph-spark polyline {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.graph-spark + .graph-info-rate { margin-left: 0.5rem; }
+
+.graph-info-rate {
+  /* One width for "50.0 Hz" and "silent", so that the sparklines align */
+  min-width: 3.75rem;
+  text-align: right;
+  margin-left: auto;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.graph-info-status--warn {
+  color: var(--warn);
   font-weight: 600;
 }
 
@@ -4771,6 +5594,23 @@ details.svc-history-entry[open] > summary::before {
   letter-spacing: 0.04em;
   color: var(--muted);
   margin-bottom: 0.125rem;
+}
+
+/* A row naming a drawn node: selects it */
+.graph-info-row.graph-info-row--link {
+  width: calc(100% + 0.5rem);
+  margin-left: -0.25rem;
+  padding: 0.125rem 0.25rem;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.graph-info-row.graph-info-row--link:hover {
+  background: var(--surface-2);
 }
 
 .graph-info-row {
@@ -4794,9 +5634,8 @@ details.svc-history-entry[open] > summary::before {
   white-space: nowrap;
 }
 
-/* Live traffic indicators */
-.graph-link--live {
-  stroke: var(--accent);
+/* "Animate traffic" (Display menu): flow along the edges carrying traffic */
+.graph-animate .graph-link--live {
   stroke-dasharray: 0.25rem 0.1875rem;
   animation: graph-link-flow 1s linear infinite;
 }
@@ -4805,17 +5644,11 @@ details.svc-history-entry[open] > summary::before {
   to { stroke-dashoffset: -0.4375rem; }
 }
 
-@keyframes graph-pulse {
-  0%, 100% { filter: drop-shadow(0 0 0.0625rem var(--accent)); }
-  50% { filter: drop-shadow(0 0 0.375rem var(--accent)); }
-}
-
-.graph-node--live .graph-device-circle {
-  animation: graph-pulse 1.6s ease-in-out infinite;
-}
-
-.graph-node.graph-hi.graph-node--live .graph-device-circle {
-  animation: none;
+/* Kept after the rule above, which it must outrank */
+@media (prefers-reduced-motion: reduce) {
+  .graph-animate .graph-link--live {
+    animation: none;
+  }
 }
 
 /* Filter input */
@@ -4866,19 +5699,11 @@ details.svc-history-entry[open] > summary::before {
   border-color: var(--accent);
 }
 
-/* Legend bar — own row below the toolbar */
-.graph-legend-bar {
-  display: flex;
-  align-items: center;
-  gap: 1.25rem;
-  padding: 0.375rem 0.75rem;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+/* Legend: in a popover beside Display */
+.graph-legend-menu {
   font-family: var(--sans);
   font-size: 0.75rem;
   color: var(--muted);
-  flex-shrink: 0;
-  flex-wrap: wrap;
 }
 
 .graph-legend-item {
@@ -4903,21 +5728,142 @@ details.svc-history-entry[open] > summary::before {
   transform: rotate(45deg);
 }
 
-.graph-legend-dot--pulse {
-  border-radius: 50%;
-  border-color: var(--accent);
-  box-shadow: 0 0 0.25rem var(--accent);
+.graph-legend-dot--warn { border-color: var(--warn); }
+.graph-legend-dot--err { border-color: var(--error); }
+
+.graph-legend-dot--offline {
+  border-color: var(--error);
+  border-style: dashed;
 }
 
+.graph-legend-dot--pinned { background: var(--surface-3); }
+
+.graph-legend-dot--v11 {
+  border-color: var(--warn);
+  border-style: dotted;
+}
+
+/* Edges as drawn: no data, traffic, silent */
 .graph-legend-line {
   display: inline-block;
   width: 1.75rem;
-  height: 0.125rem;
-  background: var(--border);
+  border-top: 0.125rem solid var(--border);
 }
 
 .graph-legend-line--live {
-  background: var(--accent);
+  border-top-color: var(--muted);
+  opacity: 0.6;
+}
+
+.graph-legend-line--svc {
+  border-top: 0.125rem dotted var(--muted);
+}
+
+.graph-legend-line--silent {
+  border-top: 0.125rem dashed var(--warn);
+}
+
+/* Status strip, over the graph and the tables: what needs a look; a count
+   picks those nodes (rows) out */
+.graph-status-bar,
+.table-status-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.3125rem 0.75rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  flex-shrink: 0;
+}
+
+/* A table with no rows says why itself. */
+.table-status-bar:empty { display: none; }
+
+.graph-status-total, .table-status-total { color: var(--text); }
+.graph-status-usual, .table-status-usual { color: var(--muted); }
+
+.graph-chip,
+.table-chip {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  padding: 0.0625rem 0.5rem;
+  border-radius: 1rem;
+  border: 1px solid currentColor;
+  background: none;
+  cursor: pointer;
+}
+
+.graph-chip--warn, .table-chip--warn { color: var(--warn); }
+.graph-chip--err, .table-chip--err { color: var(--error); }
+.graph-chip--warn[aria-pressed="true"], .table-chip--warn[aria-pressed="true"] { background: var(--warn-muted); }
+.graph-chip--err[aria-pressed="true"], .table-chip--err[aria-pressed="true"] { background: var(--error-muted); }
+
+/* All · Subjects · Services, in the Subjects table's strip */
+.table-status-kinds {
+  display: inline-flex;
+  gap: 0.25rem;
+  margin-right: 0.25rem;
+}
+
+/* Compact, at the strip's end (see applyRowDensity) */
+.table-density-btn {
+  margin-left: auto;
+}
+
+/* The IDs outrank every cell rule, the fav and action cells' padding included. */
+#nodesTable.table-compact .tabulator-row .tabulator-cell,
+#subjectsTable.table-compact .tabulator-row .tabulator-cell {
+  padding-top: 0.1875rem;
+  padding-bottom: 0.1875rem;
+}
+
+/* A node reached by keyboard */
+.graph-node:focus { outline: none; }
+.graph-node:focus-visible .graph-device-circle,
+.graph-node:focus-visible .graph-subject-rect {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.graph-display-row {
+  display: flex;
+  gap: 0.375rem;
+}
+
+/* Display menu: the view options one sets and leaves */
+.graph-display {
+  position: relative;
+}
+
+.graph-display > summary {
+  list-style: none;
+}
+
+.graph-display > summary::-webkit-details-marker {
+  display: none;
+}
+
+.graph-display > summary::after {
+  content: ' ▾';
+}
+
+.graph-display-menu {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 12rem;
+  padding: 0.5rem 0.625rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.12);
 }
 
 /* ── DSDL View ── */
@@ -4945,8 +5891,9 @@ details.svc-history-entry[open] > summary::before {
 
 /* ── Tree panel ── */
 
+/* Its width dragged at the split (--dsdl-tree-width, set by dsdl-view.js). */
 .dsdl-tree-panel {
-  width: 22rem;
+  width: var(--dsdl-tree-width, 22rem);
   min-width: 11rem;
   flex-shrink: 0;
   display: flex;
@@ -5055,11 +6002,12 @@ details.svc-history-entry[open] > summary::before {
   padding: 0.375rem 0.75rem;
   font-size: 0.625rem;
   font-family: var(--mono);
-  color: var(--danger);
-  background: var(--danger-muted, rgba(239,68,68,0.08));
+  color: var(--error);
+  background: var(--error-muted);
   border-bottom: 0.0625rem solid var(--border);
   white-space: pre-wrap;
-  word-break: break-all;
+  /* Between words; inside one only when it is longer than a line. */
+  overflow-wrap: anywhere;
 }
 
 .dsdl-custom-empty {
@@ -5067,6 +6015,11 @@ details.svc-history-entry[open] > summary::before {
   font-size: 0.6875rem;
   color: var(--muted);
   font-style: italic;
+}
+
+/* "Empty", where an empty namespace's types would be. */
+.dsdl-ns-children > .dsdl-custom-empty {
+  padding-left: calc(var(--depth, 0) * 1.125rem + 1rem);
 }
 
 .dsdl-ns-custom {
@@ -5080,8 +6033,17 @@ details.svc-history-entry[open] > summary::before {
   margin-left: auto;
 }
 
-.dsdl-ns-custom:hover .dsdl-ns-actions {
+/* On hover, and while the keyboard is on the row or its buttons. */
+.dsdl-ns-custom:hover .dsdl-ns-actions,
+.dsdl-ns-custom:focus-within .dsdl-ns-actions {
   display: inline-flex;
+}
+
+/* A touch screen has no hover: there they stay in view. */
+@media (hover: none) {
+  .dsdl-ns-actions {
+    display: inline-flex;
+  }
 }
 
 .dsdl-ns-add {
@@ -5140,7 +6102,18 @@ details.svc-history-entry[open] > summary::before {
 
 .dsdl-search-wrap {
   padding: 0.5rem 0.625rem;
-  border-top: 0.0625rem solid var(--border);
+  border-bottom: 0.0625rem solid var(--border);
+}
+
+/* How many types the search finds, under it while there is one. */
+.dsdl-search-count {
+  margin-top: 0.3125rem;
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
+.dsdl-search-count:empty {
+  display: none;
 }
 
 .dsdl-search {
@@ -5176,11 +6149,13 @@ details.svc-history-entry[open] > summary::before {
 
 /* ── Tree nodes ── */
 
+/* Rows step in 1.125rem a level: the markup gives each its --depth. */
 .dsdl-ns-row {
   display: flex;
   align-items: center;
   gap: 0.375rem;
   padding: 0.375rem 0.625rem;
+  padding-left: calc(var(--depth, 0) * 1.125rem + 0.5rem);
   cursor: pointer;
   user-select: none;
   border-radius: var(--radius);
@@ -5218,6 +6193,7 @@ details.svc-history-entry[open] > summary::before {
   align-items: center;
   gap: 0.375rem;
   padding: 0.3125rem 0.625rem;
+  padding-left: calc(var(--depth, 0) * 1.125rem + 1rem);
   margin: 0.0625rem 0.375rem;
   border-radius: var(--radius);
   cursor: pointer;
@@ -5236,6 +6212,13 @@ details.svc-history-entry[open] > summary::before {
   box-shadow: inset 0.1875rem 0 0 var(--accent);
 }
 
+/* The row the keyboard is on. */
+.dsdl-ns-row:focus-visible,
+.dsdl-type-row:focus-visible {
+  outline: 0.125rem solid var(--accent);
+  outline-offset: -0.125rem;
+}
+
 .dsdl-kind {
   font-size: 0.5625rem;
   font-weight: 700;
@@ -5247,14 +6230,13 @@ details.svc-history-entry[open] > summary::before {
   letter-spacing: 0.02em;
 }
 
+/* As in the Subjects table: a message's tag muted, a service's in the accent. */
 .dsdl-kind-message {
-  background: var(--accent-muted);
-  color: var(--accent);
+  color: var(--muted);
 }
 
 .dsdl-kind-service {
-  background: var(--ok-muted);
-  color: var(--ok);
+  color: var(--accent);
 }
 
 .dsdl-type-name {
@@ -5374,30 +6356,16 @@ details.svc-history-entry[open] > summary::before {
   line-height: 1.4;
 }
 
-.dsdl-badge-message {
-  background: var(--accent-muted);
-  color: var(--accent);
-}
-
-.dsdl-badge-service {
-  background: var(--ok-muted);
-  color: var(--ok);
-}
-
-.dsdl-badge-regulated {
+/* What a type is, plainly. Colour is for what needs a look: not compiled
+   yet, deprecated (.dsdl-badge-warn). */
+.dsdl-badge-message,
+.dsdl-badge-service,
+.dsdl-badge-regulated,
+.dsdl-badge-custom,
+.dsdl-badge-ok {
   background: var(--surface-2);
   color: var(--muted);
   border: 0.0625rem solid var(--border);
-}
-
-.dsdl-badge-custom {
-  background: var(--warn-muted);
-  color: var(--warn);
-}
-
-.dsdl-badge-ok {
-  background: var(--ok-muted);
-  color: var(--ok);
 }
 
 .dsdl-badge-warn {
@@ -5430,6 +6398,9 @@ details.svc-history-entry[open] > summary::before {
 }
 
 .dsdl-card-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
   font-size: 0.6875rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -5438,6 +6409,14 @@ details.svc-history-entry[open] > summary::before {
   padding: 0.5rem 0.875rem 0.375rem;
   border-bottom: 0.0625rem solid var(--border-subtle);
   background: var(--surface-2);
+}
+
+/* Beside a field card's title: its size on the wire, a value. */
+.dsdl-card-meta {
+  font-family: var(--mono);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 /* ── Field table ── */
@@ -5461,23 +6440,64 @@ details.svc-history-entry[open] > summary::before {
   background: var(--surface-hover);
 }
 
+/* Long types and names wrap in a narrow pane rather than run into each other. */
 .dsdl-fcol-type {
   padding: 0.375rem 0.875rem;
-  color: var(--accent);
-  white-space: nowrap;
+  color: var(--text);
   width: 40%;
-  max-width: 16rem;
+  overflow-wrap: anywhere;
 }
 
 .dsdl-fcol-name {
   padding: 0.375rem 0.875rem;
   color: var(--text-bright);
   font-weight: 500;
+  overflow-wrap: anywhere;
 }
 
 .dsdl-fcol-val {
   padding: 0.375rem 0.875rem;
-  color: var(--warn);
+  color: var(--text);
+}
+
+/* A field's or constant's comment, under its name: prose, not data. */
+.dsdl-fcol-doc {
+  margin-top: 0.125rem;
+  font-family: var(--sans);
+  font-size: 0.6875rem;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+/* A type the compiler refuses: why, before a compile is tried. */
+.dsdl-problem {
+  padding: 0.5rem 0.875rem;
+  border-radius: var(--radius);
+  background: var(--error-muted);
+  color: var(--error);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+/* Its line at fault, in the source. */
+.dsdl-src-problem {
+  display: inline-block;
+  min-width: 100%;
+  background: var(--error-muted);
+}
+
+.dsdl-src-problem .dsdl-src-num {
+  color: var(--error);
+  opacity: 1;
+}
+
+/* The type's comment, its first paragraph, under the badges. */
+.dsdl-doc-summary {
+  margin: 0.625rem 0 0;
+  max-width: 48rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--muted);
 }
 
 .dsdl-const-eq {
@@ -5513,9 +6533,11 @@ details.svc-history-entry[open] > summary::before {
 .dsdl-dep-chip {
   font-family: var(--mono);
   font-size: 0.6875rem;
+  font-weight: 400;
   color: var(--accent);
   background: var(--accent-muted);
   padding: 0.1875rem 0.5rem;
+  border: none;
   border-radius: var(--radius);
   cursor: pointer;
   text-decoration: none;
@@ -5591,6 +6613,13 @@ details.svc-history-entry[open] > summary::before {
   50% { opacity: 0.4; }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .dsdl-bus-dot,
+  .dsdl-type-row .dsdl-bus-dot::after {
+    animation: none;
+  }
+}
+
 .dsdl-bus-section {
   display: flex;
   align-items: baseline;
@@ -5598,11 +6627,6 @@ details.svc-history-entry[open] > summary::before {
   flex-wrap: wrap;
   margin-top: 0.5rem;
   position: relative;
-}
-
-.dsdl-bus-section.dsdl-bus-collapsed {
-  max-height: 3.25rem;
-  overflow: hidden;
 }
 
 .dsdl-bus-section .dsdl-bus-dot {
@@ -5647,11 +6671,19 @@ details.svc-history-entry[open] > summary::before {
 
 .dsdl-inline-dialog {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.375rem;
   padding: 0.375rem 0.75rem;
   background: var(--surface-3);
   border-bottom: 0.0625rem solid var(--border);
+}
+
+/* Why the server refused what the dialog asked, under it. */
+.dsdl-dialog-error {
+  flex-basis: 100%;
+  font-size: 0.6875rem;
+  color: var(--error);
 }
 
 .dsdl-dialog-input {
@@ -5687,17 +6719,44 @@ details.svc-history-entry[open] > summary::before {
   border-color: var(--accent);
 }
 
-.dsdl-dialog-ok:hover { opacity: 0.85; }
+/* Their own colours under the pointer too: button:hover would grey them, under white text. */
+.dsdl-dialog-ok:hover { background: var(--accent); border-color: var(--accent); opacity: 0.85; }
 .dsdl-dialog-cancel:hover { color: var(--text); }
 
 /* ── Editor panel ── */
 
+/* Beside the type shown: its share of the area dragged at its handle
+   (--dsdl-editor-share). With no type shown it has the area to itself. */
 .dsdl-editor-panel {
+  flex: 0 0 calc(var(--dsdl-editor-share, 0.5) * 100%);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   background: var(--surface-2);
   min-width: 12.5rem;
+}
+
+.dsdl-detail-area.dsdl-editor-alone .dsdl-editor-panel {
+  flex: 1;
+}
+
+.dsdl-detail-area.dsdl-editor-alone .dsdl-detail-panel {
+  flex: 0 0 0;
+}
+
+.dsdl-detail-area.dsdl-editor-alone .dsdl-editor-handle {
+  display: none;
+}
+
+/* While a split is dragged: its cursor wherever the pointer goes, and no text selected. */
+body.dsdl-resizing-col {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.dsdl-resizing-row {
+  cursor: row-resize;
+  user-select: none;
 }
 
 .dsdl-editor-handle {
@@ -5785,8 +6844,7 @@ details.svc-history-entry[open] > summary::before {
   letter-spacing: 0.03125rem;
 }
 
-.dsdl-editor-input,
-.dsdl-editor-select {
+.dsdl-editor-input {
   padding: 0.3125rem 0.5rem;
   border: 0.0625rem solid var(--border);
   border-radius: var(--radius);
@@ -5797,8 +6855,7 @@ details.svc-history-entry[open] > summary::before {
   outline: none;
 }
 
-.dsdl-editor-input:focus,
-.dsdl-editor-select:focus {
+.dsdl-editor-input:focus {
   border-color: var(--accent);
 }
 
@@ -5807,11 +6864,7 @@ details.svc-history-entry[open] > summary::before {
   gap: 0.375rem;
 }
 
-.dsdl-editor-ns-wrap > select {
-  flex: 1;
-}
-
-.dsdl-editor-ns-new {
+.dsdl-editor-ns-wrap > input {
   flex: 1;
 }
 
@@ -5831,8 +6884,10 @@ details.svc-history-entry[open] > summary::before {
   overflow: hidden;
 }
 
+/* The source and its preview share their column: the source's share
+   dragged at the handle between them (--dsdl-source-share). */
 .dsdl-editor-source {
-  flex: 1;
+  flex: var(--dsdl-source-share, 0.5);
   min-height: 4rem;
   padding: 0.5rem;
   border: 0.0625rem solid var(--border);
@@ -5865,7 +6920,7 @@ details.svc-history-entry[open] > summary::before {
 }
 
 .dsdl-editor-preview {
-  flex: 1;
+  flex: calc(1 - var(--dsdl-source-share, 0.5));
   min-height: 2rem;
   display: flex;
   flex-direction: column;
@@ -5922,7 +6977,7 @@ details.svc-history-entry[open] > summary::before {
 }
 
 .dsdl-editor-ok { color: var(--ok); }
-.dsdl-editor-error { color: var(--danger); }
+.dsdl-editor-error { color: var(--error); }
 
 .dsdl-editor-btn {
   padding: 0.3125rem 0.75rem;
@@ -5964,10 +7019,19 @@ details.svc-history-entry[open] > summary::before {
   background: var(--error-muted);
 }
 
+/* Where there is no room beside the buttons, the note goes under them. */
 .dsdl-doc-actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 0.375rem;
   margin-top: 0.5rem;
+}
+
+.dsdl-doc-note {
+  align-self: center;
+  font-size: 0.6875rem;
+  color: var(--muted);
 }
 
 .dsdl-confirm-bar {
@@ -5992,15 +7056,18 @@ details.svc-history-entry[open] > summary::before {
 }
 
 .dsdl-dialog-danger:hover {
+  background: var(--error);
+  border-color: var(--error);
   opacity: 0.85;
 }
 
+/* Not compiled yet: a step still to take, not a fault. */
 .dsdl-ns-row.dsdl-ns-uncompiled .dsdl-ns-label {
-  color: var(--error);
+  color: var(--warn);
 }
 
 .dsdl-type-row.dsdl-type-uncompiled .dsdl-type-name {
-  color: var(--error);
+  color: var(--warn);
 }
 
 .dsdl-info-tip {
@@ -6061,17 +7128,6 @@ details.svc-history-entry[open] > summary::before {
   margin-left: auto;
 }
 
-/* ── Editor: hint when no namespaces ── */
-
-.dsdl-editor-hint {
-  padding: 0.375rem 0.5rem;
-  margin-bottom: 0.5rem;
-  background: var(--warn-muted);
-  color: var(--warn);
-  border-radius: var(--radius);
-  font-size: 0.6875rem;
-  line-height: 1.4;
-}
 
 /* ── Editor locked state ── */
 
@@ -6114,45 +7170,16 @@ details.svc-history-entry[open] > summary::before {
   user-select: none;
 }
 
-.dsdl-preview-section-req .dsdl-preview-label-req {
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.dsdl-preview-section-res .dsdl-preview-label-res {
-  color: var(--warn);
+/* A service's two halves, told apart by their labels and a rule, not colour. */
+.dsdl-preview-label-req,
+.dsdl-preview-label-res {
   font-weight: 600;
 }
 
 .dsdl-preview-section-req,
 .dsdl-preview-section-res {
-  border-left: 0.125rem solid transparent;
+  border-left: 0.125rem solid var(--border);
   padding-left: 0.375rem;
-}
-
-.dsdl-preview-section-req { border-left-color: var(--accent); }
-.dsdl-preview-section-res { border-left-color: var(--warn); }
-
-/* ── Toast ── */
-
-.dsdl-toast {
-  position: absolute;
-  bottom: 0.75rem;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 0.375rem 1rem;
-  border-radius: var(--radius);
-  font-size: 0.6875rem;
-  z-index: 10;
-  animation: dsdl-fade-in 0.2s ease-out;
-}
-
-.dsdl-toast-ok { background: var(--ok-muted); color: var(--ok); }
-.dsdl-toast-error { background: var(--danger-muted, rgba(239,68,68,0.15)); color: var(--danger); }
-
-@keyframes dsdl-fade-in {
-  from { opacity: 0; transform: translateX(-50%) translateY(0.5rem); }
-  to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
 /* ── Record view ──────────────────────────────────────────────── */
@@ -6180,9 +7207,16 @@ details.svc-history-entry[open] > summary::before {
 #recordContainer {
   height: 100%;
   overflow: auto;
+  /* The room for the scrollbar is kept from the start: the tab's width, and
+     so its layout, must not change as the scrollbar comes, once the
+     pickers have taken their columns' widths from it. */
+  scrollbar-gutter: stable;
 }
 
+/* The tab lays itself out by the room it has (see the @container rules
+   below), which the log panel and the sidebar take from the window's. */
 .record-view {
+  container: record-view / inline-size;
   padding: 1rem 1.25rem;
   display: flex;
   flex-direction: column;
@@ -6234,10 +7268,15 @@ details.svc-history-entry[open] > summary::before {
   align-self: flex-start;
 }
 
-/* Two-pane layout: cards on left, builder on right. */
+.record-buffer-chip:empty {
+  display: none;  /* the history not known yet */
+}
+
+/* Two-pane layout: cards on left, builder on right. The builder, with its
+   two pickers side by side, takes two thirds. */
 .record-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
   gap: 1rem;
   align-items: start;
 }
@@ -6246,15 +7285,12 @@ details.svc-history-entry[open] > summary::before {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 0.875rem;
+  align-items: end;  /* the tables line up when a heading takes two lines */
 }
 
-.record-view .tabulator-row.rec-row-highlighted {
-  background: var(--accent-muted) !important;
-}
-
-.record-view .tabulator-row.rec-row-selected {
-  background: var(--accent-muted) !important;
-  box-shadow: inset 3px 0 0 var(--accent);
+/* A clicked node's subjects; the node itself is a selected-row, as in Nodes. */
+.record-view .tabulator .tabulator-row.rec-row-highlighted {
+  background: var(--accent-muted);
 }
 
 .record-view .tabulator-row {
@@ -6271,6 +7307,47 @@ details.svc-history-entry[open] > summary::before {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+/* The recordings' search, above them once there are some. */
+.record-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.record-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.375rem 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 0.8125rem;
+}
+
+.record-search input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 0.125rem var(--accent-muted);
+}
+
+/* "3 of 57", while a search is typed. */
+.record-search-count {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.record-list-error {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--error);
+  background: var(--error-muted);
+  border-radius: 0.375rem;
 }
 
 .record-empty {
@@ -6331,6 +7408,14 @@ details.svc-history-entry[open] > summary::before {
   margin-right: auto;
 }
 
+/* "Saved logs", and the speed their Play buttons play at. */
+.rawlog-saved-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
 .rawlog-speed {
   display: flex;
   align-items: center;
@@ -6366,11 +7451,15 @@ details.svc-history-entry[open] > summary::before {
 }
 
 .record-card.live {
-  border-left: 3px solid var(--error);
+  border-left: 0.1875rem solid var(--error);
 }
 
 .record-card.auto-stopped {
-  border-left: 3px solid var(--warn);
+  border-left: 0.1875rem solid var(--warn);
+}
+
+.record-card.replaying {
+  border-left: 0.1875rem solid var(--accent);
 }
 
 .record-card-head {
@@ -6396,6 +7485,20 @@ details.svc-history-entry[open] > summary::before {
   background: var(--muted);
 }
 
+/* Running, but waiting for CAN: hollow and still. */
+.record-dot.waiting {
+  border: 1px solid var(--error);
+  box-sizing: border-box;
+}
+
+/* After the rules it overrides. */
+@media (prefers-reduced-motion: reduce) {
+  .view-graph-btn.recording-active::after,
+  .record-dot.rec {
+    animation: none;
+  }
+}
+
 .record-name {
   font-weight: 600;
   color: var(--text-bright);
@@ -6413,6 +7516,16 @@ details.svc-history-entry[open] > summary::before {
   font-family: var(--mono, ui-monospace, monospace);
 }
 
+/* A card's name is shown whole, wrapping if need be; its times go under it. */
+.record-card .record-name {
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+.record-card-head .record-meta {
+  flex-basis: 100%;
+}
+
 .record-badge {
   font-size: 0.625rem;
   text-transform: uppercase;
@@ -6427,6 +7540,11 @@ details.svc-history-entry[open] > summary::before {
 .record-badge.record-badge-warn {
   background: var(--warn-muted);
   color: var(--warn);
+}
+
+.record-badge.record-badge-accent {
+  background: var(--accent-muted);
+  color: var(--accent);
 }
 
 .record-card-bars {
@@ -6459,6 +7577,7 @@ details.svc-history-entry[open] > summary::before {
 }
 
 .rec-bar-fill {
+  width: var(--fill, 0%);  /* set per bar, as --fill */
   height: 100%;
   background: var(--accent);
   transition: width 0.3s ease-out;
@@ -6505,6 +7624,41 @@ details.svc-history-entry[open] > summary::before {
   display: flex;
   flex-wrap: wrap;
   gap: 0.375rem;
+}
+
+/* A card's menu of more actions, at the end of its buttons. */
+.record-card-more {
+  position: relative;
+  margin-left: auto;
+}
+
+.record-card-more > summary {
+  display: inline-block;
+  list-style: none;
+}
+
+.record-card-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.record-card-menu {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 8rem;
+  padding: 0.375rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.15);
+}
+
+.record-card-menu .btn-mini {
+  text-align: left;
 }
 
 .record-view .btn-mini {
@@ -6593,11 +7747,66 @@ details.svc-history-entry[open] > summary::before {
   border-radius: 0.25rem;
 }
 
-.record-limits {
-  background: var(--surface-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: 0.25rem;
-  padding: 0.625rem 0.75rem;
+/* Denser than the main tables: two pickers share the pane, and a type
+   should show whole beside its ID, owner and rate. */
+.record-picker.tabulator .tabulator-row .tabulator-cell {
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}
+
+/* An empty picker's words: the tab's muted text, not Tabulator's 20 px bold. */
+.record-picker.tabulator .tabulator-tableholder .tabulator-placeholder .tabulator-placeholder-contents {
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 400;
+}
+
+/* The record bar: what starts a recording, at the top of the tab. */
+.record-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.625rem 0.875rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+}
+
+.record-bar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem 0.75rem;
+}
+
+.record-bar-name {
+  flex: 1 1 14rem;
+}
+
+.record-bar .record-stop-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 2rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.record-bar .record-stop-toggle input[type="checkbox"] {
+  width: auto;  /* not the full width inputs take */
+}
+
+.record-bar .btn-primary,
+.record-bar .btn-secondary {
+  min-height: 2rem;
+}
+
+/* Save the last: kept apart from Start, at the bar's far end. */
+.record-bar-save {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  margin-left: auto;
 }
 
 .record-limit-row {
@@ -6618,7 +7827,8 @@ details.svc-history-entry[open] > summary::before {
   font-weight: 600;
 }
 
-.record-limit-row select {
+.record-limit-row select,
+.record-field select {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 0.25rem;
@@ -6628,17 +7838,22 @@ details.svc-history-entry[open] > summary::before {
   padding: 0.3125rem 0.5rem;
 }
 
-.record-limit-row select:focus {
+.record-limit-row select:focus,
+.record-field select:focus {
   outline: none;
   border-color: var(--accent);
 }
 
 .record-stop-toggle {
-  flex-direction: row !important;
-  align-items: center !important;
-  gap: 0.375rem !important;
   cursor: pointer;
   white-space: nowrap;
+}
+
+/* In the Edit limits dialog, a row where the limits' labels are columns. */
+.record-limit-row > .record-stop-toggle {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.375rem;
 }
 
 .record-stop-toggle input[type="checkbox"] {
@@ -6646,7 +7861,6 @@ details.svc-history-entry[open] > summary::before {
 }
 
 .record-disk-hint {
-  margin-top: 0.5rem;
   font-size: 0.75rem;
   color: var(--muted);
   font-family: var(--mono, ui-monospace, monospace);
@@ -6689,13 +7903,14 @@ details.svc-history-entry[open] > summary::before {
   border-color: var(--accent);
 }
 
-.record-actions {
-  display: flex;
-  gap: 0.5rem;
+.record-start-why {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
 }
 
-.record-view .record-actions .btn-primary {
-  flex: 1;
+.record-start-why:empty {
+  display: none;
 }
 
 /* Edit-limits modal. Singleton appended to body. */
@@ -6765,15 +7980,18 @@ details.svc-history-entry[open] > summary::before {
   border-color: var(--accent);
 }
 
-@media (max-width: 80rem) {
+/* One column below what a 1336 px window leaves the tab beside an open
+   sidebar: narrower, the recordings and the pickers would be cramped. */
+@container record-view (max-width: 64rem) {
   .record-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
-@media (max-width: 48rem) {
+/* The pickers one above the other, as in a phone-wide window. */
+@container record-view (max-width: 45rem) {
   .record-pickers-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -6824,16 +8042,79 @@ details.svc-history-entry[open] > summary::before {
   flex-shrink: 0;
   max-height: 45%;
   overflow-y: auto;
-  padding: 1rem;
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* The bus's health, first: one row of figures, wrapping when narrow. */
+.debug-health {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.75rem;
+}
+
+.debug-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 5rem;
+}
+
+.debug-tile-label {
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.debug-tile-val {
+  font-family: var(--mono);
+  font-size: 0.9375rem;
+  color: var(--text-bright);
+}
+
+.debug-tile-note {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
+.debug-tile-warn .debug-tile-val {
+  color: var(--warn);
+}
+
+.debug-tile-error .debug-tile-val {
+  color: var(--error);
+  font-weight: 600;
+}
+
+/* The cards behind the strip, folded until asked for. */
+.debug-details-summary {
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--text);
+}
+
+.debug-details-hint {
+  margin-left: 0.5rem;
+  color: var(--muted);
+}
+
+.debug-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  /* As tall as the cards: they clip their corners (overflow: hidden), so
+     auto rows would squeeze them into the panel instead of scrolling it. */
+  grid-auto-rows: max-content;
   gap: 1rem;
-  align-content: start;
+  padding-top: 0.75rem;
 }
 
 .debug-empty,
 .debug-error {
-  grid-column: 1 / -1;
   padding: 1.5rem;
   text-align: center;
   font-size: 0.8125rem;
@@ -6847,6 +8128,17 @@ details.svc-history-entry[open] > summary::before {
   color: var(--error);
   border-color: var(--error);
   border-style: solid;
+}
+
+/* A poll failed: the last values stay, dimmed, under a note saying so. */
+.debug-body.debug-stale .debug-health,
+.debug-body.debug-stale .debug-card {
+  opacity: 0.55;
+}
+
+.debug-stale-note {
+  font-size: 0.75rem;
+  color: var(--warn);
 }
 
 .debug-card {
@@ -6887,6 +8179,13 @@ details.svc-history-entry[open] > summary::before {
   border-bottom: none;
 }
 
+/* A card whose interface reports none of its rows (a vcan has no controller). */
+.debug-none {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
 .debug-stat-label {
   color: var(--muted);
 }
@@ -6896,10 +8195,6 @@ details.svc-history-entry[open] > summary::before {
   color: var(--text-bright);
   text-align: right;
   word-break: break-word;
-}
-
-.debug-stat.stat-ok .debug-stat-val {
-  color: var(--ok);
 }
 
 .debug-stat.stat-warn .debug-stat-val {
@@ -6943,13 +8238,13 @@ details.svc-history-entry[open] > summary::before {
   transition: background 0.12s, border-color 0.12s, color 0.12s;
 }
 
-.fm-btn:hover {
+.fm-btn:hover:not(:disabled) {
   background: var(--surface-3);
   border-color: var(--border-hover);
 }
 
 .fm-btn.active {
-  color: #fff;
+  color: var(--on-accent);
   background: var(--accent);
   border-color: var(--accent);
 }
@@ -6960,13 +8255,28 @@ details.svc-history-entry[open] > summary::before {
 }
 
 .fm-btn-primary.active {
-  color: #fff;
+  color: var(--on-accent);
+}
+
+/* Trace or By ID: the sidebar's segmented buttons, the one shown raised. */
+.fm-views {
+  flex: none;
+}
+
+.fm-views .view-seg-btn {
+  flex: none;
+  padding: 0.25rem 0.625rem;
+}
+
+.fm-views .view-seg-btn[aria-pressed="true"] {
+  color: var(--text-bright);
+  background: var(--surface);
 }
 
 .fm-filter {
   flex: 1;
   min-width: 8rem;
-  max-width: 18rem;
+  max-width: 24rem;
   font-family: var(--mono);
   font-size: 0.75rem;
   padding: 0.3125rem 0.5rem;
@@ -6982,16 +8292,34 @@ details.svc-history-entry[open] > summary::before {
   color: var(--muted);
 }
 
+/* Frames the stream lost, and error frames on the bus: the counts that are not routine. */
+.fm-dropped {
+  color: var(--warn);
+}
+
+.fm-errors {
+  color: var(--error);
+}
+
 .fm-status {
   font-size: 0.6875rem;
   color: var(--warn);
 }
 
-.fm-note {
+/* To the Record tab's raw log, which keeps every frame. */
+.fm-link {
   margin-left: auto;
-  font-size: 0.625rem;
-  color: var(--muted);
-  font-style: italic;
+  padding: 0;
+  font-family: var(--sans);
+  font-size: 0.6875rem;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.fm-link:hover {
+  text-decoration: underline;
 }
 
 .fm-table-wrap {
@@ -6999,13 +8327,49 @@ details.svc-history-entry[open] > summary::before {
   min-height: 0;
   overflow: auto;
   position: relative;
+  /* The table keeps the reader's place itself (debug-view.js appendBatch). */
+  overflow-anchor: none;
 }
 
+/* Only the rows in view are drawn (debug-view.js draw): every row is
+   --fm-row-h tall, the pads above and below count rows in it, and the
+   columns keep their widths whichever rows are drawn. */
 .fm-table {
+  --fm-row-h: 1.5rem;
   width: 100%;
-  border-collapse: collapse;
+  min-width: 55.5rem;  /* the columns, and 8 data bytes */
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
   font-family: var(--mono);
   font-size: 0.6875rem;
+}
+
+/* A CAN FD frame's 64 data bytes. */
+.fm-table.fm-fd {
+  min-width: 130rem;
+}
+
+.fm-col-time { width: 6.5rem; }
+.fm-col-delta { width: 4.75rem; }
+.fm-col-dir { width: 2.75rem; }
+.fm-col-id { width: 5.75rem; }
+.fm-col-prio { width: 5.5rem; }  /* "immediate"; the rare "exceptional" is cut */
+.fm-col-transfer { width: 10.5rem; }
+.fm-col-tid { width: 2.5rem; }
+.fm-col-flags { width: 3.5rem; }
+.fm-col-len { width: 2.5rem; }
+.fm-col-count { width: 4.75rem; }
+.fm-col-age { width: 3.75rem; }
+
+.fm-pad td {
+  height: calc(var(--fm-above, 0) * var(--fm-row-h));
+  padding: 0;
+  border: 0;
+}
+
+.fm-pad-below td {
+  height: calc(var(--fm-below, 0) * var(--fm-row-h));
 }
 
 .fm-table thead th {
@@ -7013,7 +8377,7 @@ details.svc-history-entry[open] > summary::before {
   top: 0;
   z-index: 1;
   text-align: left;
-  padding: 0.375rem 0.625rem;
+  padding: 0.375rem 0.5rem;
   font-family: var(--sans);
   font-size: 0.625rem;
   font-weight: 600;
@@ -7024,11 +8388,20 @@ details.svc-history-entry[open] > summary::before {
   border-bottom: 1px solid var(--border);
 }
 
+/* A unit in a heading keeps its case: ms, not MS. */
+.fm-unit {
+  text-transform: none;
+}
+
 .fm-row td {
-  padding: 0.1875rem 0.625rem;
+  box-sizing: border-box;
+  height: var(--fm-row-h);
+  padding: 0 0.5rem;
   color: var(--text);
   border-bottom: 1px solid var(--border-subtle);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .fm-row.fm-foreign td {
@@ -7037,6 +8410,13 @@ details.svc-history-entry[open] > summary::before {
 
 .fm-time { color: var(--muted); }
 .fm-id { color: var(--text-bright); }
+.fm-prio { color: var(--muted); }
+.fm-delta { color: var(--muted); text-align: right; }
+.fm-count { text-align: right; }
+.fm-age { color: var(--muted); text-align: right; }
+.fm-age.fm-quiet { color: var(--warn); }
+.fm-ids-full { color: var(--muted); font-family: var(--sans); }
+.fm-tid,
 .fm-len { text-align: right; }
 
 .fm-data {
@@ -7054,8 +8434,9 @@ details.svc-history-entry[open] > summary::before {
   font-weight: 600;
 }
 
-.fm-dir.fm-rx { color: var(--accent); background: var(--accent-muted); }
-.fm-dir.fm-tx { color: var(--ok); background: rgba(26, 127, 55, 0.12); }
+/* Received is the usual, so plain; Cynitor's own frames stand out. */
+.fm-dir.fm-rx { color: var(--muted); background: var(--surface-3); }
+.fm-dir.fm-tx { color: var(--ok); background: var(--ok-muted); }
 
 .fm-kind {
   display: inline-block;
@@ -7066,6 +8447,12 @@ details.svc-history-entry[open] > summary::before {
 }
 
 .fm-kind-req, .fm-kind-resp { color: var(--accent); }
+
+/* An error frame: the controller saw the bus go wrong. */
+.fm-row.fm-error-frame .fm-id,
+.fm-row.fm-error-frame .fm-error-says {
+  color: var(--error);
+}
 
 .fm-foreign-tag {
   color: var(--warn);

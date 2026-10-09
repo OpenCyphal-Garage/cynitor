@@ -50,7 +50,8 @@ class FilterMatcher:
             return True
         if ev.get("service_id") in self.service_ids:
             return True
-        if ev.get("node_id") in self.node_ids:
+        # A call's node_id is its server's; the node that calls is in it too.
+        if ev.get("node_id") in self.node_ids or ev.get("client_node_id") in self.node_ids:
             return True
         return False
 
@@ -576,10 +577,10 @@ class EventLogger:
         event_type: str,
         detail: Optional[dict] = None,
         unique_id: Optional[str] = None,
-    ) -> list[tuple[int, str]]:
-        """Write a node-history row. For 'service_call', also route to matching
-        active recordings. Returns auto-stop list (mirrors _write_events_sync)."""
-        auto_stop: list[tuple[int, str]] = []
+    ) -> None:
+        """Write a node-history row. A 'service_call' (one made from the Services
+        panel) is not recorded from here: recordings hear every call on the bus
+        (see log_service_calls)."""
         now = time.time()
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -594,55 +595,91 @@ class EventLogger:
                 cutoff = now - self.NODE_HISTORY_RETENTION_DAYS * 86400
                 cursor.execute("DELETE FROM node_history WHERE timestamp_unix < ?", (cutoff,))
 
-            if event_type == "service_call" and detail:
-                service_id = detail.get("service_id")
-                probe = {"service_id": service_id, "node_id": node_id}
+    async def log_node_event(self, node_id: int, event_type: str, detail: Optional[dict] = None, unique_id: Optional[str] = None) -> None:
+        try:
+            await asyncio.to_thread(self._log_node_event_sync, node_id, event_type, detail, unique_id)
+            logger.debug(f"Node history: node={node_id} uid={unique_id} type={event_type}")
+        except Exception as e:
+            logger.error(f"Failed to log node event: {e}", exc_info=True)
+
+    # ------------------------------------------------------------------
+    # Service calls heard on the bus, for the recordings (service_calls)
+    # ------------------------------------------------------------------
+
+    @property
+    def recording(self) -> bool:
+        """Whether a live recording is running."""
+        return bool(self._active_recordings)
+
+    def wants_service_call(self, call: dict) -> bool:
+        """Whether a live recording's filter takes ``call``: its service_id,
+        node_id (the server's) and client_node_id."""
+        with self._active_lock:
+            return any(info["matcher"].matches_service(call) for info in self._active_recordings.values())
+
+    def _log_service_calls_sync(self, calls: list[dict]) -> list[tuple[int, str]]:
+        """Write calls to the live recordings that take them. Returns the
+        auto-stop list (mirrors _write_events_sync)."""
+        auto_stop: list[tuple[int, str]] = []
+        counted: dict[int, int] = {}  # recording id -> event_count, written once per batch
+        now = time.time()
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            for call in calls:
                 with self._active_lock:
                     targets = [
                         (rid, info) for rid, info in self._active_recordings.items()
-                        if info["matcher"].matches_service(probe)
+                        if info["matcher"].matches_service(call)
                     ]
                 for rid, info in targets:
-                    self._insert_service_event_sync(cursor, rid, node_id, unique_id, detail, now)
+                    self._insert_service_event_sync(
+                        cursor, rid, call["node_id"], call.get("unique_id"), call, call["timestamp_unix"])
                     info["event_count"] += 1
-                    cursor.execute(
-                        "UPDATE recordings SET event_count = ? WHERE id = ?",
-                        (info["event_count"], rid),
-                    )
+                    counted[rid] = info["event_count"]
                     if info.get("stop_on_limit"):
                         reason = self._limit_breached(info, now)
                         if reason and rid not in {r for r, _ in auto_stop}:
                             auto_stop.append((rid, reason))
                             with self._active_lock:
                                 self._active_recordings.pop(rid, None)
+            cursor.executemany(
+                "UPDATE recordings SET event_count = ? WHERE id = ?",
+                [(count, rid) for rid, count in counted.items()],
+            )
         return auto_stop
 
-    async def log_node_event(self, node_id: int, event_type: str, detail: Optional[dict] = None, unique_id: Optional[str] = None) -> None:
+    async def log_service_calls(self, calls: list[dict]) -> None:
+        """Record service calls heard on the bus (see service_calls): each a dict
+        of service_id, service_type, node_id (the server's), unique_id,
+        client_node_id, status, latency_ms, request, response, timestamp_unix."""
         try:
-            auto_stop = await asyncio.to_thread(self._log_node_event_sync, node_id, event_type, detail, unique_id)
-            logger.debug(f"Node history: node={node_id} uid={unique_id} type={event_type}")
+            auto_stop = await asyncio.to_thread(self._log_service_calls_sync, calls)
         except Exception as e:
-            logger.error(f"Failed to log node event: {e}", exc_info=True)
+            logger.error(f"Failed to record service calls: {e}", exc_info=True)
             return
         for rid, reason in auto_stop:
             await self._auto_stop_recording(rid, reason)
 
     def _get_node_history_sync(
         self,
-        node_id: int,
+        node_id: Optional[int],
         since_unix: Optional[float] = None,
         event_types: Optional[list[str]] = None,
         limit: int = 200,
         unique_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
+        """A node's lifecycle events, newest first; every node's when node_id is None."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             if unique_id:
                 query = "SELECT * FROM node_history WHERE unique_id = ?"
                 params: list[Any] = [unique_id]
-            else:
+            elif node_id is not None:
                 query = "SELECT * FROM node_history WHERE node_id = ?"
                 params = [node_id]
+            else:
+                query = "SELECT * FROM node_history WHERE 1 = 1"
+                params = []
             if since_unix is not None:
                 query += " AND timestamp_unix >= ?"
                 params.append(since_unix)
@@ -667,7 +704,7 @@ class EventLogger:
 
     async def get_node_history(
         self,
-        node_id: int,
+        node_id: Optional[int],
         since_unix: Optional[float] = None,
         event_types: Optional[list[str]] = None,
         limit: int = 200,
@@ -953,11 +990,8 @@ class EventLogger:
                 node_id,
                 unique_id,
                 detail.get("service_type"),
-                json.dumps({
-                    "status": detail.get("status"),
-                    "latency_ms": detail.get("latency_ms"),
-                    "response": detail.get("response"),
-                }),
+                json.dumps({field: detail.get(field) for field in
+                            ("client_node_id", "status", "latency_ms", "request", "response")}),
             ),
         )
 

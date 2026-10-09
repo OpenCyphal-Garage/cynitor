@@ -132,3 +132,17 @@ class TestShowTokenOnTerminal:
         out = self._Tty()
         main.show_token_on_terminal("secret-value", out)
         assert "secret-value" not in caplog.text
+
+
+class TestBoundAddress:
+    """The banner's "Bound to" line: a link to click, unless no browser could open it."""
+
+    @pytest.mark.parametrize("bind, shown", [
+        ("127.0.0.1", "http://127.0.0.1:8080/"),
+        ("192.168.1.20", "http://192.168.1.20:8080/"),
+        ("::1", "http://[::1]:8080/"),
+        ("0.0.0.0", "0.0.0.0:8080 (all interfaces)"),
+        ("::", "[::]:8080 (all interfaces)"),
+    ])
+    def test_shown(self, bind, shown):
+        assert main.bound_address(bind, 8080) == shown

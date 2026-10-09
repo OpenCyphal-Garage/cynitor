@@ -47,6 +47,9 @@ class ReplayManager:
         # _reanchor set tells the run loop to recompute the wall-clock anchor on
         # its next iteration (after seek or speed change).
         self._reanchor = asyncio.Event()
+        # _control is set by stop, pause, seek and speed changes, so that the
+        # wait for the next event's time ends at once and the loop acts on them.
+        self._control = asyncio.Event()
 
         # Boundaries of the recording, populated on start():
         self._first_event_unix: Optional[float] = None
@@ -66,6 +69,9 @@ class ReplayManager:
         # Optional callback fired once on auto-stop, so the WS layer can clear
         # session.replay without polling.
         self._on_finish: Optional[Any] = None
+        # GET /api/nodes during this replay, read from the recording once (see
+        # websocket_server): its publishers stay as recorded while it plays.
+        self.nodes_payload: Optional[dict[str, Any]] = None
 
     # ------------------------------------------------------------------
     # Subscriber management (same shape as TelemetryManager)
@@ -131,13 +137,13 @@ class ReplayManager:
             return
         self._stop.set()
         self._paused.set()  # un-pause so the run loop can exit
+        self._control.set()
         try:
             await self._task
         except asyncio.CancelledError:
             pass
         finally:
-            self._task = None
-            self._notify_session_end()
+            self._task = None  # _run has said the session ended
             self.subscribers.clear()
 
     def _notify_session_end(self) -> None:
@@ -159,6 +165,7 @@ class ReplayManager:
 
     def pause(self) -> None:
         self._paused.clear()
+        self._control.set()
 
     def resume(self) -> None:
         self._anchor_now()
@@ -168,10 +175,12 @@ class ReplayManager:
         position_s = max(0.0, min(float(position_s), self.duration_s))
         self._position_s = position_s
         self._reanchor.set()
+        self._control.set()
 
     def set_speed(self, speed: float) -> None:
         self._speed = max(0.1, min(50.0, float(speed)))
         self._reanchor.set()
+        self._control.set()
 
     # ------------------------------------------------------------------
     # Status
@@ -224,7 +233,8 @@ class ReplayManager:
         except Exception as exc:
             logger.error("Replay task crashed: %s", exc, exc_info=True)
         finally:
-            self._finished.set()
+            if not self._stop.is_set():  # played to the end, not stopped
+                self._finished.set()
             self._notify_session_end()
             if self._on_finish is not None:
                 try:
@@ -254,12 +264,14 @@ class ReplayManager:
                     p.cancel()
                 if self._stop.is_set():
                     break
+            self._control.clear()  # acted on below, or by the checks in the row loop
 
             # Honor any pending seek / speed change before reading the next batch
             if self._reanchor.is_set():
                 self._reanchor.clear()
                 cursor_unix = self._first_event_unix + self._position_s
                 cursor_id = -1
+                self._events_emitted = await asyncio.to_thread(self._count_before_sync, cursor_unix)
                 self._anchor_now()
 
             batch = await asyncio.to_thread(
@@ -287,10 +299,10 @@ class ReplayManager:
                 if delay > 0:
                     try:
                         # Wait, but yield early on stop/pause/reanchor so we don't
-                        # sleep past a user action.
-                        await asyncio.wait_for(self._stop.wait(), timeout=delay)
-                        # If wait_for returned without TimeoutError, stop was set
-                        return
+                        # sleep past a user action, nor play this row after it:
+                        # a seek's position would be overwritten by this row's.
+                        await asyncio.wait_for(self._control.wait(), timeout=delay)
+                        break  # the outer loop acts on it
                     except asyncio.TimeoutError:
                         pass
 
@@ -314,6 +326,16 @@ class ReplayManager:
             ).fetchone()
         count = int(row[0] or 0)
         return (row[1], row[2], count)
+
+    def _count_before_sync(self, before_unix: float) -> int:
+        """Events earlier than before_unix: those played by the time a seek lands there."""
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM recording_events"
+                " WHERE recording_id = ? AND kind = 'subject' AND timestamp_unix < ?",
+                (self.recording_id, before_unix),
+            ).fetchone()
+        return int(row[0] or 0)
 
     def _read_batch_sync(self, after_unix: float, after_id: int) -> list[dict[str, Any]]:
         with sqlite3.connect(self.db_path) as conn:

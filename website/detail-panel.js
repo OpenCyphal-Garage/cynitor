@@ -2,15 +2,28 @@
 // tabs), client cards, and the per-row selection helpers used by nodes-table.js.
 // Plot code lives in plot.js.
 
+// A value as a card shows it, to two decimals, an array's elements alike; and
+// in full, for its tooltip.
+const _metricNumber = (v) => (typeof v === 'number' && !Number.isInteger(v) ? v.toFixed(2) : String(v ?? '-'));
+const metricText = (value) => (Array.isArray(value) ? `[${value.map(_metricNumber).join(', ')}]` : _metricNumber(value));
+const metricTitle = (value) => (Array.isArray(value) ? `[${value.join(', ')}]` : String(value ?? '-'));
+
 const renderMetric = (a, subjectId) => {
   const statusCls = getStatusClass(a.attribute, a.value);
-  const rawStr = String(a.value ?? '-');
-  const displayStr = typeof a.value === 'number' && !Number.isInteger(a.value)
-    ? a.value.toFixed(2) : rawStr;
+  const rawStr = metricTitle(a.value);
+  const displayStr = metricText(a.value);
   const minW = getMetricMinWidth(subjectId, a.attribute, displayStr);
   const unitStr = a.unit ? `<span class="metric-unit">${escapeHtml(a.unit)}</span>` : '';
   const valCls = `metric-val${statusCls ? ' ' + statusCls : ''}`;
   return `<span class="metric" data-subject="${subjectId}" data-attr="${escapeHtml(a.attribute)}"><span class="metric-key">${escapeHtml(a.attribute)}</span><span class="${valCls}" title="${escapeHtml(rawStr)}"><span class="metric-val-text" style="min-width:${minW}ch">${escapeHtml(displayStr)}</span>${unitStr}</span></span>`;
+};
+
+// A card's rate, with a dot while messages flow; "silent" once they stopped.
+const cardRateHtml = (s) => {
+  if (s.silent) return '<span class="status-warn">silent</span>';
+  if (s.rate == null) return '';
+  const text = s.rate < 1 ? '<1 Hz' : `${Number(s.rate).toFixed(1)} Hz`;
+  return `${s.rate > 0 ? '<span class="live-dot"></span>' : ''}${escapeHtml(text)}`;
 };
 
 const renderSubjectTable = (title, subjects) => {
@@ -18,19 +31,16 @@ const renderSubjectTable = (title, subjects) => {
     return `<div class="subject-cards"><div class="detail-empty">No ${title.toLowerCase()} discovered.</div></div>`;
   }
   const cards = subjects.map((s) => {
-    const rateStr = s.rate != null ? (s.rate < 1 ? '<1 Hz' : `${Number(s.rate).toFixed(1)} Hz`) : '';
-    const liveDot = s.rate != null && s.rate > 0
-      ? '<span class="live-dot"></span>' : '';
     const metrics = s.attributes.length
       ? `<div class="card-metrics">${s.attributes.map((a) => renderMetric(a, s.subjectId)).join('')}</div>`
-      : '<div class="card-metrics"><span class="metrics-empty">no telemetry data</span></div>';
+      : '<div class="card-metrics"><span class="metrics-empty">no message yet</span></div>';
 
     return `<div class="subject-card" data-subject="${s.subjectId}" tabindex="0" role="button">
       <div class="card-header">
         <span class="card-subject-id">${escapeHtml(String(s.subjectId))}</span>
         <span class="card-type" title="${escapeHtml(s.messageType || '')}">${escapeHtml(
-          s.messageType || (s.untyped ? 'type unknown · set it in Subjects' : 'awaiting data'))}</span>
-        <span class="card-rate">${liveDot}${escapeHtml(rateStr)}</span>
+          s.messageType || (s.untyped ? 'type unknown · set it in Subjects' : 'type not known yet'))}</span>
+        <span class="card-rate">${cardRateHtml(s)}</span>
       </div>
       ${metrics}
     </div>`;
@@ -50,6 +60,13 @@ const updateSubjectTableInPlace = (container, subjects) => {
   }
 
   for (const s of subjects) {
+    // The rate too, not only the values: it changes, and stops.
+    const rateEl = wrap.querySelector(`.subject-card[data-subject="${s.subjectId}"] .card-rate`);
+    if (!rateEl) return false;
+    const freshRate = document.createElement('span');
+    freshRate.innerHTML = cardRateHtml(s);
+    patchChildren(rateEl, freshRate);
+
     for (const a of s.attributes) {
       const metric = wrap.querySelector(`.metric[data-subject="${s.subjectId}"][data-attr="${a.attribute}"]`);
       if (!metric) return false;
@@ -58,9 +75,8 @@ const updateSubjectTableInPlace = (container, subjects) => {
       const valText = valEl?.querySelector('.metric-val-text');
       if (!valText) return false;
 
-      const rawStr = String(a.value ?? '-');
-      const displayStr = typeof a.value === 'number' && !Number.isInteger(a.value)
-        ? a.value.toFixed(2) : rawStr;
+      const rawStr = metricTitle(a.value);
+      const displayStr = metricText(a.value);
 
       if (valText.textContent !== displayStr) {
         const minW = getMetricMinWidth(s.subjectId, a.attribute, displayStr);
@@ -80,7 +96,7 @@ const updateSubjectTableInPlace = (container, subjects) => {
 const renderClientCards = (clients, enrichedMap) => {
   const cards = clients.map((clientId) => {
     const info = enrichedMap.get(clientId);
-    const typeName = info?.full_type || '';
+    const typeName = dsdlTypeName(info?.full_type) || '';
     const serverNodes = info?.server_nodes || [];
     const serverHtml = serverNodes.length
       ? `<span class="svc-client-servers" title="Nodes serving this service">→ node ${serverNodes.join(', ')}</span>`
@@ -100,8 +116,9 @@ const renderClientsTab = async () => {
   const content = el('selectedNodeContent');
   const nodeId = state.selectedNodeId;
 
-  if (!state.dashboardConnected || state.canState !== CONN.CONNECTED) {
-    content.innerHTML = svcStateMsg('○', 'No clients advertised', 'Connect to the CAN bus to see client info.');
+  const placeholder = connectionPlaceholder('see client info');
+  if (placeholder) {
+    content.innerHTML = placeholder;
     return;
   }
   if (nodeId == null) {
@@ -222,7 +239,8 @@ const renderSelectedNodeContent = () => {
     content.innerHTML = `${staleBanner}<div class="detail-split${isOffline ? ' svc-panel-stale' : ''}">
       <div class="detail-subject-list" style="flex:0 0 ${pct}%">${renderSubjectTable(title, subjects)}</div>
       <div class="detail-split-handle"></div>
-      <div class="detail-plot-area">${''}
+      <div class="detail-plot-area">${selected == null
+        ? '<div class="plot-empty">Click a subject to plot its data</div>' : ''}
       </div>
     </div>`;
     content.querySelectorAll('.subject-card').forEach((card) => {

@@ -44,10 +44,14 @@ const bind = () => {
     if (el('canBitrateSelect').value === 'custom') el('canBitrateCustom').focus();
   });
   el('canBitrateCustom').addEventListener('input', updateCanConnectButton);
-  el('sidebarCollapseBtn').addEventListener('click', () => {
+  const sidebarToggle = el('sidebarCollapseBtn');
+  const showSidebarState = () => sidebarToggle.setAttribute('aria-expanded', String(!state.sidebarCollapsed));
+  showSidebarState();
+  sidebarToggle.addEventListener('click', () => {
     const sidebar = document.querySelector('.sidebar');
     sidebar.classList.toggle('collapsed');
     state.sidebarCollapsed = sidebar.classList.contains('collapsed');
+    showSidebarState();
     saveSettings();
   });
 
@@ -71,6 +75,15 @@ const bind = () => {
   const updateCollapseChevron = () => {
     collapseBtn.classList.toggle('pointing-up', state.detailPanelCollapsed);
   };
+
+  // A plot stops drawing while the panel is collapsed; expanded again, it
+  // has to be started again, or it stays frozen at the moment of collapse.
+  const resumePlot = () => {
+    if (!state.detailPanelCollapsed && !state.plotTimer
+        && el('selectedNodeContent')?.querySelector('.detail-plot-area')) {
+      startPlotAnim();
+    }
+  };
   updateCollapseChevron();
 
   collapseBtn.addEventListener('click', () => {
@@ -88,6 +101,7 @@ const bind = () => {
       state._subjectsDetailCollapsed = state.detailPanelCollapsed;
     }
     updateCollapseChevron();
+    resumePlot();
     saveSettings();
   });
 
@@ -139,6 +153,7 @@ const bind = () => {
         state._subjectsDetailCollapsed = state.detailPanelCollapsed;
       }
       updateCollapseChevron();
+      resumePlot();
       saveSettings();
     };
   })();
@@ -156,6 +171,7 @@ const bind = () => {
       state._subjectsDetailCollapsed = false;
     }
     updateCollapseChevron();
+    resumePlot();
     saveSettings();
   });
 
@@ -168,6 +184,7 @@ const bind = () => {
       html.setAttribute('data-theme', 'dark');
     }
     el('themeToggle').setAttribute('aria-checked', String(!isDark));
+    redrawPlotsInTheme();
     saveSettings();
   });
   el('apiBase').addEventListener('change', saveSettings);
@@ -193,6 +210,8 @@ const bind = () => {
   const selectSubjectCard = (card) => {
     const sid = Number(card.dataset.subject);
     state.selectedPlotSubject = sid;
+    state.plotPaused = false;  // a subject just picked plots live, as in Subjects
+    state.plotPausedAt = null;
     el('selectedNodeContent').querySelectorAll('.subject-card').forEach((c) => {
       c.classList.toggle('selected', Number(c.dataset.subject) === sid);
     });
@@ -256,7 +275,19 @@ updateSemaphores();
   let serverDown = false;
   let consecutiveFailures = 0;
 
-  const tearDown = () => disconnectAll({ persist: false });
+  // The server it names is the page's own: Cynitor's backend, or during
+  // development a static server on 5500, which it says how to start.
+  el('serverDownHost').textContent = window.location.host;
+  const devServer = window.location.port === '5500';
+  el('serverDownHint').classList.toggle('hidden', devServer);
+  el('serverDownDevHint').classList.toggle('hidden', !devServer);
+
+  // The page reloads once its server is back, and a session it had goes on then.
+  const tearDown = () => {
+    const wanted = state.dashboardConnected || Boolean(state.dashboardRetry);
+    disconnectAll({ persist: false });
+    if (wanted) state.pendingReconnect = true;
+  };
 
   const check = async () => {
     try {

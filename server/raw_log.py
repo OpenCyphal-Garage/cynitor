@@ -107,11 +107,13 @@ class SocketcanTap:
     and those of any other program here, such as every node on a vcan.
     """
 
-    def __init__(self, device: str, fd: bool, on_frame: Callable[[can.Message], None]) -> None:
-        self._bus = can.Bus(interface="socketcan", channel=device, fd=fd)
+    def __init__(self, device: str, fd: bool, on_frame: Callable[[can.Message], None],
+                 can_filters: Optional[list] = None, name: str = "raw-log") -> None:
+        # can_filters are applied by the kernel: frames they reject never reach Python.
+        self._bus = can.Bus(interface="socketcan", channel=device, fd=fd, can_filters=can_filters)
         self._on_frame = on_frame
         self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, name=f"raw-log-{device}", daemon=True)
+        self._thread = threading.Thread(target=self._run, name=f"{name}-{device}", daemon=True)
         self._thread.start()
 
     def _run(self) -> None:
