@@ -1104,7 +1104,7 @@ GET    /api/recordings/{rec_id}/export?format=csv      → text/csv stream
 GET    /api/recordings/{rec_id}/export?format=jsonl    → application/x-ndjson stream
 ```
 
-CSV columns: `recording_id, timestamp_unix, timestamp, subject_id, publisher_node_id, unique_id, message_type, rate, attribute, value, unit`. One row per attribute (events with N attributes → N rows). Service-call rows currently appear with their `service_id` in the `subject_id` column and service metadata in `attributes_json` — a future CSV revision may add a dedicated `kind`/`service_id` column.
+CSV columns: `recording_id, timestamp_unix, timestamp, subject_id, service_id, publisher_node_id, unique_id, message_type, rate, attribute, value, unit`. One row per attribute (events with N attributes → N rows). A service call fills `service_id` instead of `subject_id`, gives its server's node-ID as `publisher_node_id` and its type as `message_type`, and takes a row per field of the call (`status`, `latency_ms`, `response`), the field's name in `attribute`.
 
 JSONL (JSON Lines) streams one JSON object per line. The first line is a header: `{ "recording": {...}, "exported_at_unix": float }`. Every subsequent line is a single event object with `kind`, `subject_id`/`service_id`, `timestamp_unix`, `attributes`, etc. Streamed with the same pagination as CSV — no hard event cap.
 

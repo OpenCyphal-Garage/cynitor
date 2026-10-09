@@ -1171,7 +1171,7 @@ class WebSocketServer:
             }
         )
         await resp.prepare(request)
-        header = "recording_id,timestamp_unix,timestamp,subject_id,publisher_node_id,unique_id,message_type,rate,attribute,value,unit\n"
+        header = "recording_id,timestamp_unix,timestamp,subject_id,service_id,publisher_node_id,unique_id,message_type,rate,attribute,value,unit\n"
         await resp.write(header.encode("utf-8"))
 
         offset = 0
@@ -1188,12 +1188,15 @@ class WebSocketServer:
                     f"{ev['timestamp_unix']:.6f}" if ev.get("timestamp_unix") is not None else "",
                     _csv_escape(ev.get("timestamp")),
                     _csv_escape(ev.get("subject_id")),
+                    _csv_escape(ev.get("service_id")),
                     _csv_escape(ev.get("publisher_node_id")),
                     _csv_escape(ev.get("unique_id")),
                     _csv_escape(ev.get("message_type")),
                     _csv_escape(ev.get("rate")),
                 ]
                 attrs = ev.get("attributes") or []
+                if isinstance(attrs, dict):  # a service call's fields, a row each
+                    attrs = [{"attribute": name, "value": value} for name, value in attrs.items()]
                 if not attrs:
                     lines.append(",".join(base + ["", "", ""]))
                 else:

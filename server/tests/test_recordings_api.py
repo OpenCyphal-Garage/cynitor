@@ -1,6 +1,9 @@
 """Tests for the /api/recordings REST endpoints."""
 
+import csv
+import io
 import json
+import sqlite3
 import time
 import pytest
 from unittest.mock import AsyncMock, MagicMock
@@ -257,6 +260,22 @@ class TestExport:
         body = await resp.text()
         # The message_type cell must be quoted, with internal quotes doubled
         assert '"msg,with,commas ""and quotes"""' in body
+
+    @pytest.mark.asyncio
+    async def test_csv_gives_a_service_call_its_service_id_and_a_row_per_field(self, client, event_logger_real):
+        rid = await event_logger_real.create_recording(name="x", filter_spec={"service_ids": [384]})
+        detail = {"service_id": 384, "service_type": "uavcan.register.Access_1_0", "status": "ok",
+                  "latency_ms": 7, "response": '{"value": 42}'}
+        with sqlite3.connect(event_logger_real.db_path) as conn:
+            event_logger_real._insert_service_event_sync(conn.cursor(), rid, 12, None, detail, time.time())
+        resp = await client.get(f"/api/recordings/{rid}/export?format=csv")
+        rows = list(csv.DictReader(io.StringIO(await resp.text())))
+        assert [(r["subject_id"], r["service_id"], r["publisher_node_id"], r["message_type"], r["attribute"], r["value"])
+                for r in rows] == [
+            ("", "384", "12", "uavcan.register.Access_1_0", "status", "ok"),
+            ("", "384", "12", "uavcan.register.Access_1_0", "latency_ms", "7"),
+            ("", "384", "12", "uavcan.register.Access_1_0", "response", '{"value": 42}'),
+        ]
 
 
 class TestLimits:
