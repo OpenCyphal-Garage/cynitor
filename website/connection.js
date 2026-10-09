@@ -107,8 +107,33 @@ const renderV11Notice = () => {
     + 'v1.1 topics are not shown unless the device pins them to a v1.0 subject-ID.';
 };
 
+// Errors on the bus: the CAN controller in an error state, or its error
+// counters growing. Most often the bus is not terminated, or a node runs
+// another bitrate; the backend logs it once, and this shows it while it lasts.
+const BUS_ERROR_CAUSES = 'Usual causes: the bus is not terminated (120 Ω at each end, about 60 Ω across '
+  + 'CAN_H and CAN_L with the power off), a node runs another bitrate or sample point, CAN_H and CAN_L '
+  + 'are swapped or loose, or no other node is on the bus to acknowledge frames. '
+  + "The Debug tab shows the controller's counters.";
+const renderBusNotice = () => {
+  const notice = el('canBusNotice');
+  if (!notice) return;
+  const errors = state.canConnected ? state.busErrors : null;
+  notice.classList.toggle('hidden', !errors);
+  if (!errors) return;
+  // The counters, which change with every poll, only in the title: a screen
+  // reader is told again when the state changes, not every few seconds.
+  const what = ['Bus errors', errors.state].filter(Boolean).join(' · ');
+  const html = `${escapeHtml(what)}<span class="can-bus-notice-hint">Check 120 Ω termination and bitrate</span>`;
+  if (notice.innerHTML !== html) notice.innerHTML = html;
+  const counted = errors.tx_errors != null && errors.rx_errors != null
+    ? ` The controller's error counters: TX ${errors.tx_errors}, RX ${errors.rx_errors} (128 or more is error-passive).`
+    : '';
+  notice.title = `Errors on the bus since ${formatPlotTime(errors.since_unix)}.${counted} ${BUS_ERROR_CAUSES}`;
+};
+
 const updateSemaphores = () => {
   renderV11Notice();
+  renderBusNotice();
   const serverDot = el('serverSemaphore');
   const canDot = el('canSemaphore');
   const serverInfo = el('serverThroughput');
@@ -126,7 +151,7 @@ const updateSemaphores = () => {
     } else if (state.canConnecting) {
       canDot.className = 'semaphore connecting';
     } else if (state.canConnected) {
-      canDot.className = 'semaphore ok';
+      canDot.className = state.busErrors ? 'semaphore warn' : 'semaphore ok';
     } else {
       canDot.className = 'semaphore';
     }
@@ -693,6 +718,7 @@ const pollStatus = async () => {
   state.busUtilization = data.bus_utilization ?? null;
   state.droppedEvents = data.dropped ?? null;
   state.cyphalV11 = data.cyphal_v11 ?? null;
+  state.busErrors = data.bus_errors ?? null;
 
   const backendCanRunning = data.status === 'running' && !!data.can_interface;
 

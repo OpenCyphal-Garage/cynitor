@@ -5325,6 +5325,7 @@ class _SidebarServer:
         self.last_error = None     # why the backend last ended a CAN session itself
         self.token = None          # the CYNITOR_AUTH_TOKEN it wants, if any
         self.connect_delay = 0     # seconds a CAN connect takes
+        self.bus_errors = None     # what it says of errors on the bus, while connected
 
     async def handle(self, route):
         if self.down:
@@ -5341,7 +5342,8 @@ class _SidebarServer:
                       "can_bitrate": None, "can_data_bitrate": None, "can_fd": False,
                       "available_interfaces": ["vcan0"], "available_adapters": self.adapters,
                       "bus_utilization": 30.0 if self.can else None, "dropped": None,
-                      "last_error": self.last_error, "cyphal_v11": None}
+                      "last_error": self.last_error, "cyphal_v11": None,
+                      "bus_errors": self.bus_errors if self.can else None}
         elif path == "/api/can/connect" and self.connect_error:
             await route.fulfill(json={"error": self.connect_error}, status=500,
                                 headers={"Access-Control-Allow-Origin": "*"})
@@ -5422,6 +5424,35 @@ async def _(page):
             says: document.querySelector('#nodesTable .tabulator-placeholder')?.innerText || ''})""")
         assert shown and after["rows"] == 0 and not after["curve"] and "CAN bus not connected" in after["says"], \
             f"Connected, the curve was shown: {shown}; after CAN Disconnect: {after}"
+    finally:
+        await sidebar_close(page, server)
+
+
+@test("Sidebar: errors on the bus show under the CAN status, its dot amber, until they stop")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        await page.locator("#connectCanBtn").click()
+        await page.wait_for_function("state.canState === 'connected'", timeout=WAIT_MS)
+        notice, dot = page.locator("#canBusNotice"), page.locator("#canSemaphore")
+        before = (await notice.is_hidden(), await dot.get_attribute("class"))
+        # A bus without its terminator, as the backend reports it.
+        server.bus_errors = {"state": "ERROR-PASSIVE", "tx_errors": 0, "rx_errors": 128, "since_unix": time.time()}
+        await page.evaluate("pollStatus()")  # the 5 s poll, without waiting for it
+        await notice.wait_for(state="visible", timeout=WAIT_MS)
+        text = " ".join((await notice.inner_text()).split())
+        title, during = await notice.get_attribute("title"), await dot.get_attribute("class")
+        server.bus_errors = None
+        await page.evaluate("pollStatus()")
+        await notice.wait_for(state="hidden", timeout=WAIT_MS)
+        after = await dot.get_attribute("class")
+        assert before == (True, "semaphore ok"), f"With no errors, notice hidden and the dot: {before}"
+        assert text == "Bus errors · ERROR-PASSIVE Check 120 Ω termination and bitrate", f"Notice: {text}"
+        assert "120 Ω at each end" in title and "TX 0, RX 128" in title, f"Its title: {title}"
+        assert (during, after) == ("semaphore warn", "semaphore ok"), f"The dot with errors, then without: {during}, {after}"
     finally:
         await sidebar_close(page, server)
 

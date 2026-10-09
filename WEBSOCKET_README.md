@@ -27,7 +27,7 @@ TelemetryManager (pub-sub router)
 ✅ **Browser Origin Policy** - The API accepts browser requests only from its own dashboard and from pages served on this machine  
 ✅ **Clean Shutdown** - Graceful WebSocket disconnect and logger queue flush  
 ✅ **Allocator Guard** - Reuses external allocator if present, otherwise starts local allocator and re-checks every 10s
-✅ **CAN Health Monitoring** - Detects CAN bus faults (BUS-OFF, ERROR-PASSIVE, interface disappearance on SocketCAN; a failing or unplugged adapter otherwise) and auto-disconnects
+✅ **CAN Health Monitoring** - Detects CAN bus faults (BUS-OFF, interface disappearance on SocketCAN; a failing or unplugged adapter otherwise) and auto-disconnects; errors on a bus still in use (ERROR-WARNING, ERROR-PASSIVE, error counters growing) are shown and logged once instead
 ✅ **Bus Load Monitoring** - Real-time CAN bus utilization via `canbusload` subprocess on SocketCAN, or counted from the forwarded frames for other adapters (Classic CAN and CAN FD alike), streamed to clients via WebSocket  
 ✅ **Register Access** - Read and write Cyphal node registers via REST API  
 ✅ **Offline Node Detection** - Tracks node disappearance with `last_seen` timestamps and stale state handling  
@@ -354,9 +354,12 @@ Response:
     "bus_utilization": 3.0,
     "dropped": {"scanner": 0, "logger": 0, "clients": 12},
     "last_error": null,
-    "cyphal_v11": null
+    "cyphal_v11": null,
+    "bus_errors": null
 }
 ```
+
+`bus_errors` is `null` while the bus has no errors, and when not connected to CAN. While it has some, it is `{"state", "tx_errors", "rx_errors", "since_unix"}`: the CAN controller's state (`"ERROR-WARNING"`, `"ERROR-PASSIVE"`) and its transmit and receive error counters, all three `null` where the adapter does not report them (only SocketCAN does), and when the errors began. The bus has errors while its controller is in one of those states, or while an error counter grew in the last 10 s: SocketCAN's bus-error and state-change counters, or, for an adapter behind the hub, the error frames it reports and the sends it refused. The session's health check samples them every 3 s. Most often the bus is not terminated (120 Ω at each end) or a node runs another bitrate; the dashboard shows the errors under the CAN status, and the server logs a line when they start and one when they stop, in place of pycyphal's line per error frame. A controller in ERROR-WARNING or ERROR-PASSIVE still sends and receives, so the session goes on; BUS-OFF ends it, `last_error` saying so.
 
 `cyphal_v11` is `null` until Cyphal v1.1 traffic is seen on the bus, which Cynitor, a Cyphal v1.0 monitor, does not decode. Then it is `{"transfers", "nodes": [node-IDs], "subject_count", "subject_ids": [the first 16, sorted], "last_seen_unix"}`, counted over the CAN session; the dashboard shows it under the CAN status. A v1.1 transfer is recognised by its first frame: an extended CAN ID with bit 25 = 0, bit 24 = 0 and bit 7 = 1 (a 16-bit subject-ID; v1.0 keeps bit 7 at 0), and a tail byte with start-of-transfer and toggle set (which tells it from a DroneCAN service frame), every frame but a transfer's last being full. On SocketCAN a listen-only socket watches for it, filtered by the kernel to frames with those ID bits; behind the hub, the hub does. A v1.1 topic pinned to a v1.0 subject-ID (`name#1234`) travels as v1.0 and is decoded as usual.
 
