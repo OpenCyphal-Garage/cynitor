@@ -44,10 +44,14 @@ const bind = () => {
     if (el('canBitrateSelect').value === 'custom') el('canBitrateCustom').focus();
   });
   el('canBitrateCustom').addEventListener('input', updateCanConnectButton);
-  el('sidebarCollapseBtn').addEventListener('click', () => {
+  const sidebarToggle = el('sidebarCollapseBtn');
+  const showSidebarState = () => sidebarToggle.setAttribute('aria-expanded', String(!state.sidebarCollapsed));
+  showSidebarState();
+  sidebarToggle.addEventListener('click', () => {
     const sidebar = document.querySelector('.sidebar');
     sidebar.classList.toggle('collapsed');
     state.sidebarCollapsed = sidebar.classList.contains('collapsed');
+    showSidebarState();
     saveSettings();
   });
 

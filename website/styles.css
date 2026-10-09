@@ -222,6 +222,9 @@ body {
   opacity: 0;
   border-right: none;
   padding: 0;
+  /* Hidden once the collapse has played, so its controls leave the Tab order. */
+  visibility: hidden;
+  transition: width 0.2s, min-width 0.2s, opacity 0.2s, visibility 0s 0.2s;
 }
 
 .sidebar.collapsed ~ .sidebar-collapse-btn {

@@ -5286,6 +5286,28 @@ async def _(page):
         await debug_close(page, server)
 
 
+# ── Sidebar ──
+
+@test("Sidebar: collapsed, none of its controls takes the focus, and its toggle says it is collapsed")
+async def _(page):
+    toggle = page.locator("#sidebarCollapseBtn")
+    await toggle.click()
+    try:
+        await page.wait_for_timeout(400)  # the collapse plays for 0.2 s
+        focusable = await page.evaluate("""() => [...document.querySelectorAll(
+            'nav.sidebar button, nav.sidebar input, nav.sidebar select, nav.sidebar a[href]')]
+            .filter((e) => { e.focus(); return document.activeElement === e; })
+            .map((e) => e.id || e.textContent.trim())""")
+        collapsed = await toggle.get_attribute("aria-expanded")
+    finally:
+        await toggle.click()
+        await page.locator("nav.sidebar:not(.collapsed)").wait_for(state="attached", timeout=WAIT_MS)
+    expanded = await toggle.get_attribute("aria-expanded")
+    assert not focusable and (collapsed, expanded) == ("false", "true"), \
+        f"Collapsed, these sidebar controls still take the focus: {focusable}; " \
+        f"the toggle's aria-expanded collapsed/open: {collapsed}/{expanded}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):
