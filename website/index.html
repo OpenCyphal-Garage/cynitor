@@ -270,9 +270,10 @@
   <div id="serverDownOverlay" class="server-down-overlay hidden">
     <div class="server-down-card">
       <div class="server-down-icon">!</div>
-      <h2>Frontend Server Unavailable</h2>
-      <p>The web server at <code>localhost:5500</code> is not responding.</p>
-      <p class="server-down-hint">Start it with: <code>cd website && python3 -m http.server 5500</code></p>
+      <h2>Server Unavailable</h2>
+      <p>The server at <code id="serverDownHost"></code>, which serves this page, is not responding.</p>
+      <p class="server-down-hint" id="serverDownHint">Start Cynitor again: this page reloads once it answers.</p>
+      <p class="server-down-hint hidden" id="serverDownDevHint">Start it with: <code>cd website && python3 -m http.server 5500</code></p>
       <div class="server-down-status">Reconnecting<span class="server-down-dots"></span></div>
     </div>
   </div>

@@ -5647,6 +5647,30 @@ async def _(page):
         await sidebar_close(page, server)
 
 
+@test("Sidebar: the outage overlay names the server that serves the page, and how to start that one")
+async def _(page):
+    origin = "http://cynitor.test:8080"  # the backend serving the page, as README's setup has it
+
+    async def serve(route):
+        file = WEBSITE_DIR / (urlparse(route.request.url).path.lstrip("/") or "index.html")
+        await route.fulfill(path=file) if file.is_file() else await route.fulfill(status=404)
+    await page.route(f"{origin}/**", serve)
+    said = {}
+    try:
+        for url in (f"{origin}/", f"{BASE_URL}/"):
+            await page.goto(url, wait_until="load")
+            said[url] = " ".join(await page.evaluate("""[...el('serverDownOverlay').querySelectorAll('p')]
+                .filter((p) => !p.classList.contains('hidden')).map((p) => p.textContent)"""))
+    finally:
+        await page.unroute(f"{origin}/**", serve)
+        if not page.url.startswith(BASE_URL):
+            await page.goto(BASE_URL, wait_until="load")
+    backend, dev = said[f"{origin}/"], said[f"{BASE_URL}/"]
+    dev_host = urlparse(BASE_URL).netloc
+    assert "cynitor.test:8080" in backend and "http.server" not in backend and dev_host in dev, \
+        f"Served by the backend, the overlay says: {backend!r}; served on {dev_host}: {dev!r}"
+
+
 # Keep last: it reloads the page with every other host unreachable.
 @test("Dashboard works with no internet access")
 async def _(page):

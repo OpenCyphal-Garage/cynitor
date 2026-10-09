@@ -275,6 +275,13 @@ updateSemaphores();
   let serverDown = false;
   let consecutiveFailures = 0;
 
+  // The server it names is the page's own: Cynitor's backend, or during
+  // development a static server on 5500, which it says how to start.
+  el('serverDownHost').textContent = window.location.host;
+  const devServer = window.location.port === '5500';
+  el('serverDownHint').classList.toggle('hidden', devServer);
+  el('serverDownDevHint').classList.toggle('hidden', !devServer);
+
   // The page reloads once its server is back, and a session it had goes on then.
   const tearDown = () => {
     const wanted = state.dashboardConnected || Boolean(state.dashboardRetry);
