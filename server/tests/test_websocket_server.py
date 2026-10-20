@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from types import SimpleNamespace
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
@@ -1078,6 +1079,18 @@ class TestServiceCall:
         session.scanner = scanner
         resp = await client.post("/api/services/42/400/call", json={"attributes": {}})
         assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_call_to_an_offline_node_says_it_is_offline(self, client, session):
+        # Its services are forgotten while it is offline: it answered 404 "Service 430 not found" (Windows audit, FW-08).
+        session.is_running = True
+        scanner = MagicMock()
+        scanner.service_metadata = {}
+        scanner.all_nodes = {42: SimpleNamespace(has_disappeared=True)}
+        session.scanner = scanner
+        resp = await client.post("/api/services/42/430/call", json={"attributes": {}})
+        assert resp.status == 409
+        assert (await resp.json())["error"] == "Node 42 is offline"
 
     @pytest.mark.asyncio
     async def test_call_success(self, client, session):
