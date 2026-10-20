@@ -241,10 +241,13 @@ class TestSetRegister:
             await self.write(node, "gain", "5", "natural16")
 
     @pytest.mark.parametrize("reg_type, text", [("real32", "0.1"), ("real16", "0.3"), ("bit", "1 0"),
-                                                 ("natural8", "[1, 2]")])
+                                                 ("natural8", "[1, 2]"),
+                                                 ("real32", "[nan, 1, 2]"), ("real64", "nan")])
     async def test_a_value_read_back_in_the_registers_precision_was_taken(self, uavcan_types, reg_type, text):
-        # 0.1 as real32 reads back 0.100000001: the same value, in the register's precision.
-        dtype = {"real32": np.float32, "real16": np.float16, "bit": np.bool_, "natural8": np.uint8}[reg_type]
+        # 0.1 as real32 reads back 0.100000001: the same value, in the register's precision. A NaN
+        # read back is the NaN written, though NaN equals nothing (Windows audit, FW-04).
+        dtype = {"real32": np.float32, "real16": np.float16, "real64": np.float64, "bit": np.bool_,
+                 "natural8": np.uint8}[reg_type]
         node = Node({"r": (reg_type, np.array([0], dtype=dtype), True)})
         node.precision = dtype
         await self.write(node, "r", text, reg_type)

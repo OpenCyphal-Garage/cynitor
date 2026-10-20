@@ -716,7 +716,9 @@ class CANSession:
         each stop run even if one before it failed.
         """
         logger.info("Tearing down CAN session...")
-        self.raw_logs.stop()  # started while the session runs, so not on the stack; its tap needs the bus
+        # Started while the session runs, so not on the stack; its tap needs the bus. Its file is
+        # closed in a worker thread, as the API closes it (api_rawlogs): the disk may be slow.
+        await asyncio.to_thread(self.raw_logs.stop)
         stack, self._stack = self._stack, contextlib.AsyncExitStack()
         try:
             await stack.aclose()
@@ -1230,6 +1232,7 @@ async def main(can_iface: Optional[str] = None, force_compile: bool = False, bin
             await ws_server.update_check.stop()
         await ws_server.stop()
         logger.info("Shutdown complete")
+        _shutdown_complete.set()
 
 
 def _shutdown_on_sigterm(_signum, _frame) -> None:
@@ -1239,6 +1242,49 @@ def _shutdown_on_sigterm(_signum, _frame) -> None:
     block never runs, so the CAN session and HTTP server are not closed down.
     """
     raise KeyboardInterrupt
+
+
+# Set when main's cleanup has run, for _on_console_event to wait for.
+_shutdown_complete = threading.Event()
+# Windows ends a process right after its console control handlers return, at
+# most this long after the event (it allows 5 s for CTRL_CLOSE_EVENT).
+_CONSOLE_CLOSE_WAIT_S = 4.5
+_CTRL_CLOSE_EVENT, _CTRL_LOGOFF_EVENT, _CTRL_SHUTDOWN_EVENT = 2, 5, 6
+_console_handler = None  # the ctypes callback, kept alive while Windows may call it
+
+
+def _on_console_event(ctrl_type: int) -> bool:
+    """A console control handler: the window closed, the user logs off, Windows shuts down.
+
+    It runs the orderly shutdown, as SIGTERM does, and waits for it: Windows
+    ends the process as soon as the handlers return, and Python's own returns
+    at once (it would deliver the event as SIGBREAK, which no code ever saw).
+    Ctrl+C and Ctrl+Break are left to Python (False).
+    """
+    if ctrl_type not in (_CTRL_CLOSE_EVENT, _CTRL_LOGOFF_EVENT, _CTRL_SHUTDOWN_EVENT):
+        return False
+    import _thread
+    _thread.interrupt_main(signal.SIGTERM)
+    _shutdown_complete.wait(_CONSOLE_CLOSE_WAIT_S)
+    return True
+
+
+def _shut_down_when_console_closes() -> None:
+    """Windows: register _on_console_event, so that closing the console window shuts Cynitor down
+    in order. A no-op elsewhere, where a closing terminal sends SIGHUP and systemd SIGTERM."""
+    global _console_handler
+    if not IS_WINDOWS:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        handler_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)  # type: ignore[attr-defined]  # Windows only
+        _console_handler = handler_type(_on_console_event)
+        if not ctypes.WinDLL("kernel32", use_last_error=True).SetConsoleCtrlHandler(_console_handler, True):  # type: ignore[attr-defined]  # Windows only
+            logger.debug("Console close handler not set (%d)", ctypes.get_last_error())  # type: ignore[attr-defined]  # Windows only
+    except Exception as exc:
+        logger.debug("Console close handler unavailable: %s", exc)
 
 
 def _exit_when_parent_dies() -> None:
@@ -1473,6 +1519,7 @@ if __name__ == "__main__":
 
     signal.signal(signal.SIGTERM, _shutdown_on_sigterm)
     _exit_when_parent_dies()
+    _shut_down_when_console_closes()
 
     try:
         asyncio.run(main(
@@ -1500,3 +1547,5 @@ if __name__ == "__main__":
         # A failed start (the port taken, an address not there yet) must not
         # read as success: systemd's Restart=on-failure, scripts and CI go by it.
         sys.exit(1)
+    finally:
+        _shutdown_complete.set()  # also when main ended before its cleanup could

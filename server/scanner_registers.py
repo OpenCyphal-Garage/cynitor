@@ -507,8 +507,10 @@ class ScannerRegisters:
             back = read_back if isinstance(read_back, list) else [read_back]
             dtype = self._DTYPE_OF.get(reg_type, np.int64 if reg_type.startswith('integer') else np.uint64)
             try:
-                return len(back) == len(sent_values) and bool(np.all(
-                    np.array(sent_values, dtype=dtype) == np.array(back, dtype=dtype)))
+                # A NaN read back is the NaN written, though NaN equals nothing.
+                return len(back) == len(sent_values) and bool(np.array_equal(
+                    np.array(sent_values, dtype=dtype), np.array(back, dtype=dtype),
+                    equal_nan=bool(np.issubdtype(dtype, np.floating))))
             except (TypeError, ValueError, OverflowError):
                 return False
         return True  # 'empty': nothing to compare

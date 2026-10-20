@@ -5,4 +5,4 @@ gone, the server binary is the product, so the version lives here. The
 release workflow greps this file and refuses to build a tag that disagrees.
 """
 
-__version__ = "1.5.1"
+__version__ = "1.5.2"

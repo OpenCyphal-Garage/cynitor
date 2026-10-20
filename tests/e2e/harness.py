@@ -97,7 +97,9 @@ async def run_tests(tests):
     results = []
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(viewport={"width": 1280, "height": 800})
+        # The assertions read numbers as English writes them (1,000); the browser would
+        # otherwise take the system's locale (1.000 on a German Windows).
+        context = await browser.new_context(viewport={"width": 1280, "height": 800}, locale="en-US")
         page = await context.new_page()
         for name, fn, _suite in tests:
             try:
@@ -122,7 +124,7 @@ def write_results(results):
     for name, status, detail in results:
         detail = detail.replace("|", "\\|")[:100]
         lines.append(f"| {name} | {status} | {detail} |")
-    RESULT_FILE.write_text("\n".join(lines) + "\n")
+    RESULT_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"\nResults written to {RESULT_FILE}")
     return passed, failed
 

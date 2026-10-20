@@ -267,7 +267,7 @@ async def _(page):
         async with page.expect_download() as download:
             await page.locator("#graphExportSvg").click()
         path = await (await download.value).path()
-        text = Path(path).read_text()
+        text = Path(path).read_text(encoding="utf-8")
         assert text.startswith("<svg") and "org.example.esc" in text and "graph-link-hit" not in text, \
             f"Export is not the drawing: {text[:120]}"
     finally:

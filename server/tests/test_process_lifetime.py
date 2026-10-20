@@ -10,6 +10,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -159,6 +160,98 @@ class TestWindowsParentDeathEndToEnd:
             proc.kill()
             if child_pid is not None:
                 _kill(child_pid)
+
+
+class TestConsoleClose:
+    """Closing the console window shuts down in order (Windows audit: it used to end the process at once)."""
+
+    @pytest.mark.parametrize("event", [2, 5, 6])  # CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT
+    def test_close_logoff_and_shutdown_run_the_orderly_shutdown(self, monkeypatch, event):
+        done = main.threading.Event()
+        done.set()
+        monkeypatch.setattr(main, "_shutdown_complete", done)
+        with patch("_thread.interrupt_main") as interrupt:
+            assert main._on_console_event(event) is True
+        interrupt.assert_called_once_with(signal.SIGTERM)
+
+    @pytest.mark.parametrize("event", [0, 1])  # CTRL_C_EVENT, CTRL_BREAK_EVENT
+    def test_ctrl_c_and_ctrl_break_are_left_to_python(self, event):
+        with patch("_thread.interrupt_main") as interrupt:
+            assert main._on_console_event(event) is False
+        interrupt.assert_not_called()
+
+    def test_waits_for_the_shutdown_no_longer_than_windows_allows(self, monkeypatch):
+        monkeypatch.setattr(main, "_shutdown_complete", main.threading.Event())  # never set
+        monkeypatch.setattr(main, "_CONSOLE_CLOSE_WAIT_S", 0.1)
+        with patch("_thread.interrupt_main"):
+            assert main._on_console_event(2) is True
+
+    def test_noop_off_windows(self, monkeypatch):
+        monkeypatch.setattr(main, "IS_WINDOWS", False)
+        with patch("ctypes.WinDLL", create=True) as windll:
+            main._shut_down_when_console_closes()
+        windll.assert_not_called()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the Windows console")
+class TestWindowsConsoleCloseEndToEnd:
+    def test_closing_the_window_runs_the_cleanup(self, tmp_path):
+        server_dir = Path(__file__).resolve().parent.parent
+        out = tmp_path / "out.txt"
+        child = tmp_path / "child.py"
+        child.write_text(
+            "import signal, sys, time\n"
+            f"sys.path.insert(0, {str(server_dir)!r})\n"
+            "import main\n"
+            "signal.signal(signal.SIGTERM, main._shutdown_on_sigterm)\n"
+            "main._shut_down_when_console_closes()\n"
+            f"out = open({str(out)!r}, 'w', buffering=1)\n"
+            "out.write('ready\\n')\n"
+            "try:\n"
+            "    for _ in range(600):\n"
+            "        time.sleep(0.05)\n"
+            "except KeyboardInterrupt:\n"
+            "    time.sleep(0.5)  # a cleanup that takes a while, as the server's does\n"
+            "    out.write('cleaned up\\n')\n"
+            "    main._shutdown_complete.set()\n"
+        )
+        # The real interpreter, not a venv's launcher, which would sit in the console too.
+        python = getattr(sys, "_base_executable", sys.executable)
+        env = dict(os.environ, PYTHONPATH=os.pathsep.join(p for p in sys.path if p))
+        hidden = subprocess.STARTUPINFO()
+        hidden.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # its own console, not shown
+        proc = subprocess.Popen([python, str(child)], env=env, startupinfo=hidden,
+                                creationflags=subprocess.CREATE_NEW_CONSOLE)
+        try:
+            deadline = time.monotonic() + 30
+            while not (out.exists() and "ready" in out.read_text()) and time.monotonic() < deadline:
+                time.sleep(0.1)
+            # What closing the window does: WM_CLOSE to the console's window.
+            closer = (
+                "import ctypes, sys\n"
+                "k = ctypes.WinDLL('kernel32')\n"
+                "k.FreeConsole()\n"
+                "k.AttachConsole(int(sys.argv[1]))\n"
+                "k.GetConsoleWindow.restype = ctypes.c_void_p\n"
+                "hwnd = k.GetConsoleWindow()\n"
+                "if not hwnd:\n"
+                "    sys.exit(3)\n"
+                "ctypes.WinDLL('user32').PostMessageW(ctypes.c_void_p(hwnd), 0x0010, 0, 0)\n"
+            )
+            closed = subprocess.run([python, "-c", closer, str(proc.pid)], timeout=20,
+                                    creationflags=subprocess.CREATE_NO_WINDOW)
+            if closed.returncode == 3:
+                # A CI runner's service session may give a console no window: there is none to close.
+                pytest.skip("the console has no window here")
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                # Still running: the window never passed the close on (Windows Server 2022's CI runner),
+                # so there is nothing to judge. The fault this tests ends the process without its cleanup.
+                pytest.skip("the console window does not take WM_CLOSE here")
+            assert "cleaned up" in out.read_text()
+        finally:
+            proc.kill()
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="PDEATHSIG is Linux-only")

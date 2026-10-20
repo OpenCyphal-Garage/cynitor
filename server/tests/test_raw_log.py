@@ -1,5 +1,6 @@
 """Tests for raw CAN logs: the candump file, the session's start/stop, and /api/rawlogs."""
 
+import asyncio
 import datetime
 import json
 import time
@@ -204,6 +205,23 @@ class TestRawLogApi:
         client, session = api
         session.scanner = None
         assert (await client.post("/api/rawlogs")).status == 409
+
+    async def test_a_slow_disk_does_not_hold_up_the_server(self, api, monkeypatch):
+        # On a busy USB stick a stat took seconds, and every request waited them out (Windows audit, FW-06).
+        import api_rawlogs
+        client, _ = api
+
+        def slow_listing(folder):
+            time.sleep(1.0)
+            return []
+
+        monkeypatch.setattr(api_rawlogs, "list_logs", slow_listing)
+        t0 = time.monotonic()  # before: a blocked loop would hold this test up too
+        listing = asyncio.ensure_future(client.get("/api/rawlogs"))
+        await asyncio.sleep(0.1)
+        health = await client.get("/api/health")
+        assert health.status in (200, 503) and time.monotonic() - t0 < 0.7
+        assert (await listing).status == 200
 
     @pytest.mark.parametrize("name", ["cynitor-20260928-000000.log", "..%2Ftelemetry_events.db", "notes.txt"])
     async def test_unknown_or_foreign_names_are_404(self, api, name):

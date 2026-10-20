@@ -226,6 +226,10 @@ class NodesApi(ApiHandlers):
 
         meta = self.session.scanner.service_metadata.get((node_id, service_id))
         if not meta:
+            node = getattr(self.session.scanner, "all_nodes", {}).get(node_id)
+            if node is not None and getattr(node, "has_disappeared", False) is True:
+                # Its services were forgotten when it went offline (scanner_node): not "not found".
+                return web.json_response({"status": "error", "error": f"Node {node_id} is offline"}, status=409)
             return web.json_response(
                 {"status": "error", "error": f"Service {service_id} not found on node {node_id}"},
                 status=404,
