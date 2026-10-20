@@ -233,10 +233,16 @@ class TestWindowsConsoleCloseEndToEnd:
                 "k.FreeConsole()\n"
                 "k.AttachConsole(int(sys.argv[1]))\n"
                 "k.GetConsoleWindow.restype = ctypes.c_void_p\n"
-                "ctypes.WinDLL('user32').PostMessageW(ctypes.c_void_p(k.GetConsoleWindow()), 0x0010, 0, 0)\n"
+                "hwnd = k.GetConsoleWindow()\n"
+                "if not hwnd:\n"
+                "    sys.exit(3)\n"
+                "ctypes.WinDLL('user32').PostMessageW(ctypes.c_void_p(hwnd), 0x0010, 0, 0)\n"
             )
-            subprocess.run([python, "-c", closer, str(proc.pid)], timeout=20,
-                           creationflags=subprocess.CREATE_NO_WINDOW)
+            closed = subprocess.run([python, "-c", closer, str(proc.pid)], timeout=20,
+                                    creationflags=subprocess.CREATE_NO_WINDOW)
+            if closed.returncode == 3:
+                # A CI runner's service session gives a console no window: there is none to close.
+                pytest.skip("the console has no window here")
             proc.wait(timeout=15)
             assert "cleaned up" in out.read_text()
         finally:
