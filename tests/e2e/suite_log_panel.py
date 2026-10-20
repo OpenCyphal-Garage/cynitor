@@ -661,7 +661,7 @@ async def _(page):
         async with page.expect_download() as download:
             await page.locator("#logSaveBtn").click()
         saved = await download.value
-        name, text = saved.suggested_filename, Path(await saved.path()).read_text()
+        name, text = saved.suggested_filename, Path(await saved.path()).read_text(encoding="utf-8")
     finally:
         await page.locator("#logSeveritySelect").select_option("0")
         if await page.evaluate("state.logShowServer"):
