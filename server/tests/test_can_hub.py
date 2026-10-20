@@ -20,11 +20,9 @@ from can_hub import (
     CANHub,
     HubBusLoad,
     _heartbeat_source,
-    close_adapter,
     frame_bits,
     open_adapter,
     pick_free_node_id,
-    presence_check,
 )
 
 _wire_numbers = itertools.count(1)
@@ -278,42 +276,11 @@ class TestFailures:
             h.start()
 
 
-class TestCloseAdapter:
-    def test_releases_the_gs_usb_device(self):
-        # python-can leaves the USB interface claimed until garbage collection;
-        # on Windows the next open then fails.
-        pytest.importorskip("usb.util")  # pyusb is a Windows-only requirement
-
-        class FakeGsUsbBus:
-            def __init__(self):
-                self.gs_usb = type("GsUsb", (), {"gs_usb": object()})()
-                self.shut_down = False
-
-            def shutdown(self):
-                self.shut_down = True
-
-        bus = FakeGsUsbBus()
-        with patch("usb.util.dispose_resources") as dispose:
-            close_adapter(bus)
-        assert bus.shut_down
-        dispose.assert_called_once_with(bus.gs_usb.gs_usb)
-
-    def test_other_adapters_are_just_shut_down(self):
-        # No pyusb needed: without a gs_usb device there is nothing to release.
-        adapter = StubAdapter()
-        close_adapter(adapter)
-        assert adapter.closed
-
-
 class TestOpenAdapter:
     @pytest.fixture
     def opened(self):
         with patch.object(can_hub.can, "ThreadSafeBus") as bus:
             yield bus
-
-    def test_gs_usb_index_is_an_integer(self, opened):
-        open_adapter("gs_usb:0", 500_000)
-        opened.assert_called_once_with(interface="gs_usb", channel="0", bitrate=500_000, index=0)
 
     def test_slcan_carries_the_serial_baud_rate(self, opened):
         open_adapter("slcan:COM5@115200", 250_000)
@@ -554,10 +521,12 @@ class TestOpenAdapterCanFd:
         assert open_adapter("gs_usb:1", 500_000, 2_000_000) == "bus"
         assert made == [(1, 500_000, 2_000_000)] and opened == []
 
-    def test_gs_usb_classic_stays_with_python_can(self, opened, monkeypatch):
-        monkeypatch.setattr(can_hub, "GsUsbFdBus", lambda *args: pytest.fail("not for Classic CAN"))
-        open_adapter("gs_usb:0", 500_000)
-        assert opened == [{"interface": "gs_usb", "channel": "0", "bitrate": 500_000, "index": 0}]
+    def test_gs_usb_classic_goes_through_cynitors_driver_too(self, opened, monkeypatch):
+        # python-can's gs_usb has no flow control, which wedges some adapters (gs_usb_fd).
+        made = []
+        monkeypatch.setattr(can_hub, "GsUsbFdBus", lambda *args: made.append(args) or "bus")
+        assert open_adapter("gs_usb:0", 500_000) == "bus"
+        assert made == [(0, 500_000, None)] and opened == []
 
 
 class FakeCountingHub:
@@ -609,51 +578,14 @@ class TestHubBusLoad:
         assert load.utilization == 0.0
 
 
-class TestPresenceCheck:
-    def test_only_for_gs_usb(self):
-        # Other drivers fail their reads when the adapter goes away.
-        assert presence_check(StubAdapter()) is None
-
-    def test_looks_for_the_device_that_was_opened(self):
-        pytest.importorskip("usb.core")  # pyusb is a Windows-only requirement
-
-        device = type("Device", (), dict(idVendor=0x1D50, idProduct=0x606F, bus=1, address=7,
-                                         backend="the-backend"))()
-        bus = type("Bus", (), {"gs_usb": type("GsUsb", (), {"gs_usb": device})()})()
-        check = presence_check(bus)
-        with patch("usb.core.find", return_value=object()) as find:
-            assert check() is True
-        find.assert_called_once_with(backend="the-backend", idVendor=0x1D50, idProduct=0x606F,
-                                     bus=1, address=7)
-        with patch("usb.core.find", return_value=None):
-            assert check() is False
-
-
 class TestHealth:
-    def test_unplugged_adapter_is_fatal(self):
+    def test_healthy_until_the_adapter_fails(self):
+        # An unplugged adapter fails the receive thread's read, which sets the error.
         h = _start_with(StubAdapter())
         try:
-            h._still_present = lambda: False
-            assert "unplugged" in h.health()
-            assert h.error == h.health()
-        finally:
-            h.stop()
-
-    def test_healthy_while_present(self):
-        h = _start_with(StubAdapter())
-        try:
-            h._still_present = lambda: True
             assert h.health() is None
-        finally:
-            h.stop()
-
-    def test_a_failing_check_is_not_an_unplug(self):
-        h = _start_with(StubAdapter())
-        try:
-            def broken():
-                raise OSError("libusb hiccup")
-            h._still_present = broken
-            assert h.health() is None
+            h._fail("gs_usb:0: receive failed: [Errno 32] Pipe error")
+            assert h.health() == h.error and "Pipe error" in h.health()
         finally:
             h.stop()
 

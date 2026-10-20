@@ -99,22 +99,20 @@ def open_adapter(spec: str, bitrate: int, data_bitrate: Optional[int] = None) ->
 
     With ``data_bitrate`` the adapter is opened as CAN FD, again as pycyphal
     would: PCAN takes a full bit timing, the others the two rates. pycyphal
-    runs neither slcan nor gs_usb as CAN FD: slcan takes the two rates as a
-    bit timing, and gs_usb is opened with Cynitor's own driver (gs_usb_fd),
-    as python-can's runs Classic CAN only.
+    runs slcan as CAN FD with the two rates as a bit timing. gs_usb is opened
+    with Cynitor's own driver (gs_usb_fd), Classic CAN and CAN FD alike:
+    python-can's runs Classic CAN only, and without the flow control some
+    adapters need (see gs_usb_fd).
     """
     interface, sep, channel = spec.partition(":")
     if not sep or not interface:
         raise ValueError(f"Expected <interface>:<channel>, got {spec!r}")
-    if interface == "gs_usb" and data_bitrate is not None:
+    if interface == "gs_usb":
         return GsUsbFdBus(int(channel), bitrate, data_bitrate)
     kwargs: dict = {"bitrate": bitrate}
     if interface == "slcan" and "@" in channel:
         channel, _, baud = channel.rpartition("@")
         kwargs["tty_baudrate"] = int(baud)
-    elif interface == "gs_usb":
-        # python-can compares the channel with the number of devices found.
-        kwargs["index"] = int(channel)
     elif channel.isdigit():
         channel = int(channel)  # type: ignore[assignment]  # python-can takes a number for these
     if data_bitrate is not None:
@@ -162,43 +160,6 @@ def frame_bits(msg: can.Message) -> tuple[int, int]:
     return total - data, data
 
 
-def presence_check(bus: can.BusABC) -> Optional[Callable[[], bool]]:
-    """A cheap "is the adapter still plugged in?" test, for drivers that hide it.
-
-    python-can's gs_usb reads swallow USB errors, so an unplugged CANable
-    looks exactly like a quiet bus. Enumerating USB devices for the one we
-    opened needs no I/O to the device itself. Other drivers, Cynitor's CAN
-    FD one for gs_usb among them, fail their reads when the adapter goes
-    away, which the hub already treats as fatal, so they get no check.
-    """
-    device = getattr(getattr(bus, "gs_usb", None), "gs_usb", None)
-    if device is None:
-        return None
-    import usb.core
-
-    # A replugged adapter comes back at a new address, so this stays False
-    # for the device this bus opened.
-    identity = dict(idVendor=device.idVendor, idProduct=device.idProduct,
-                    bus=device.bus, address=device.address)
-    backend = device.backend
-    return lambda: usb.core.find(backend=backend, **identity) is not None
-
-
-def close_adapter(bus: can.BusABC) -> None:
-    """Shut ``bus`` down and release its USB device right away.
-
-    python-can's gs_usb shutdown stops the adapter but leaves pyusb holding its
-    USB interface until the bus object is garbage-collected. WinUSB admits one
-    handle per device, so until then reopening the adapter -- reconnecting from
-    the dashboard -- fails with "Access denied".
-    """
-    bus.shutdown()
-    device = getattr(getattr(bus, "gs_usb", None), "gs_usb", None)
-    if device is not None:
-        import usb.util
-        usb.util.dispose_resources(device)
-
-
 class CANHub:
     """One open adapter, shared through a private virtual channel.
 
@@ -231,7 +192,6 @@ class CANHub:
         self.busy_from_bus = 0.0
         self.busy_to_bus = 0.0
         self._open_bus = open_bus
-        self._still_present: Optional[Callable[[], bool]] = None
         self._adapter: Optional[can.BusABC] = None
         self._local: Optional[can.BusABC] = None
         self._stop = threading.Event()
@@ -252,10 +212,9 @@ class CANHub:
                 interface="virtual", channel=self.channel, preserve_timestamps=True,
             )
         except Exception:
-            close_adapter(self._adapter)
+            self._adapter.shutdown()
             self._adapter = None
             raise
-        self._still_present = presence_check(self._adapter)
         self._threads = [
             threading.Thread(target=self._pump, args=(self._pump_from_bus,), name=f"{self.channel}-rx", daemon=True),
             threading.Thread(target=self._pump, args=(self._pump_to_bus,), name=f"{self.channel}-tx", daemon=True),
@@ -271,10 +230,10 @@ class CANHub:
         for thread in self._threads:
             thread.join(timeout=2.0)
         self._threads = []
-        for bus, close in ((self._local, lambda b: b.shutdown()), (self._adapter, close_adapter)):
+        for bus in (self._local, self._adapter):
             if bus is not None:
                 try:
-                    close(bus)
+                    bus.shutdown()
                 except Exception as exc:
                     logger.debug("CAN hub: error closing %s: %s", bus, exc)
         self._local = self._adapter = None
@@ -289,15 +248,8 @@ class CANHub:
         return nominal / self.bitrate + data / (self.data_bitrate or self.bitrate)
 
     def health(self) -> Optional[str]:
-        """Why the adapter has become unusable, or None. Cheap enough to call every few seconds."""
-        if self.error is None and self._still_present is not None and not self._stop.is_set():
-            try:
-                present = self._still_present()
-            except Exception as exc:
-                logger.debug("CAN hub: presence check failed: %s", exc)
-                present = True  # an unanswerable question is not an unplugged adapter
-            if not present:
-                self._fail(f"{self.spec}: adapter disconnected (unplugged?)")
+        """Why the adapter has become unusable, or None. An unplugged adapter fails the receive
+        thread's read (gs_usb_fd's too), which sets it."""
         return self.error
 
     def link_diagnostics(self) -> dict:

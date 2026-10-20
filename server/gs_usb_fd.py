@@ -1,4 +1,4 @@
-"""CAN FD on candleLight (gs_usb) adapters, which python-can opens as Classic CAN only.
+"""Cynitor's driver for candleLight (gs_usb) adapters, Classic CAN and CAN FD.
 
 python-can's gs_usb interface, and the gs_usb package beneath it, speak the
 Classic CAN part of the gs_usb protocol. candleLight firmware built with
@@ -7,8 +7,15 @@ the protocol's extensions, as the Linux kernel's gs_usb driver uses them: a
 feature bit, timing limits for the data phase, a request that sets its
 timing, a mode flag, and frames with up to 64 data bytes. On Linux that
 driver serves these adapters as SocketCAN. Elsewhere GsUsbFdBus stands in for
-it: the CAN hub opens a gs_usb adapter with it when given a data bitrate,
-and with python-can's gs_usb for Classic CAN.
+it, and the CAN hub opens every gs_usb adapter with it, Classic CAN too (no
+data bitrate), not with python-can's: like the Linux driver, it keeps at most
+TX_WINDOW frames in flight, each with an echo ID of its own, and sends the
+next only when the device has echoed one. python-can's sends every frame with
+echo ID 0 and no limit: a burst of a few dozen frames, such as a Classic CAN
+port list, leaves a CANnectivity adapter refusing frames until it is
+unplugged. It also expects one packet size, and fails on the frames a device
+still holds from a session in another mode, which this driver reads off when
+it opens the device.
 
 Devices are counted as the gs_usb package lists them, as python-can counts
 them, so that gs_usb:<n> names the same adapter either way; like python-can,
@@ -21,6 +28,7 @@ from __future__ import annotations
 import collections
 import logging
 import struct
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -74,10 +82,14 @@ _CAN_ERR_CRTL_RX_OVERFLOW = 0x01
 
 _HOST_BYTE_ORDER = 0x0000BEEF  # little endian, all candleLight knows
 _ECHO_ID_RX = 0xFFFFFFFF       # a frame off the bus; any other echoes one sent
-_TX_ECHO_ID = 0
 _CHANNEL = 0
 
+# Frames handed to the device and not echoed yet, at most: GS_MAX_TX_URBS in the
+# Linux driver. Each takes an echo ID of its own, 0 to TX_WINDOW - 1.
+TX_WINDOW = 10
+
 _HEADER = struct.Struct("<IIBBBB")  # echo_id, can_id, can_dlc, channel, flags, reserved
+_CLASSIC_DATA_SIZE = 8
 _FD_DATA_SIZE = 64
 # The most a device sends: a CAN FD frame, with a hardware timestamp after it.
 _MAX_FRAME_SIZE = _HEADER.size + _FD_DATA_SIZE + 4
@@ -93,6 +105,11 @@ _TRANSFER_TYPE_BULK = 0x02
 
 # How long send waits by default for the device to take a frame, in seconds.
 _SEND_TIMEOUT = 1.0
+
+# Reading off what a device still holds from an earlier session (see GsUsbFdBus):
+# how long a read waits for one more, and how many are read at most.
+_LEFTOVER_TIMEOUT_MS = 20
+_MAX_LEFTOVERS = 256
 
 
 @dataclass(frozen=True)
@@ -191,6 +208,28 @@ def fd_bit_timing(capability: Capability, bitrate: int, data_bitrate: int) -> ca
     ))
 
 
+def classic_bit_timing(capability: Capability, bitrate: int) -> can.BitTiming:
+    """A Classic CAN bit timing for ``bitrate`` that the device takes.
+
+    Of python-can's timings for the sample point the Linux kernel takes (see
+    sample_point), those within the device's limits: the one sampling
+    nearest that point, then with the smallest prescaler. The
+    synchronization jump width is cut to what the device takes. ValueError
+    if there is none.
+    """
+    point = sample_point(bitrate)
+    fitting = [
+        timing if timing.sjw <= capability.nominal.sjw_max else can.BitTiming(
+            f_clock=timing.f_clock, brp=timing.brp, tseg1=timing.tseg1, tseg2=timing.tseg2,
+            sjw=capability.nominal.sjw_max)
+        for timing in can.BitTiming.iterate_from_sample_point(capability.clock, bitrate, point)
+        if capability.nominal.admits(timing.brp, timing.tseg1, timing.tseg2)
+    ]
+    if not fitting:
+        raise ValueError(f"no bit timing for {bitrate} bit/s at the adapter's {capability.clock / 1e6:g} MHz CAN clock")
+    return min(fitting, key=lambda timing: (abs(timing.sample_point - point), timing.brp))
+
+
 def _within_sjw_limits(timing: can.BitTimingFd, capability: Capability) -> can.BitTimingFd:
     nom_sjw = min(timing.nom_sjw, capability.nominal.sjw_max)
     data_sjw = min(timing.data_sjw, capability.data.sjw_max)
@@ -205,70 +244,122 @@ def _within_sjw_limits(timing: can.BitTimingFd, capability: Capability) -> can.B
 
 
 class GsUsbFdBus(can.BusABC):
-    """The first CAN channel of the ``index``th gs_usb device, run as CAN FD.
+    """The first CAN channel of the ``index``th gs_usb device: CAN FD with a
+    ``data_bitrate``, Classic CAN without one.
 
     CanInitializationError if there is no such device, it cannot be opened
-    (another program has it), or it cannot run CAN FD at these bitrates.
+    (another program has it), or it cannot run CAN FD or these bitrates.
 
     One thread may receive while another sends, as the CAN hub's do. The
     device echoes every frame sent back; ``recv`` drops those, and returns
     the frames off the bus, error frames among them. A USB error other than
-    a timeout, as when the adapter is unplugged, fails ``recv``.
+    a timeout, as when the adapter is unplugged, fails ``recv``. ``send``
+    waits while TX_WINDOW frames are in flight.
     """
 
-    def __init__(self, index: int, bitrate: int, data_bitrate: int, **kwargs: Any) -> None:
+    def __init__(self, index: int, bitrate: int, data_bitrate: Optional[int] = None, **kwargs: Any) -> None:
         if usb is None:
             raise can.CanInterfaceNotImplementedError("gs_usb adapters need pyusb, which is not installed")
         self.channel_info = f"gs_usb:{index}"
+        self._fd = data_bitrate is not None
         devices = _scan()
         if not 0 <= index < len(devices):
             raise can.CanInitializationError(f"Cannot find device {index}. Devices found: {len(devices)}")
         self.device = devices[index]
+        timing: can.BitTiming | can.BitTimingFd
         try:
             self._ep_in, self._ep_out, interface = _bulk_endpoints(self.device)
             _control_out(self.device, _BREQ_HOST_FORMAT, struct.pack("<I", _HOST_BYTE_ORDER),
                          value=1, index=interface)
             capability = read_capability(self.device)
-            if not capability.can_fd:
+            if self._fd and not capability.can_fd:
                 raise can.CanInitializationError(
                     f"{self.channel_info} cannot run CAN FD: its firmware does Classic CAN only. "
                     f"Leave the data bitrate out for Classic CAN"
                 )
             try:
-                timing = fd_bit_timing(capability, bitrate, data_bitrate)
+                timing = (fd_bit_timing(capability, bitrate, data_bitrate) if data_bitrate is not None
+                          else classic_bit_timing(capability, bitrate))
             except ValueError as exc:
                 raise can.CanInitializationError(f"{self.channel_info}: {exc}") from None
             self._quirk = b"\0" if capability.feature & _FEATURE_REQ_USB_QUIRK_LPC546XX else b""
             # The channel takes timings while stopped; a program may have left it running.
             self._set_mode(_MODE_RESET)
-            _control_out(self.device, _BREQ_BITTIMING,
-                         _phase_timing(timing.nom_brp, timing.nom_tseg1, timing.nom_tseg2, timing.nom_sjw))
-            _control_out(self.device, _BREQ_DATA_BITTIMING,
-                         _phase_timing(timing.data_brp, timing.data_tseg1, timing.data_tseg2, timing.data_sjw))
-            self._set_mode(_MODE_START, _MODE_FLAG_FD)
+            leftovers = self._drop_leftovers()
+            if isinstance(timing, can.BitTimingFd):
+                _control_out(self.device, _BREQ_BITTIMING,
+                             _phase_timing(timing.nom_brp, timing.nom_tseg1, timing.nom_tseg2, timing.nom_sjw))
+                _control_out(self.device, _BREQ_DATA_BITTIMING,
+                             _phase_timing(timing.data_brp, timing.data_tseg1, timing.data_tseg2, timing.data_sjw))
+            else:
+                _control_out(self.device, _BREQ_BITTIMING,
+                             _phase_timing(timing.brp, timing.tseg1, timing.tseg2, timing.sjw))
+            self._set_mode(_MODE_START, _MODE_FLAG_FD if self._fd else 0)
         except BaseException as exc:
             usb.util.dispose_resources(self.device)
             if isinstance(exc, usb.core.USBError):
                 raise can.CanInitializationError(f"{self.channel_info}: {exc}") from exc
             raise
-        logger.info("%s: CAN FD, %s", self.channel_info, timing)
+        logger.info("%s: %s, %s%s", self.channel_info, "CAN FD" if self._fd else "Classic CAN", timing,
+                    f"; {leftovers} frames left from an earlier session dropped" if leftovers else "")
         # Messages read but not returned yet: a frame and its overflow notice.
         self._pending: collections.deque[can.Message] = collections.deque()
-        self._can_protocol = can.CanProtocol.CAN_FD
+        # Echo IDs not in flight. A frame sent takes one; its echo gives it back.
+        self._free_echo_ids = list(range(TX_WINDOW))
+        self._echo_ids_freed = threading.Condition()
+        self._can_protocol = can.CanProtocol.CAN_FD if self._fd else can.CanProtocol.CAN_20
         super().__init__(channel=index, **kwargs)
+
+    def _drop_leftovers(self) -> int:
+        """Read off, with the channel stopped, what the device still holds, and say how many.
+
+        A device hands its next session the frames it received, and the
+        echoes it made, just before the last one stopped (a CANnectivity
+        adapter, two frames after a busy CAN FD session): frames from before
+        this session, in that session's format, and echoes that would give
+        back echo IDs this session has not used.
+        """
+        dropped = 0
+        while dropped < _MAX_LEFTOVERS:
+            try:
+                self.device.read(self._ep_in, _MAX_FRAME_SIZE, _LEFTOVER_TIMEOUT_MS)
+            except usb.core.USBTimeoutError:
+                break
+            dropped += 1
+        return dropped
 
     def send(self, msg: can.Message, timeout: Optional[float] = None) -> None:
         """Hand ``msg`` to the device; CanOperationError if it does not take it within ``timeout``.
 
-        None waits a second, as python-can's gs_usb does, rather than for
-        ever: a device with nobody on the bus to acknowledge its frames
-        stops taking more.
+        It waits for an echo ID while TX_WINDOW frames are in flight. None
+        waits a second, as python-can's gs_usb does, rather than for ever: a
+        device with nobody on the bus to acknowledge its frames sends none
+        of them, and echoes none.
         """
         frame = self._frame(msg)
+        deadline = time.monotonic() + (_SEND_TIMEOUT if timeout is None else timeout)
+        with self._echo_ids_freed:
+            while not self._free_echo_ids:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise can.CanOperationError(
+                        f"{self.channel_info}: send failed: the adapter has sent none of the {TX_WINDOW} frames "
+                        f"it was given last; is another node on the bus to acknowledge them?")
+                self._echo_ids_freed.wait(left)
+            echo_id = self._free_echo_ids.pop(0)
         try:
-            self.device.write(self._ep_out, frame, _milliseconds(_SEND_TIMEOUT if timeout is None else timeout))
+            self.device.write(self._ep_out, struct.pack("<I", echo_id) + frame[4:],
+                              _milliseconds(max(deadline - time.monotonic(), 0.0)))
         except usb.core.USBError as exc:
+            self._echoed(echo_id)  # not taken, so never echoed
             raise can.CanOperationError(f"{self.channel_info}: send failed: {exc}") from exc
+
+    def _echoed(self, echo_id: int) -> None:
+        """Give ``echo_id`` back for the next frame sent."""
+        with self._echo_ids_freed:
+            if 0 <= echo_id < TX_WINDOW and echo_id not in self._free_echo_ids:
+                self._free_echo_ids.append(echo_id)
+                self._echo_ids_freed.notify()
 
     def _recv_internal(self, timeout: Optional[float]) -> tuple[Optional[can.Message], bool]:
         if not self._pending:
@@ -300,9 +391,12 @@ class GsUsbFdBus(can.BusABC):
         _control_out(self.device, _BREQ_MODE, _MODE.pack(mode, flags))
 
     def _frame(self, msg: can.Message) -> bytes:
-        """``msg`` as the device takes it: each frame sized for CAN FD, as the Linux driver sends them."""
+        """``msg`` as the device takes it, echo ID 0 (send sets it): each frame sized for the
+        channel's mode, CAN FD or Classic, as the Linux driver sends them."""
         data = bytes(msg.data)
-        if len(data) > (_FD_DATA_SIZE if msg.is_fd else 8):
+        if msg.is_fd and not self._fd:
+            raise ValueError(f"a CAN FD frame on {self.channel_info}, which runs Classic CAN")
+        if len(data) > (_FD_DATA_SIZE if msg.is_fd else _CLASSIC_DATA_SIZE):
             raise ValueError(f"{len(data)} data bytes do not fit a {'CAN FD' if msg.is_fd else 'Classic CAN'} frame")
         can_id = msg.arbitration_id | (_CAN_EFF_FLAG if msg.is_extended_id else 0)
         flags = 0
@@ -315,8 +409,8 @@ class GsUsbFdBus(can.BusABC):
             dlc = msg.dlc
         else:
             dlc = len(data)
-        header = _HEADER.pack(_TX_ECHO_ID, can_id, dlc, _CHANNEL, flags, 0)
-        return header + data.ljust(_FD_DATA_SIZE, b"\0") + self._quirk
+        header = _HEADER.pack(0, can_id, dlc, _CHANNEL, flags, 0)
+        return header + data.ljust(_FD_DATA_SIZE if self._fd else _CLASSIC_DATA_SIZE, b"\0") + self._quirk
 
     def _messages(self, frame: bytes) -> list[can.Message]:
         """What a frame from the device reports: a frame off the bus, and an overflow."""
@@ -331,6 +425,8 @@ class GsUsbFdBus(can.BusABC):
             message = self._message(can_id, dlc, flags, frame[_HEADER.size:])
             if message is not None:
                 messages.append(message)
+        else:  # a frame sent is on the bus: its echo ID is free again
+            self._echoed(echo_id)
         if flags & _FLAG_OVERFLOW:
             messages.append(can.Message(
                 timestamp=time.time(), arbitration_id=_CAN_ERR_CRTL, is_extended_id=False,

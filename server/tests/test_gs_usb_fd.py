@@ -1,4 +1,4 @@
-"""Tests for gs_usb_fd, Cynitor's CAN FD driver for candleLight (gs_usb) adapters.
+"""Tests for gs_usb_fd, Cynitor's driver for candleLight (gs_usb) adapters, Classic CAN and CAN FD.
 
 The adapter is FakeCandleLight: a device that answers at the level pyusb
 gives, as candleLight firmware built with CAN FD answers, refusing what that
@@ -8,6 +8,7 @@ without it installed.
 
 import queue
 import struct
+import threading
 import time
 from array import array
 from dataclasses import astuple
@@ -17,7 +18,8 @@ import can
 import pytest
 
 import gs_usb_fd
-from gs_usb_fd import Capability, GsUsbFdBus, TimingLimits, fd_bit_timing, read_capability, sample_point
+from gs_usb_fd import (TX_WINDOW, Capability, GsUsbFdBus, TimingLimits, classic_bit_timing, fd_bit_timing,
+                       read_capability, sample_point)
 
 
 class FakeUSBError(OSError):
@@ -336,7 +338,8 @@ class TestSend:
     def test_waits_a_second_unless_told(self, bus, device):
         bus.send(can.Message(arbitration_id=0x1, is_fd=True))
         bus.send(can.Message(arbitration_id=0x1, is_fd=True), timeout=0.25)
-        assert [timeout for *_, timeout in device.written] == [1000, 250]
+        first, second = [timeout for *_, timeout in device.written]
+        assert 900 <= first <= 1000 and 150 <= second <= 250  # what is left of it
 
     def test_failure_is_an_operation_error(self, bus, device):
         device.write_error = FakeUSBTimeoutError("Operation timed out")
@@ -435,6 +438,165 @@ class TestShutdown:
         device.refused[MODE] = FakeUSBError("[Errno 19] No such device")
         b.shutdown()
         assert device.disposed == 1
+
+
+def echo_of(device, index=-1):
+    """The device's echo of the frame sent ``index``th: the frame as sent, echo ID and all."""
+    _, frame, _ = device.written[index]
+    return frame
+
+
+class TestFlowControl:
+    """At most TX_WINDOW frames in flight, each with an echo ID of its own, as the Linux driver keeps them:
+    a CANnectivity adapter given a few dozen back-to-back refuses frames until it is unplugged."""
+
+    def test_frames_in_flight_take_echo_ids_of_their_own(self, bus, device):
+        for _ in range(TX_WINDOW):
+            bus.send(can.Message(arbitration_id=0x1, is_fd=True), timeout=0.1)
+        assert sorted(sent_frame(device, i).echo_id for i in range(TX_WINDOW)) == list(range(TX_WINDOW))
+
+    def test_a_full_window_waits_and_then_says_why(self, bus, device):
+        for _ in range(TX_WINDOW):
+            bus.send(can.Message(arbitration_id=0x1, is_fd=True), timeout=0.1)
+        t0 = time.monotonic()
+        with pytest.raises(can.CanOperationError, match="sent none of the 10 frames.*acknowledge"):
+            bus.send(can.Message(arbitration_id=0x1, is_fd=True), timeout=0.2)
+        assert time.monotonic() - t0 >= 0.15
+        assert len(device.written) == TX_WINDOW  # nothing more handed to the device
+
+    def test_an_echo_frees_its_echo_id(self, bus, device):
+        for _ in range(TX_WINDOW):
+            bus.send(can.Message(arbitration_id=0x1, is_fd=True), timeout=0.1)
+        third = sent_frame(device, 2).echo_id
+        device.to_host.put(echo_of(device, 2))
+        assert bus.recv(timeout=0.2) is None  # echoes are not frames off the bus
+        bus.send(can.Message(arbitration_id=0x2, is_fd=True), timeout=0.1)
+        assert sent_frame(device).echo_id == third
+
+    def test_a_send_waiting_goes_on_when_an_echo_comes(self, bus, device):
+        for _ in range(TX_WINDOW):
+            bus.send(can.Message(arbitration_id=0x1, is_fd=True), timeout=0.1)
+        device.to_host.put(echo_of(device, 0))
+        reader = threading.Timer(0.2, lambda: bus.recv(timeout=0.5))
+        reader.start()
+        try:
+            bus.send(can.Message(arbitration_id=0x3, is_extended_id=False, is_fd=True), timeout=2)
+        finally:
+            reader.join()
+        assert sent_frame(device).can_id == 0x3
+
+    def test_a_frame_the_device_did_not_take_frees_its_echo_id(self, bus, device):
+        device.write_error = FakeUSBTimeoutError("Operation timed out")
+        for _ in range(TX_WINDOW + 2):
+            with pytest.raises(can.CanOperationError, match="Operation timed out"):
+                bus.send(can.Message(arbitration_id=0x1, is_fd=True), timeout=0.05)
+        device.write_error = None
+        for _ in range(TX_WINDOW):  # all ten are free still
+            bus.send(can.Message(arbitration_id=0x1, is_fd=True), timeout=0.05)
+
+    def test_a_burst_goes_through_as_the_device_echoes(self, monkeypatch):
+        """200 frames back-to-back through the hub, the device echoing each one as it takes it."""
+        from can_hub import CANHub
+
+        class Echoing(FakeCandleLight):
+            def write(self, ep, data, timeout=None):
+                n = super().write(ep, data, timeout)
+                self.to_host.put(bytes(data))
+                return n
+
+        d = Echoing()
+        monkeypatch.setattr(gs_usb_fd, "_scan", lambda: [d])
+        hub = CANHub("gs_usb:0", 500_000, 2_000_000,
+                     open_bus=lambda spec, bitrate, data_bitrate: GsUsbFdBus(0, bitrate, data_bitrate))
+        hub.start()
+        component = can.Bus(interface="virtual", channel=hub.channel)
+        try:
+            for i in range(200):
+                component.send(can.Message(arbitration_id=i, is_extended_id=True, is_fd=True, data=bytes([i % 256])))
+            deadline = time.monotonic() + 5
+            while len(d.written) < 200 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert len(d.written) == 200 and hub.send_failures == 0
+        finally:
+            component.shutdown()
+            hub.stop()
+
+
+class TestLeftovers:
+    """What a device holds from an earlier session is read off before this one starts."""
+
+    def test_frames_from_before_are_not_delivered(self, monkeypatch):
+        d = FakeCandleLight()
+        d.to_host.put(host_frame(0x111, b"\x01"))                    # a frame from the last session
+        d.to_host.put(host_frame(0x222, b"\x02", fd=True, echo_id=4))  # an echo of one it sent
+        monkeypatch.setattr(gs_usb_fd, "_scan", lambda: [d])
+        b = GsUsbFdBus(0, 500_000)
+        try:
+            assert b.recv(timeout=0.1) is None
+            assert d.to_host.empty()
+        finally:
+            b.shutdown()
+
+    def test_read_off_between_the_reset_and_the_start(self, device):
+        b = GsUsbFdBus(0, 500_000, 2_000_000)
+        try:
+            assert device.reads[0][2] == 20  # a short wait: nothing new comes while the channel is stopped
+            assert [struct.unpack("<II", p)[0] for p in device.sent_requests(MODE)] == [RESET, START]
+        finally:
+            b.shutdown()
+
+
+class TestClassic:
+    """Without a data bitrate: Classic CAN, through the same driver."""
+
+    @pytest.fixture
+    def classic(self, device):
+        b = GsUsbFdBus(0, 500_000)
+        yield b
+        b.shutdown()
+
+    def test_sets_the_nominal_phase_only_and_starts_without_the_fd_flag(self, classic, device):
+        assert [r for r, *_ in device.requests] == [HOST_FORMAT, MODE, BITTIMING, MODE]
+        assert struct.unpack("<II", device.sent_requests(MODE)[-1]) == (START, 0)
+        # 40 MHz, 500 kbit/s: 16 time quanta per bit, sampled at 87.5 %, as Linux samples it.
+        t = timing_of(device.sent_requests(BITTIMING)[0])
+        assert (t["brp"], t["tseg1"], t["tseg2"]) == (5, 13, 2)
+        assert classic.protocol == can.CanProtocol.CAN_20
+
+    def test_classic_only_firmware(self, monkeypatch):
+        d = FakeCandleLight(feature=0)
+        monkeypatch.setattr(gs_usb_fd, "_scan", lambda: [d])
+        GsUsbFdBus(0, 250_000).shutdown()
+        assert struct.unpack("<II", d.sent_requests(MODE)[1]) == (START, 0)
+
+    def test_frames_are_sized_for_classic_can(self, classic, device):
+        classic.send(can.Message(arbitration_id=0x123, is_extended_id=False, data=b"\x01\x02"))
+        frame = sent_frame(device)
+        assert (frame.can_id, frame.dlc, frame.size) == (0x123, 2, 20)  # as the Linux driver sends them
+
+    def test_a_can_fd_frame_is_refused(self, classic, device):
+        with pytest.raises(ValueError, match="runs Classic CAN"):
+            classic.send(can.Message(arbitration_id=0x1, is_fd=True))
+        assert device.written == []
+
+    def test_receives_classic_frames(self, classic, device):
+        device.to_host.put(host_frame(0x107D552A | EFF, b"\x01\x02\x03"))
+        msg = classic.recv(timeout=1)
+        assert (msg.arbitration_id, msg.is_fd, bytes(msg.data)) == (0x107D552A, False, b"\x01\x02\x03")
+
+    def test_bit_timing_within_the_device_limits(self):
+        # candleLight's bxCAN: at most 16 quanta before the sample point, 8 after.
+        bxcan = TimingLimits(1, 16, 1, 8, 4, 1, 1024, 1)
+        timing = classic_bit_timing(Capability(0, 48_000_000, bxcan, bxcan), 1_000_000)
+        assert timing.bitrate == 1_000_000 and timing.tseg1 <= 16 and timing.tseg2 <= 8
+        assert timing.sample_point == 75.0  # Linux's for 1 Mbit/s
+
+    def test_rates_the_clock_cannot_make_are_refused(self, monkeypatch):
+        d = FakeCandleLight(clock=7_000_000)
+        monkeypatch.setattr(gs_usb_fd, "_scan", lambda: [d])
+        with pytest.raises(can.CanInitializationError, match="no bit timing for 1000000 bit/s at the adapter's 7 MHz"):
+            GsUsbFdBus(0, 1_000_000)
+        assert d.disposed == 1
 
 
 class TestThroughTheHub:
