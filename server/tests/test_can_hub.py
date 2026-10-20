@@ -237,6 +237,17 @@ class TestFailures:
         finally:
             h.stop()
 
+    def test_a_driver_that_names_the_adapter_is_not_named_twice(self):
+        # It read "gs_usb:0: receive failed: gs_usb:0: receive failed: [Errno 32] Pipe error" (Windows audit).
+        h = _start_with(StubAdapter(recv_error=can.CanOperationError("stub:0: receive failed: [Errno 32] Pipe error")))
+        try:
+            deadline = time.monotonic() + _TIMEOUT
+            while h.error is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert h.error == "stub:0: receive failed: [Errno 32] Pipe error"
+        finally:
+            h.stop()
+
     def test_send_failure_is_counted_not_fatal(self):
         # A bus with nobody to acknowledge fills the adapter's transmit queue;
         # that must not tear the session down.

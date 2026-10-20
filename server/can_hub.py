@@ -294,6 +294,12 @@ class CANHub:
         logger.log(logging.INFO if message.endswith(END_OF_LOG) else logging.ERROR, "CAN hub stopped: %s", message)
         self._stop.set()
 
+    def _said_once(self, exc: Exception, what: str) -> str:
+        """``exc`` as the reason the adapter failed: prefixed with the adapter and ``what`` failed,
+        unless the driver says both already (gs_usb_fd does: "gs_usb:0: receive failed: …")."""
+        reason = str(exc)
+        return reason if reason.startswith(f"{self.spec}:") else f"{self.spec}: {what}: {reason}"
+
     def _pump(self, forward: Callable[[], None]) -> None:
         """Run a pump thread; an error that ends it ends the hub, which the session's health check sees."""
         try:
@@ -308,7 +314,7 @@ class CANHub:
             try:
                 msg = self._adapter.recv(timeout=_RECV_TIMEOUT)
             except Exception as exc:
-                self._fail(f"{self.spec}: receive failed: {exc}")
+                self._fail(self._said_once(exc, "receive failed"))
                 return
             if msg is None:
                 continue
@@ -354,8 +360,7 @@ class CANHub:
                 # Log the first failure and then every 100th, so a bus with no
                 # one to acknowledge does not flood the log.
                 if self.send_failures == 1 or self.send_failures % 100 == 0:
-                    logger.warning("CAN hub: send to %s failed (%d so far): %s",
-                                   self.spec, self.send_failures, exc)
+                    logger.warning("CAN hub: %s (%d so far)", self._said_once(exc, "send failed"), self.send_failures)
                 continue
             self.frames_to_bus += 1
             self.busy_to_bus += self._wire_seconds(msg)
