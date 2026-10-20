@@ -185,6 +185,7 @@ class CANHub:
         # raw_log.RawLog.write while a raw log runs, frame capture while a
         # dashboard captures. A tuple, replaced whole, for the threads to read.
         self._listeners: tuple[Callable[[can.Message], None], ...] = ()
+        self._listeners_lock = threading.Lock()  # for who changes them; the pumps read the tuple as it is
         # Cyphal v1.1 traffic among the received frames (see cyphal_v11).
         self.v11 = V11Traffic()
         # Seconds the forwarded frames occupied the wire, for bus load. One
@@ -265,11 +266,17 @@ class CANHub:
         }
 
     def add_listener(self, listener: Callable[[can.Message], None]) -> None:
-        """Call ``listener`` with every frame on the wire, from the pump threads."""
-        self._listeners = self._listeners + (listener,)
+        """Call ``listener`` with every frame on the wire, from the pump threads.
+
+        It and remove_listener may be called from any thread: a raw log starts
+        in a worker thread (api_rawlogs), frame capture on the event loop.
+        """
+        with self._listeners_lock:
+            self._listeners = self._listeners + (listener,)
 
     def remove_listener(self, listener: Callable[[can.Message], None]) -> None:
-        self._listeners = tuple(known for known in self._listeners if known != listener)
+        with self._listeners_lock:
+            self._listeners = tuple(known for known in self._listeners if known != listener)
 
     def _tell(self, msg: can.Message) -> None:
         for listener in self._listeners:

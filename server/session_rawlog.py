@@ -9,6 +9,7 @@ of the bus, for playing the log back (CANSession.play_raw_log).
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -22,12 +23,18 @@ logger = logging.getLogger(__name__)
 
 
 class RawLogging:
-    """The raw log of a session: none, or the one being written (``active``)."""
+    """The raw log of a session: none, or the one being written (``active``).
+
+    start and stop touch the data folder's disk, which may be slow or busy, so
+    the API calls them in worker threads (api_rawlogs); they take a lock of
+    their own, as two requests may come at once.
+    """
 
     def __init__(self, session: CANSession) -> None:
         self._session = session
         self.active: Optional[RawLog] = None
         self._tap: Optional[SocketcanTap] = None
+        self._lock = threading.Lock()
 
     @property
     def folder(self) -> Path:
@@ -40,6 +47,10 @@ class RawLogging:
         from a second, listen-only socket. RuntimeError if CAN is not connected
         or a log is already running.
         """
+        with self._lock:
+            return self._start_locked()
+
+    def _start_locked(self) -> RawLog:
         session = self._session
         if not session.is_running:
             raise RuntimeError("CAN is not connected")
@@ -68,6 +79,10 @@ class RawLogging:
 
     def stop(self) -> Optional[RawLog]:
         """Stop the raw log, if one runs, and return it."""
+        with self._lock:
+            return self._stop_locked()
+
+    def _stop_locked(self) -> Optional[RawLog]:
         session = self._session
         log, self.active = self.active, None
         if log is None:

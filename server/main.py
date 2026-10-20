@@ -716,7 +716,9 @@ class CANSession:
         each stop run even if one before it failed.
         """
         logger.info("Tearing down CAN session...")
-        self.raw_logs.stop()  # started while the session runs, so not on the stack; its tap needs the bus
+        # Started while the session runs, so not on the stack; its tap needs the bus. Its file is
+        # closed in a worker thread, as the API closes it (api_rawlogs): the disk may be slow.
+        await asyncio.to_thread(self.raw_logs.stop)
         stack, self._stack = self._stack, contextlib.AsyncExitStack()
         try:
             await stack.aclose()
