@@ -832,7 +832,9 @@ async def register_nodes(scanner, registered_nodes_set: set[int],
     """Register newly discovered nodes and clean up disappeared ones.
 
     A node counts as registered only once its registers were read in full and
-    its subscriptions and clients were created. A failure (typically a lost
+    its subscriptions and clients were created. A node whose port.List names
+    no register server, and that does not answer, has none to read: it gets
+    clients for the standard services (see update_reg_list). A failure (typically a lost
     response) is logged and the node is retried after REGISTRATION_RETRY_S;
     it does not stop the other nodes from registering.
     """

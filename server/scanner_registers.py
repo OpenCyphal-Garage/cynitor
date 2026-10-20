@@ -17,6 +17,8 @@ import numpy as np
 import uavcan.primitive
 import uavcan.register
 
+REGISTER_LIST_SERVICE_ID = 385  # uavcan.register.List's fixed service-ID
+
 
 class RegisterNotApplied(Exception):
     """A register write the node answered with another value than the one sent: it kept its own."""
@@ -28,6 +30,7 @@ class ScannerRegisters:
 
     # Set by ScannerNode, declared here for the type checker.
     _node: Any
+    all_nodes: dict[int, Any]
     REGISTER_TIMEOUT: float
     MAX_REGISTERS: int
     MAX_UNANSWERED_INDEXES: int
@@ -107,6 +110,16 @@ class ScannerRegisters:
             )
         return port_id, canonical
 
+    def _serves_no_register_list(self, node_id: int) -> bool:
+        """Whether the node's port.List leaves uavcan.register.List out of the services it serves.
+
+        False while no port.List of it has come: then nothing says it has no registers.
+        """
+        node = self.all_nodes.get(node_id)
+        if node is None or not node.has_published_port_list:
+            return False
+        return REGISTER_LIST_SERVICE_ID not in {int(s) for s in node.server_ServiceIDs}
+
     async def update_reg_list(self, node_id: int) -> tuple[dict[int, str], dict[int, str]]:
         """
         Read node registers and return dictionaries where subject/service IDs are keys and message/service types are values.
@@ -130,6 +143,9 @@ class ScannerRegisters:
             # Step 1: Collect all register names. Only an empty name ends the
             # list; no answer (after one retry) fails the whole registration,
             # so the caller retries later instead of keeping a truncated list.
+            # The exception: no answer at all from a node whose port.List says
+            # it serves no uavcan.register.List. It has no registers, as
+            # Cyphal allows, and only the standard services are taken.
             while index < self.MAX_REGISTERS:
                 list_request = uavcan.register.List_1_0.Request(index=index)
                 list_response_tuple = None
@@ -140,6 +156,10 @@ class ScannerRegisters:
                     if list_response_tuple and list_response_tuple[0]:
                         break
                 if not list_response_tuple or not list_response_tuple[0]:
+                    if index == 0 and self._serves_no_register_list(node_id):
+                        logging.info(f"Node {node_id} has no registers (its port.List names no "
+                                     f"uavcan.register.List server): its standard services only")
+                        break
                     raise TimeoutError(f"Node {node_id} did not answer register list request at index {index}")
 
                 list_response = list_response_tuple[0]

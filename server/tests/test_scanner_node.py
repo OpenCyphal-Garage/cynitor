@@ -215,18 +215,51 @@ class TestTypeNameCase:
 
 
 class TestUpdateRegListLostResponse:
-    @pytest.mark.asyncio
-    async def test_unanswered_list_request_fails_instead_of_truncating(self):
-        """No answer to register.List must not read as "end of list"."""
+    """No answer to register.List must not read as "end of list", nor as "no registers"
+    unless the node's port.List says it serves no register.List."""
+
+    @staticmethod
+    def unanswering(port_list_servers=None):
+        """A node that answers no register.List request; with ``port_list_servers``, the
+        services its port.List names, else no port.List of it has come."""
         list_client = MagicMock()
         list_client.call = AsyncMock(return_value=None)
         node = ScannerNode.__new__(ScannerNode)
         node._node = MagicMock()
         node._node.make_client.return_value = list_client
+        info = NodeInfo(node_id=42)
+        if port_list_servers is not None:
+            info.has_published_port_list = True
+            info.server_ServiceIDs = list(port_list_servers)
+        node.all_nodes = {42: info}
+        return node, list_client
+
+    @pytest.mark.asyncio
+    async def test_unanswered_list_request_fails_instead_of_truncating(self):
+        node, list_client = self.unanswering(port_list_servers=[384, 385, 430])
         with patch("scanner_node.asyncio.sleep", AsyncMock()):
             with pytest.raises(TimeoutError):
                 await node.update_reg_list(42)
         assert list_client.call.await_count == 2  # one retry before giving up
+
+    @pytest.mark.asyncio
+    async def test_without_a_port_list_no_answer_is_a_lost_response(self):
+        node, _ = self.unanswering()
+        with patch("scanner_node.asyncio.sleep", AsyncMock()):
+            with pytest.raises(TimeoutError):
+                await node.update_reg_list(42)
+
+    @pytest.mark.asyncio
+    async def test_a_node_that_serves_no_register_list_gets_the_standard_services(self, caplog):
+        # A lib_cordicor_cpp node serves GetInfo and ExecuteCommand but no
+        # registers: it was retried for ever, and its services had no client.
+        node, list_client = self.unanswering(port_list_servers=[430, 435])
+        with patch("scanner_node.asyncio.sleep", AsyncMock()), caplog.at_level("INFO"):
+            pubs, srvs = await node.update_reg_list(42)
+        assert pubs == {}
+        assert set(srvs) == set(ScannerNode.STANDARD_SERVICES)
+        assert list_client.call.await_count == 2  # asked, as a node may leave a server out of its port.List
+        assert "Node 42 has no registers" in caplog.text
 
 
 def make_rate_node():
