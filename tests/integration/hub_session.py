@@ -414,10 +414,12 @@ async def run() -> None:
         check(TEMPERATURE_SUBJECT_ID in session.scanner.publishers_subscribers and session.on_demand.rates is None,
               "switched off, every subject is decoded again")
 
-        session.hub._still_present = lambda: False  # the adapter goes away
+        def unplugged(timeout=None):  # as a driver's read fails when its adapter goes away
+            raise can.CanOperationError("No such device (it may have been disconnected)")
+        session.hub._adapter.recv = unplugged
         gone = await wait_for(lambda: not session.is_running, timeout=10.0)
         check(gone, "an adapter that disappears ends the session")
-        check("adapter disconnected" in (session.last_error or ""),
+        check("receive failed" in (session.last_error or "") and "No such device" in (session.last_error or ""),
               f"with a reason: {session.last_error!r}")
 
         written = sorted(p.name for p in data.glob("*.db"))
