@@ -7,7 +7,7 @@ import json
 import re
 import time
 
-from harness import WAIT_MS, test
+from harness import WAIT_MS, answer_dialog, test
 from suite_graph import _graph_node
 
 
@@ -532,35 +532,33 @@ async def _(page):
 @test("DSDL: the editor asks before unsaved changes are dropped")
 async def _(page):
     server = _DsdlServer()
-    asked, answer = [], {"accept": False}
-
-    async def on_dialog(dialog):
-        asked.append(dialog.message)
-        await (dialog.accept() if answer["accept"] else dialog.dismiss())
 
     async def source():
         return await page.locator("#dsdlEditorSource").input_value() if await page.locator("#dsdlEditorSource").count() else None
 
-    page.on("dialog", on_dialog)
     await dsdl_open(page, server)
     try:
         await dsdl_new_type(page)
         await page.locator("#dsdlEditorClose").click()  # nothing written: closed without a word
-        assert not asked and await source() is None, f"An empty editor: asked {asked}, left {await source()!r}"
+        asked_at_once = await page.locator("#confirmDialog").is_visible()
+        assert not asked_at_once and await source() is None, f"An empty editor: asked, or left {await source()!r}"
         draft = "uint8 lots_of_work\n@sealed\n"
         await dsdl_new_type(page)
         await page.locator("#dsdlEditorSource").fill(draft)
-        await page.locator("#dsdlEditorClose").click()  # declined: the draft stays
-        after_close = await source()
-        await dsdl_new_type(page)  # a new type over the draft: declined too
-        after_new = await source()
-        answer["accept"] = True
         await page.locator("#dsdlEditorClose").click()
-        assert len(asked) == 3 and after_close == after_new == draft and await source() is None, \
-            f"Asked {len(asked)} times; the draft after a declined close {after_close!r}, " \
+        asked = [await answer_dialog(page, accept=False)]  # declined: the draft stays
+        after_close = await source()
+        await dsdl_new_type(page)
+        asked.append(await answer_dialog(page, accept=False))  # a new type over the draft: declined too
+        after_new = await source()
+        await page.locator("#dsdlEditorClose").click()
+        asked.append(await answer_dialog(page, accept=True))
+        await page.wait_for_function("!document.getElementById('dsdlEditorSource')", timeout=WAIT_MS)
+        assert len(asked) == 3 and all("unsaved changes" in said for said in asked) \
+            and after_close == after_new == draft and await source() is None, \
+            f"Asked {asked}; the draft after a declined close {after_close!r}, " \
             f"after a declined new type {after_new!r}; once agreed, the editor holds {await source()!r}"
     finally:
-        page.remove_listener("dialog", on_dialog)
         await dsdl_close(page, server)
 
 
@@ -1034,15 +1032,15 @@ async def _(page):
 @test("DSDL: the editor's preview shows its own source, not a closed editor's")
 async def _(page):
     server = _DsdlServer()
-    page.once("dialog", lambda dialog: asyncio.ensure_future(dialog.accept()))  # closing a draft asks
     await dsdl_open(page, server)
     try:
         await dsdl_new_type(page)
-        # Typed, closed, and another editor opened, within the preview's 250 ms.
+        # Typed, closed, and another editor opened, within the preview's 250 ms. The keystroke is the
+        # source's alone: its preview is due, and no draft is marked unsaved, which closing would ask about.
         await page.evaluate("""() => {
             const source = document.getElementById('dsdlEditorSource');
             source.value = 'uint8 stale_field\\n@sealed\\n';
-            source.dispatchEvent(new Event('input', {bubbles: true}));
+            source.dispatchEvent(new Event('input', {bubbles: false}));
             document.getElementById('dsdlEditorClose').click();
             document.querySelector('[data-add-type="myapp"]').click();
         }""")

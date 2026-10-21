@@ -89,6 +89,19 @@ def selected(suites):
                          f"there are {', '.join(dict.fromkeys(suite for _, _, suite in TESTS))}")
     return [TESTS[0]] + [t for t in TESTS[1:] if t[2] in suites]
 
+
+# ── Shared steps ──
+
+async def answer_dialog(page, accept=True):
+    """Answer the dashboard's own dialog (askConfirm, askText) as a user does, once it shows; what it said."""
+    dialog = page.locator("#confirmDialog")
+    await dialog.wait_for(state="visible", timeout=WAIT_MS)
+    said = await page.evaluate("""['confirmDialogTitle', 'confirmDialogSubject', 'confirmDialogMeta',
+        'confirmDialogMessage'].map((id) => el(id).textContent).filter(Boolean).join(' ')""")
+    await page.locator("#confirmDialogOk" if accept else "#confirmDialog button[value='cancel']").click()
+    await dialog.wait_for(state="hidden", timeout=WAIT_MS)
+    return said
+
 # ── Runner ──
 
 async def run_tests(tests):

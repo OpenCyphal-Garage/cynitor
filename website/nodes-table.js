@@ -6,7 +6,8 @@
 // Forgets, for good, an offline node that lost its node-ID: asks first.
 const deleteGhostNode = async (row) => {
   const label = `${row.name || 'this node'} (last node-ID ${row._lastNodeId ?? '-'})`;
-  if (!window.confirm(`Forget ${label}? Cynitor drops what it remembers of this device.`)) return;
+  if (!await askConfirm({ title: 'Forget device', confirmLabel: 'Forget', danger: true,
+    message: `Forget ${label}? Cynitor drops what it remembers of this device.` })) return;
   try {
     await requestJson(`/api/identity/${row._uid}`, { method: 'DELETE' });
     if (state.selectedNodeId === `uid:${row._uid}`) clearSelectedNode();

@@ -2,7 +2,7 @@
 
 import asyncio
 
-from harness import test
+from harness import answer_dialog, test
 from suite_graph import _graph_ghost, _graph_node
 
 
@@ -378,12 +378,12 @@ async def _(page):
         await page.wait_for_function(f"""nodesTabulator.getRow('{ghost}').getCell('name').getElement()
             .querySelector('.name-display')?.textContent === 'bench sensor'""", timeout=3000)
         delete = page.locator("#nodesTable .tabulator-row", has_text="bench sensor").locator(".ghost-delete-btn")
-        page.once("dialog", lambda dialog: asyncio.ensure_future(dialog.dismiss()))
         await delete.click()
+        asked = await answer_dialog(page, accept=False)
         await page.wait_for_timeout(300)
-        assert forgotten == [], f"Forgotten without asking: {forgotten}"
-        page.once("dialog", lambda dialog: asyncio.ensure_future(dialog.accept()))
+        assert forgotten == [] and "Forget bench sensor" in asked, f"Forgotten without asking: {forgotten}; {asked!r}"
         await delete.click()
+        await answer_dialog(page, accept=True)
         await page.wait_for_timeout(300)
         assert forgotten == ["DELETE"], f"Not forgotten once confirmed: {forgotten}"
     finally:

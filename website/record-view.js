@@ -671,7 +671,7 @@ const stopRecording = async (id) => {
 const renameRecording = async (id) => {
   const cur = state.recordings.find((r) => r.id === id);
   if (!cur) return;
-  const name = window.prompt('Rename recording:', cur.name);
+  const name = await askText({ title: 'Rename recording', confirmLabel: 'Rename' }, cur.name);
   if (!name || !name.trim() || name === cur.name) return;
   try {
     await requestJson(`/api/recordings/${id}`, {
@@ -690,7 +690,7 @@ const deleteRecording = async (id, purge) => {
   const msg = purge
     ? `Delete ${label} AND purge its events from the global buffer? This cannot be undone.`
     : `Delete ${label}?`;
-  if (!window.confirm(msg)) return;
+  if (!await askConfirm({ title: 'Delete recording', message: msg, confirmLabel: 'Delete', danger: true })) return;
   try {
     await requestJson(`/api/recordings/${id}${purge ? '?purge=true' : ''}`, { method: 'DELETE' });
     showToast(`Deleted ${label}`, 'success');
@@ -1154,7 +1154,8 @@ const _onRawLogClick = async (e) => {
       pollStatus();  // shows it as the connected interface now, not at the next poll
     } else if (btn.dataset.rawlogDelete) {
       const name = btn.dataset.rawlogDelete;
-      if (!window.confirm(`Delete ${name}?`)) return;
+      if (!await askConfirm({ title: 'Delete raw log', message: `Delete ${name}?`, confirmLabel: 'Delete',
+        danger: true })) return;
       await requestJson(`/api/rawlogs/${encodeURIComponent(name)}`, { method: 'DELETE' });
     } else {
       return;

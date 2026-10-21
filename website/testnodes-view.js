@@ -216,13 +216,15 @@ const TestNodesView = (() => {
         + 'Its messages reach every node on the bus, and may move real things: an actuator taking its '
         + 'setpoints from a subject it publishes, say. '
         + (node.node_id != null ? `Node-ID ${node.node_id} must be free.` : 'Cynitor gives it a node-ID that is free.');
-      if (!window.confirm(question)) return;
+      if (!await askConfirm({ title: 'Start on the real bus', message: question, confirmLabel: 'Start', danger: true })) {
+        return;
+      }
       await requestJson(`/api/testnodes/${node.id}/start`,
         { method: 'POST', body: JSON.stringify({ confirm_real_bus: true }) });
     }
   };
 
-  const onListClick = (e) => {
+  const onListClick = async (e) => {
     const button = e.target.closest('button[data-action]');
     const node = button && findNode(button.closest('.tn-card')?.dataset.id);
     if (!node) return;
@@ -235,7 +237,8 @@ const TestNodesView = (() => {
       openEditor(node);
     } else if (action === 'delete') {
       const running = node.running ? ' It stops first.' : '';
-      if (!window.confirm(`Delete the test node ${node.name}?${running}`)) return;
+      if (!await askConfirm({ title: 'Delete test node', confirmLabel: 'Delete', danger: true,
+        message: `Delete the test node ${node.name}?${running}` })) return;
       act(node.id, () => requestJson(`/api/testnodes/${node.id}`, { method: 'DELETE' }));
     }
   };

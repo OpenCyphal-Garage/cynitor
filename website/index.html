@@ -364,13 +364,16 @@
     </div>
   </div>
 
-  <!-- ── Confirmation, the dashboard's own confirm(): askConfirm() in state.js fills and opens it ── -->
+  <!-- ── The dashboard's own confirm() and prompt(): askConfirm() and askText() in state.js fill and open it ── -->
   <dialog id="confirmDialog" class="confirm-dialog" aria-labelledby="confirmDialogTitle">
     <form method="dialog" class="confirm-dialog-card">
       <h2 class="confirm-dialog-title" id="confirmDialogTitle"></h2>
       <div class="confirm-dialog-subject" id="confirmDialogSubject"></div>
       <div class="confirm-dialog-meta" id="confirmDialogMeta"></div>
+      <p class="confirm-dialog-message" id="confirmDialogMessage"></p>
       <dl class="confirm-dialog-rows" id="confirmDialogRows"></dl>
+      <input class="confirm-dialog-input hidden" id="confirmDialogInput" type="text" autocomplete="off"
+             spellcheck="false" aria-labelledby="confirmDialogTitle" />
       <div class="confirm-dialog-actions">
         <button value="cancel">Cancel</button>
         <button value="ok" class="btn-primary" id="confirmDialogOk" autofocus></button>
