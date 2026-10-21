@@ -165,8 +165,9 @@ jobs:
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --generate-notes \
             || gh release view "$GITHUB_REF_NAME" >/dev/null
-          # A <file>.sha256 beside each file, for users to check their download.
-          (cd packaging/out && for f in *; do sha256sum "$f" > "$f.sha256"; done)
+          # A <file>.sha256 beside each download, for users to check it; none beside
+          # the requirements and notices (.txt), which go with a download.
+          (cd packaging/out && for f in *; do [[ "$f" == *.txt ]] || sha256sum "$f" > "$f.sha256"; done)
           gh release upload "$GITHUB_REF_NAME" packaging/out/* --clobber
 
   windows:
@@ -263,6 +264,7 @@ jobs:
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --generate-notes \
             || gh release view "$GITHUB_REF_NAME" >/dev/null
-          # A <file>.sha256 beside each file, for users to check their download.
-          (cd packaging/out && for f in *; do sha256sum "$f" > "$f.sha256"; done)
+          # A <file>.sha256 beside each download, for users to check it; none beside
+          # the requirements and notices (.txt), which go with a download.
+          (cd packaging/out && for f in *; do [[ "$f" == *.txt ]] || sha256sum "$f" > "$f.sha256"; done)
           gh release upload "$GITHUB_REF_NAME" packaging/out/* --clobber

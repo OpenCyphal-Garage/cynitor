@@ -41,7 +41,7 @@
           <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
         </svg>
         <span id="brandName">Cynitor</span>
-        <span class="theme-label" id="themeLabel">Dark mode</span>
+        <span class="theme-label" id="themeLabel">Dark<span class="theme-label-word"> mode</span></span>
         <button class="theme-toggle" id="themeToggle" role="switch" aria-checked="false" aria-label="Dark mode"></button>
       </div>
 
@@ -51,7 +51,7 @@
             <span class="semaphore" id="serverSemaphore"></span>
             Server
           </div>
-          <div class="server-readings">
+          <div class="sidebar-readings">
             <span class="throughput-value hidden" id="serverThroughput"></span>
             <span class="throughput-value hidden" id="serverCpu"></span>
           </div>
@@ -74,7 +74,11 @@
             <span class="semaphore" id="canSemaphore"></span>
             <span id="canLabel" class="easter-trigger">CAN</span>
           </div>
-          <span class="throughput-value hidden" id="canUtilization"></span>
+          <div class="sidebar-readings can-readings hidden" id="canUtilization">
+            <span class="throughput-value" id="canTraffic"></span>
+            <span class="throughput-value load-warn hidden" id="canDropped"></span>
+            <span class="throughput-value hidden" id="canSelf"></span>
+          </div>
         </div>
         <div class="can-v11-notice hidden" id="canV11Notice" role="status"></div>
         <div class="can-bus-notice hidden" id="canBusNotice" role="status"></div>
@@ -359,6 +363,20 @@
       </div>
     </div>
   </div>
+
+  <!-- ── Confirmation, the dashboard's own confirm(): askConfirm() in state.js fills and opens it ── -->
+  <dialog id="confirmDialog" class="confirm-dialog" aria-labelledby="confirmDialogTitle">
+    <form method="dialog" class="confirm-dialog-card">
+      <h2 class="confirm-dialog-title" id="confirmDialogTitle"></h2>
+      <div class="confirm-dialog-subject" id="confirmDialogSubject"></div>
+      <div class="confirm-dialog-meta" id="confirmDialogMeta"></div>
+      <dl class="confirm-dialog-rows" id="confirmDialogRows"></dl>
+      <div class="confirm-dialog-actions">
+        <button value="cancel">Cancel</button>
+        <button value="ok" class="btn-primary" id="confirmDialogOk" autofocus></button>
+      </div>
+    </form>
+  </dialog>
 
   <script src="./vendor/d3.min.js"></script>
   <script src="./vendor/tabulator.min.js"></script>

@@ -154,6 +154,12 @@ async def sidebar_close(page, server):
     await page.unroute("**/api/**", server.handle)
 
 
+async def resize_window(page, width, height):
+    """Resize the window, and wait out the 0.2 s the sidebar's width takes to follow across 80rem."""
+    await page.set_viewport_size({"width": width, "height": height})
+    await page.wait_for_function("document.querySelector('nav.sidebar').getAnimations().length === 0", timeout=WAIT_MS)
+
+
 async def wait_until(page, expression, seconds):
     """Whether `expression` became true in the page within `seconds`."""
     for _ in range(int(seconds * 5)):
@@ -218,31 +224,50 @@ async def _(page):
         await sidebar_close(page, server)
 
 
-@test("Sidebar: a newer release the server found is a link by the version, to its release page")
+@test("Sidebar: a newer release the server found is a pill by the version, to its release page, and a toast once")
 async def _(page):
     server = _SidebarServer()
     page_url = "https://github.com/OpenCyphal-Garage/cynitor/releases/tag/v9.1.0"
+    toasts = "[...document.querySelectorAll('#toastContainer .toast')].map((t) => t.textContent).filter((t) => t.includes('9.1.0'))"
+    overflow = """() => { const sb = document.querySelector('nav.sidebar');
+        return [sb.scrollHeight - sb.clientHeight, sb.scrollWidth - sb.clientWidth]; }"""
     await sidebar_open(page, server)
+    link = page.locator("#versionTag .version-update")
+    pills = {}
     try:
         await page.locator("#connectDashboardBtn").click()
         await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
-        none = await page.locator("#versionTag .version-update").count()
+        none = await link.count()
         server.update = {"version": "9.1.0", "url": page_url}
         await page.evaluate("pollStatus()")
-        link = page.locator("#versionTag .version-update")
         await link.wait_for(state="visible", timeout=WAIT_MS)
-        found = (await link.inner_text(), await link.get_attribute("href"), await link.get_attribute("target"))
+        for width, height in ((1280, 800), (1600, 900)):  # the narrower sidebar, then the wider one
+            await resize_window(page, width, height)
+            pills[width] = (await link.inner_text(), await page.evaluate(overflow))
+        found = (await link.get_attribute("href"), await link.get_attribute("target"), await link.get_attribute("aria-label"))
         if os.environ.get("CYNITOR_E2E_SHOTS"):  # a folder to see the footer in
             await page.locator(".sidebar-footer").screenshot(path=os.path.join(os.environ["CYNITOR_E2E_SHOTS"], "version-update.png"))
+        await page.evaluate("pollStatus()")  # the next poll finds it again
+        said = await page.evaluate(toasts)
+        await page.evaluate("_writeSettingsNow()")
+        await page.reload(wait_until="load")
+        await link.wait_for(state="visible", timeout=5000)  # reconnected, and polled
+        said_after_reload = await page.evaluate(toasts)
         server.update = {"version": "9.2.0", "url": "https://example.com/x"}  # only the project's own release pages
         await page.evaluate("pollStatus()")
         foreign = await link.count()
-        assert (none, found, foreign) == (0, ("v9.1.0 available", page_url, "_blank"), 0), \
-            f"Before: {none}; found: {found}; a link off the project: {foreign}"
     finally:
         server.update = None
-        await page.evaluate("state.update = null; renderVersionTag()")
+        await page.set_viewport_size({"width": 1280, "height": 800})
+        await page.evaluate("state.update = null; renderVersionTag(); state.updateAnnounced = null; _writeSettingsNow()")
         await sidebar_close(page, server)
+    assert none == 0, f"Before the server found one, a pill shows: {none}"
+    assert pills == {1280: ("↑ v9.1.0", [0, 0]), 1600: ("↑ v9.1.0 available", [0, 0])}, \
+        f"The pill, and the sidebar's overflow, in a narrow and a wide window: {pills}"
+    assert found == (page_url, "_blank", "Cynitor 9.1.0 is out: open its release page"), f"Where it leads: {found}"
+    assert said == ["Cynitor 9.1.0 is out: its link is under the sidebar"], f"Said once, on two polls: {said}"
+    assert said_after_reload == [], f"Said again after a reload: {said_after_reload}"
+    assert foreign == 0, "A release page off the project is linked"
 
 
 @test("Sidebar: transmit errors alone say no other node acknowledges, not to check termination")
@@ -618,6 +643,25 @@ async def _(page):
         f"{seen['darkHammer']!r}; the version's font size: {seen['version']} px"
 
 
+@test("Sidebar: its name and the Dark mode switch keep to one line, in a narrow window too")
+async def _(page):
+    size = page.viewport_size
+    seen = {}
+    try:
+        for width, height in ((1280, 800), (1600, 900)):  # the narrower sidebar, then the wider one
+            await resize_window(page, width, height)
+            seen[width] = await page.evaluate("""() => { const label = el('themeLabel');
+                const sb = document.querySelector('nav.sidebar');
+                return {label: label.innerText, switchName: el('themeToggle').getAttribute('aria-label'),
+                        oneLine: label.getBoundingClientRect().height < 1.6 * parseFloat(getComputedStyle(label).fontSize),
+                        over: sb.scrollWidth - sb.clientWidth}; }""")
+    finally:
+        await page.set_viewport_size(size)
+    assert seen == {1280: {"label": "Dark", "switchName": "Dark mode", "oneLine": True, "over": 0},
+                    1600: {"label": "Dark mode", "switchName": "Dark mode", "oneLine": True, "over": 0}}, \
+        f"The brand row's label, the switch's name, one line, the sidebar's overflow: {seen}"
+
+
 @test("Sidebar: in a narrow window, collapsed, it leaves no blank behind, and its toggle stays put under the pointer")
 async def _(page):
     size = page.viewport_size
@@ -709,6 +753,46 @@ async def _(page):
     finally:
         await page.evaluate("state.canListenOnly = false; _writeSettingsNow()")
         await sidebar_close(page, server)
+
+
+@test("Sidebar: the CAN line keeps its traffic and load on one line, and what was lost and who Cynitor is each on a line under it")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    seen = {}
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        await sidebar_connect_can(page)
+        await page.evaluate("pollStatus()")
+        await page.wait_for_function("el('canSelf').textContent === 'as node 127'", timeout=WAIT_MS)
+        for width, height in ((1280, 800), (1600, 900)):  # the narrower sidebar, then the wider one
+            await resize_window(page, width, height)
+            seen[width] = await page.evaluate("""() => {
+                state.droppedEvents = {scanner: 12, logger: 0, clients: 0};  // as /api/status gives a loss
+                state.noCommands = true;
+                updateSemaphores();
+                return [...el('canUtilization').children].filter((e) => !e.classList.contains('hidden')).map((e) => {
+                    const r = e.getBoundingClientRect();
+                    return {text: e.textContent, top: r.top, classes: [...e.classList],
+                            oneLine: r.height < 1.6 * parseFloat(getComputedStyle(e).fontSize)};
+                });
+            }""")
+    finally:
+        await page.set_viewport_size({"width": 1280, "height": 800})
+        await page.evaluate("state.droppedEvents = null; state.noCommands = false")
+        await sidebar_close(page, server)
+    for width, lines in seen.items():
+        texts = [line["text"] for line in lines]
+        assert len(lines) == 3 and "msg/s" in texts[0] and "% load" in texts[0] and "node" not in texts[0], \
+            f"In a {width} px window, the traffic and its load on the first line, alone: {texts}"
+        assert texts[1:] == ["12 dropped", "as node 127 · no commands"], \
+            f"In a {width} px window, then what was lost, then who Cynitor is: {texts}"
+        assert all(a["top"] < b["top"] for a, b in zip(lines, lines[1:])), \
+            f"In a {width} px window, each on a line of its own: {lines}"
+        assert all(line["oneLine"] for line in lines), f"In a {width} px window, a line wraps: {lines}"
+        assert "load-warn" in lines[1]["classes"] and not any(c.startswith("load-") for c in lines[2]["classes"]), \
+            f"In a {width} px window, what was lost in amber, who Cynitor is uncoloured: {lines}"
 
 
 @test("Confirmations name the device: node-ID, name, the end of its unique-ID and the bus")

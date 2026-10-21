@@ -9,6 +9,21 @@
     left: 11.75rem;
   }
 
+  /* Beside its label the bus's readings would wrap here: they take the row under it. */
+  .can-readings {
+    flex-basis: 100%;
+  }
+
+  /* The pill by the version takes no more than the footer has: the version alone. */
+  .version-update-word {
+    display: none;
+  }
+
+  /* "Dark mode" beside the name took two lines here: "Dark" fits on one. */
+  .theme-label-word {
+    display: none;
+  }
+
   .sidebar.collapsed ~ .sidebar-collapse-btn {
     left: -0.5rem;
   }
