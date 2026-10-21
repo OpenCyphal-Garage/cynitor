@@ -277,6 +277,11 @@ const DebugView = (() => {
       statRow('Adapter send failures', link.adapter_send_failures, link.adapter_send_failures > 0 ? 'warn' : null),
       // Error frames the adapter's driver reports; not every driver does.
       statRow('Adapter error frames', link.adapter_error_frames, link.adapter_error_frames > 0 ? 'warn' : null),
+      // The adapter's notices that its receive buffer was full: frames it lost itself.
+      statRow('Adapter overflows', link.adapter_rx_overflows, link.adapter_rx_overflows > 0 ? 'warn' : null),
+      // Frames that waited over 0.5 s in the driver's queue, which loses what overflows it uncounted.
+      statRow('Adapter frames read late', link.adapter_frames_read_late,
+        link.adapter_frames_read_late > 0 ? 'warn' : null),
     ]);
 
     // A CAN FD frame's 64 data bytes need wider frame tables.

@@ -344,7 +344,7 @@ const initCompareView = () => {
       const file = input.files[0];
       if (!file) return;
       const reader = new FileReader();
-      reader.onload = () => {
+      reader.onload = async () => {
         // The whole file is read and checked before anything changes.
         let graphs, saved;
         try {
@@ -358,8 +358,8 @@ const initCompareView = () => {
           return;
         }
         const replaces = state.compareGraphs.length || (saved && state.savedCompareConfigs.length);
-        if (replaces && !window.confirm(
-          `Import ${file.name}? It replaces the graphs here${saved ? ' and the saved graphs' : ''}.`)) return;
+        if (replaces && !await askConfirm({ title: 'Import graphs', confirmLabel: 'Import',
+          message: `Import ${file.name}? It replaces the graphs here${saved ? ' and the saved graphs' : ''}.` })) return;
         state.compareGraphs.length = 0;
         for (const g of graphs) state.compareGraphs.push(newCompareGraph(g));
         if (saved) state.savedCompareConfigs = saved;
@@ -754,7 +754,7 @@ const buildComparePanel = (graph, onUpdate) => {
       + (hints.some(Boolean) ? `<span class="compare-marks-hint">${hints.filter(Boolean).join(' · ')}</span>` : '');
     patchChildren(marksList, fresh);
   };
-  marksList.addEventListener('click', (e) => {
+  marksList.addEventListener('click', async (e) => {
     const show = e.target.closest('.compare-mark-go');
     const remove = e.target.closest('.compare-mark-delete');
     if (show) {
@@ -762,7 +762,8 @@ const buildComparePanel = (graph, onUpdate) => {
     } else if (remove) {
       graph.markers.splice(Number(remove.dataset.i), 1);
       onUpdate();
-    } else if (e.target.closest('.compare-marks-clear') && window.confirm(`Clear this graph's ${drawingsCount()}?`)) {
+    } else if (e.target.closest('.compare-marks-clear') && await askConfirm({ title: 'Clear drawings',
+      message: `Clear this graph's ${drawingsCount()}?`, confirmLabel: 'Clear', danger: true })) {
       graph.drawings = [];
       onUpdate();
     }
@@ -925,12 +926,13 @@ const _buildGraphCard = (graph) => {
   deleteBtn.type = 'button';
   deleteBtn.textContent = '×';
   deleteBtn.setAttribute('aria-label', 'Remove graph');
-  deleteBtn.addEventListener('click', () => {
+  deleteBtn.addEventListener('click', async () => {
     // Markers and drawings cannot be made again from the data: asked first.
     const notes = [[graph.markers.length, 'marker'], [graph.drawings.length, 'drawing']]
       .filter(([n]) => n).map(([n, what]) => `${n} ${what}${n === 1 ? '' : 's'}`);
     const which = graph.name.trim() ? `"${graph.name.trim()}"` : 'this graph';
-    if (notes.length && !window.confirm(`Remove ${which}? Its ${notes.join(' and ')} go with it.`)) return;
+    if (notes.length && !await askConfirm({ title: 'Remove graph', confirmLabel: 'Remove', danger: true,
+      message: `Remove ${which}? Its ${notes.join(' and ')} go with it.` })) return;
     graph._fingerprint = '';
     const idx = state.compareGraphs.indexOf(graph);
     if (idx !== -1) state.compareGraphs.splice(idx, 1);

@@ -593,15 +593,21 @@ const showToast = (message, type = 'info', durationMs = 5000) => {
 
 // ── Confirmation ──
 
-// The dashboard's own confirm(), in its look: a title, what it is about (`subject`, in mono), where
-// (`meta`), and [label, value, strong] `rows`, as a register's current and new value. Resolves true
-// for the `confirmLabel` button, false for Cancel, Esc or a click beside the dialog.
-const askConfirm = ({ title, subject = '', meta = '', rows = [], confirmLabel = 'OK' }) => new Promise((resolve) => {
+// The dashboard's own confirm() and prompt(), in its look: a title, what it is about (`subject`, in
+// mono), where (`meta`), a `message`, and [label, value, strong] `rows`, as a register's current and
+// new value; `danger` marks the confirming button as one that destroys. With `text` (a string) the
+// dialog takes a line of text, starting as `text`: it resolves the line typed, or null. Without, it
+// resolves true for the `confirmLabel` button, false for Cancel, Esc or a click beside the dialog.
+const _askInDialog = ({ title, subject = '', meta = '', message = '', rows = [], confirmLabel = 'OK',
+  danger = false }, text = null) => new Promise((resolve) => {
   const dialog = el('confirmDialog');
-  if (dialog.open) { resolve(false); return; }
+  const input = el('confirmDialogInput');
+  const answer = (ok) => (text === null ? ok : (ok ? input.value : null));
+  if (dialog.open) { resolve(answer(false)); return; }
   el('confirmDialogTitle').textContent = title;
   el('confirmDialogSubject').textContent = subject;
   el('confirmDialogMeta').textContent = meta;
+  el('confirmDialogMessage').textContent = message;
   el('confirmDialogRows').replaceChildren(...rows.flatMap(([label, value, strong = false]) => {
     const term = document.createElement('dt');
     term.textContent = label;
@@ -611,12 +617,21 @@ const askConfirm = ({ title, subject = '', meta = '', rows = [], confirmLabel = 
     detail.classList.toggle('confirm-dialog-strong', strong);
     return [term, detail];
   }));
-  el('confirmDialogOk').textContent = confirmLabel;
+  input.classList.toggle('hidden', text === null);
+  input.value = text ?? '';
+  // Enter takes the line: as the form's first button, Cancel would.
+  input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); dialog.close('ok'); } };
+  const ok = el('confirmDialogOk');
+  ok.textContent = confirmLabel;
+  ok.classList.toggle('confirm-dialog-danger', danger);
   dialog.returnValue = '';
   dialog.onclick = (e) => { if (e.target === dialog) dialog.close(); };  // the backdrop, not the card
-  dialog.addEventListener('close', () => resolve(dialog.returnValue === 'ok'), { once: true });
+  dialog.addEventListener('close', () => resolve(answer(dialog.returnValue === 'ok')), { once: true });
   dialog.showModal();
+  if (text !== null) { input.focus(); input.select(); }
 });
+const askConfirm = (options) => _askInDialog(options);
+const askText = (options, text = '') => _askInDialog(options, text);
 
 // How many px one rem is here: sizes dragged with the mouse are kept in rem.
 const remPx = () => parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;

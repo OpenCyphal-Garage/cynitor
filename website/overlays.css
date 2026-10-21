@@ -260,10 +260,24 @@
   color: var(--muted);
 }
 
+/* A question's paragraphs stay apart. */
+.confirm-dialog-message {
+  margin: 0.25rem 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-line;
+}
+
 .confirm-dialog-subject:empty,
 .confirm-dialog-meta:empty,
+.confirm-dialog-message:empty,
 .confirm-dialog-rows:empty {
   display: none;
+}
+
+.confirm-dialog-input {
+  margin-top: 0.25rem;
 }
 
 .confirm-dialog-rows {
@@ -318,6 +332,19 @@
   font-family: var(--sans);
   font-size: 0.75rem;
   padding: 0.375rem 0.875rem;
+}
+
+/* The confirming button of what destroys: forgets, deletes, removes, resets. */
+.confirm-dialog-actions .confirm-dialog-danger {
+  background: var(--error-muted);
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.confirm-dialog-actions .confirm-dialog-danger:hover {
+  background: var(--error-muted);
+  border-color: var(--error);
+  opacity: 0.85;
 }
 
 /* ── Toast notifications ── */

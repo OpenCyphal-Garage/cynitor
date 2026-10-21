@@ -5,7 +5,7 @@ from urllib.parse import urlparse
 import json
 import re
 
-from harness import WAIT_MS, test
+from harness import WAIT_MS, answer_dialog, test
 from suite_graph import _graph_node
 
 
@@ -191,22 +191,17 @@ async def _(page):
 async def _(page):
     server = _TestNodesServer(bus="pcan:PCAN_USBBUS1")
     server.nodes.append(_test_node("t1", "probe"))
-    asked = []
-
-    async def on_dialog(dialog):  # declined the first time, then accepted
-        asked.append(dialog.message)
-        await (dialog.dismiss() if len(asked) == 1 else dialog.accept())
-
-    page.on("dialog", on_dialog)
     await testnodes_open(page, server)
     try:
         banner = await page.locator("#tnBus").inner_text()
         start = page.get_by_role("button", name="Start probe")
         await start.click()
+        asked = [await answer_dialog(page, accept=False)]  # declined the first time, then accepted
         await page.wait_for_function("!document.querySelector('.tn-card button[data-action=\"start\"]')?.disabled",
                                      timeout=WAIT_MS)
         declined = server.sent("POST", "/api/testnodes/t1/start")
         await start.click()
+        asked.append(await answer_dialog(page, accept=True))
         await page.wait_for_selector(".tn-state-running", timeout=WAIT_MS)
         assert "real bus" in banner and len(asked) == 2 and "every node on the bus" in asked[0], \
             f"The banner: {banner!r}; asked: {asked}"
@@ -215,7 +210,6 @@ async def _(page):
         focused = await page.evaluate("document.activeElement?.getAttribute('aria-label')")
         assert focused == "Stop probe", f"After Start, the focus is on {focused!r}"
     finally:
-        page.remove_listener("dialog", on_dialog)
         await testnodes_close(page, server)
 
 
