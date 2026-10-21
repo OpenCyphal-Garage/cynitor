@@ -1,6 +1,5 @@
 # Cynitor
 
-[![Tests](https://github.com/OpenCyphal-Garage/cynitor/actions/workflows/test.yml/badge.svg?branch=main&event=push)](https://github.com/OpenCyphal-Garage/cynitor/actions/workflows/test.yml)
 ![Ubuntu 22.04: passing](https://img.shields.io/badge/Ubuntu_22.04-passing-brightgreen "On real hardware: a gs_usb CAN FD adapter and an STM32 Cyphal node; release binaries are built here")
 ![Ubuntu 24.04: passing](https://img.shields.io/badge/Ubuntu_24.04-passing-brightgreen "CI: unit tests (Python 3.10 to 3.13), type check, integration, browser end-to-end")
 ![Windows 10: passing](https://img.shields.io/badge/Windows_10-passing-brightgreen "On real hardware: a gs_usb CAN FD adapter and an STM32 Cyphal node, Classic CAN and CAN FD, the release .exe and from source; the dashboard in Chrome, Edge and Firefox")
