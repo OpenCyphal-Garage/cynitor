@@ -9,6 +9,11 @@
     left: 11.75rem;
   }
 
+  /* Beside its label the bus's readings would wrap here: they take the row under it. */
+  .can-readings {
+    flex-basis: 100%;
+  }
+
   .sidebar.collapsed ~ .sidebar-collapse-btn {
     left: -0.5rem;
   }

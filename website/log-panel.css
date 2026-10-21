@@ -547,8 +547,10 @@
 
 .sidebar-group-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
+  row-gap: 0.25rem;
   margin-bottom: 0.5rem;
 }
 
@@ -571,8 +573,9 @@
   transition: color 0.2s;
 }
 
-/* The server's readings, one under the other: its data rate, its CPU use. */
-.server-readings {
+/* A section's readings, one under the other: the server's data rate and CPU
+   use; the bus's traffic, what it lost and who Cynitor is on it. */
+.sidebar-readings {
   display: flex;
   flex-direction: column;
   align-items: flex-end;

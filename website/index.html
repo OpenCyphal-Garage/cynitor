@@ -51,7 +51,7 @@
             <span class="semaphore" id="serverSemaphore"></span>
             Server
           </div>
-          <div class="server-readings">
+          <div class="sidebar-readings">
             <span class="throughput-value hidden" id="serverThroughput"></span>
             <span class="throughput-value hidden" id="serverCpu"></span>
           </div>
@@ -74,7 +74,11 @@
             <span class="semaphore" id="canSemaphore"></span>
             <span id="canLabel" class="easter-trigger">CAN</span>
           </div>
-          <span class="throughput-value hidden" id="canUtilization"></span>
+          <div class="sidebar-readings can-readings hidden" id="canUtilization">
+            <span class="throughput-value" id="canTraffic"></span>
+            <span class="throughput-value load-warn hidden" id="canDropped"></span>
+            <span class="throughput-value hidden" id="canSelf"></span>
+          </div>
         </div>
         <div class="can-v11-notice hidden" id="canV11Notice" role="status"></div>
         <div class="can-bus-notice hidden" id="canBusNotice" role="status"></div>

@@ -711,6 +711,46 @@ async def _(page):
         await sidebar_close(page, server)
 
 
+@test("Sidebar: the CAN line keeps its traffic and load on one line, and what was lost and who Cynitor is each on a line under it")
+async def _(page):
+    server = _SidebarServer()
+    await sidebar_open(page, server)
+    seen = {}
+    try:
+        await page.locator("#connectDashboardBtn").click()
+        await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
+        await sidebar_connect_can(page)
+        await page.evaluate("pollStatus()")
+        await page.wait_for_function("el('canSelf').textContent === 'as node 127'", timeout=WAIT_MS)
+        for width, height in ((1280, 800), (1600, 900)):  # the narrower sidebar, then the wider one
+            await page.set_viewport_size({"width": width, "height": height})
+            seen[width] = await page.evaluate("""() => {
+                state.droppedEvents = {scanner: 12, logger: 0, clients: 0};  // as /api/status gives a loss
+                state.noCommands = true;
+                updateSemaphores();
+                return [...el('canUtilization').children].filter((e) => !e.classList.contains('hidden')).map((e) => {
+                    const r = e.getBoundingClientRect();
+                    return {text: e.textContent, top: r.top, classes: [...e.classList],
+                            oneLine: r.height < 1.6 * parseFloat(getComputedStyle(e).fontSize)};
+                });
+            }""")
+    finally:
+        await page.set_viewport_size({"width": 1280, "height": 800})
+        await page.evaluate("state.droppedEvents = null; state.noCommands = false")
+        await sidebar_close(page, server)
+    for width, lines in seen.items():
+        texts = [line["text"] for line in lines]
+        assert len(lines) == 3 and "msg/s" in texts[0] and "% load" in texts[0] and "node" not in texts[0], \
+            f"In a {width} px window, the traffic and its load on the first line, alone: {texts}"
+        assert texts[1:] == ["12 dropped", "as node 127 · no commands"], \
+            f"In a {width} px window, then what was lost, then who Cynitor is: {texts}"
+        assert all(a["top"] < b["top"] for a, b in zip(lines, lines[1:])), \
+            f"In a {width} px window, each on a line of its own: {lines}"
+        assert all(line["oneLine"] for line in lines), f"In a {width} px window, a line wraps: {lines}"
+        assert "load-warn" in lines[1]["classes"] and not any(c.startswith("load-") for c in lines[2]["classes"]), \
+            f"In a {width} px window, what was lost in amber, who Cynitor is uncoloured: {lines}"
+
+
 @test("Confirmations name the device: node-ID, name, the end of its unique-ID and the bus")
 async def _(page):
     text = await page.evaluate("""() => {

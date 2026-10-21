@@ -320,32 +320,31 @@ const updateSemaphores = () => {
 
   if (canInfo) {
     if (state.canConnected) {
+      // A reading a line: the traffic, coloured by its load; what was lost, in amber; who Cynitor is on the bus.
       const rate = getTotalMessageRate();
       const util = state.busUtilization;
-      const utilStr = util != null ? ` · ${util}% load` : '';
+      const traffic = el('canTraffic');
+      traffic.textContent = `${rate.toFixed(1)} msg/s${util != null ? ` · ${util}% load` : ''}`;
+      traffic.classList.remove('load-ok', 'load-warn', 'load-err', 'load-crit');
+      if (util != null) {
+        traffic.classList.add(util > 100 ? 'load-crit' : util >= 80 ? 'load-err' : util >= 50 ? 'load-warn' : 'load-ok');
+      }
       const dropped = state.droppedEvents;
       const droppedTotal = dropped ? dropped.scanner + dropped.logger + dropped.clients : 0;
-      const dropStr = droppedTotal > 0 ? ` · ${droppedTotal} dropped` : '';
-      const selfStr = (state.listenOnly ? ' · listening only' : state.ownNodeId != null ? ` · as node ${state.ownNodeId}` : '')
-        + (state.noCommands && !state.listenOnly ? ' · no commands' : '');
-      canInfo.textContent = `${rate.toFixed(1)} msg/s${utilStr}${dropStr}${selfStr}`;
-      canInfo.title = droppedTotal > 0
+      const lost = el('canDropped');
+      lost.textContent = `${droppedTotal} dropped`;
+      lost.title = droppedTotal > 0
         ? `Messages lost because the backend could not keep up — before decoding: ${dropped.scanner}, `
           + `from history/recordings: ${dropped.logger}, from dashboard views: ${dropped.clients}`
         : '';
+      lost.classList.toggle('hidden', droppedTotal === 0);
+      const who = el('canSelf');
+      who.textContent = [state.listenOnly ? 'listening only' : state.ownNodeId != null ? `as node ${state.ownNodeId}` : '',
+        state.noCommands && !state.listenOnly ? 'no commands' : ''].filter(Boolean).join(' · ');
+      who.classList.toggle('hidden', !who.textContent);
       canInfo.classList.remove('hidden');
-      canInfo.classList.remove('load-ok', 'load-warn', 'load-err', 'load-crit');
-      if (util != null) {
-        canInfo.classList.add(util > 100 ? 'load-crit' : util >= 80 ? 'load-err' : util >= 50 ? 'load-warn' : 'load-ok');
-      }
-      // Lost data outranks a healthy load reading.
-      if (droppedTotal > 0 && (util == null || util < 50)) {
-        canInfo.classList.remove('load-ok');
-        canInfo.classList.add('load-warn');
-      }
     } else {
       canInfo.classList.add('hidden');
-      canInfo.classList.remove('load-ok', 'load-warn', 'load-err', 'load-crit');
     }
   }
 };
