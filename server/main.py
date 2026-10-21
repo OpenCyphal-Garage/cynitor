@@ -963,6 +963,17 @@ async def _sample_bus_errors(session: 'CANSession') -> None:
         logger.debug("Bus error sample failed: %s", exc)
 
 
+def _report_late_frames(session: 'CANSession') -> None:
+    """Warn of frames the hub read late since the last warning (can_hub.LATE_FRAME_S): where a
+    driver's queue overflows, nothing counts what it drops, so this is all there is to say."""
+    hub = session.hub
+    late = hub.late_frames_to_report() if hub is not None else 0
+    if hub is not None and late:
+        logger.warning(f"{late} CAN frames waited in {hub.spec}'s driver queue: the bus carries more than "
+                       "Cynitor reads, and the driver may drop frames that nothing counts. "
+                       "Decode on demand handles such a bus.")
+
+
 async def _register_loop(scanner, registered_nodes: set[int], session: Optional['CANSession'] = None) -> None:
     health_check_counter = 0
     registration_retry_at: dict[int, float] = {}
@@ -981,9 +992,11 @@ async def _register_loop(scanner, registered_nodes: set[int], session: Optional[
                     return
                 await _sample_bus_errors(session)
                 scanner.report_kernel_drops()
+                _report_late_frames(session)
 
             try:
-                scanner.hold_offline_while_losing_frames()
+                hub = session.hub if session else None
+                scanner.hold_offline_while_losing_frames(losing_elsewhere=hub is not None and hub.falling_behind)
                 for node in scanner.all_nodes.values():
                     node.check_disappeared()
                 await register_nodes(scanner, registered_nodes, registration_retry_at)
