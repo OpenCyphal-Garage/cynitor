@@ -589,6 +589,51 @@ class TestHubBusLoad:
         assert load.utilization == 0.0
 
 
+class TestLateFrames:
+    """Frames that waited in the driver's queue: the hub reads slower than the bus delivers (FW-07)."""
+
+    def _hub_reading(self, timestamps):
+        frames = [can.Message(timestamp=t, arbitration_id=0x107D552A, data=b"\x01\x02\xe0") for t in timestamps]
+        h = _start_with(StubAdapter(frames))
+        deadline = time.monotonic() + _TIMEOUT
+        while h.frames_from_bus < len(frames) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return h
+
+    def test_a_frame_stamped_long_before_it_is_read_is_counted(self):
+        now = time.time()
+        h = self._hub_reading([now, now - 2.0])
+        try:
+            assert h.frames_read_late == 1 and h.falling_behind
+            assert h.link_diagnostics()["adapter_frames_read_late"] == 1
+        finally:
+            h.stop()
+
+    def test_a_drivers_clock_offset_is_not_lateness(self):
+        now = time.time()
+        h = self._hub_reading([now - 30.0, now - 30.0, now - 30.0])  # a driver whose clock is 30 s behind
+        try:
+            assert h.frames_read_late == 0 and not h.falling_behind
+        finally:
+            h.stop()
+
+    def test_a_clock_since_power_up_says_nothing(self):
+        h = self._hub_reading([5.0, 6.0])
+        try:
+            assert h.frames_read_late == 0
+        finally:
+            h.stop()
+
+    def test_reported_once_a_while(self):
+        now = time.time()
+        h = self._hub_reading([now, now - 2.0, now - 2.0])
+        try:
+            assert h.late_frames_to_report() == 2
+            assert h.late_frames_to_report() == 0  # not again within a minute
+        finally:
+            h.stop()
+
+
 class TestHealth:
     def test_healthy_until_the_adapter_fails(self):
         # An unplugged adapter fails the receive thread's read, which sets the error.

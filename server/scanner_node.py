@@ -432,15 +432,16 @@ class ScannerNode(ScannerRegisters, ScannerServices):
         except (AttributeError, OSError, struct.error):
             return 0
 
-    def hold_offline_while_losing_frames(self) -> None:
-        """Call no node offline while the kernel drops the scanner's frames, nor for a threshold after.
+    def hold_offline_while_losing_frames(self, losing_elsewhere: bool = False) -> None:
+        """Call no node offline while the kernel drops the scanner's frames, nor for a threshold after;
+        nor while ``losing_elsewhere`` (the CAN hub falling behind its adapter, can_hub.LATE_FRAME_S).
 
         Its heartbeats are lost with the rest: a node declared gone had its
         subjects unsubscribed, and the kernel then discarded their frames
         before any counter saw them (F-042: 13 % of a 12,000/s flood).
         """
         drops = self.kernel_dropped_frames()
-        if drops > self._kernel_drops_seen:
+        if drops > self._kernel_drops_seen or losing_elsewhere:
             until = time.monotonic() + NodeInfo.OFFLINE_THRESHOLD_S
             for node in self.all_nodes.values():
                 node.silence_unreliable_until = until

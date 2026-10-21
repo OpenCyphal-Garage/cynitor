@@ -3,6 +3,7 @@
 [![Tests](https://github.com/OpenCyphal-Garage/cynitor/actions/workflows/test.yml/badge.svg?branch=main&event=push)](https://github.com/OpenCyphal-Garage/cynitor/actions/workflows/test.yml)
 ![Ubuntu 22.04: passing](https://img.shields.io/badge/Ubuntu_22.04-passing-brightgreen "On real hardware: a gs_usb CAN FD adapter and an STM32 Cyphal node; release binaries are built here")
 ![Ubuntu 24.04: passing](https://img.shields.io/badge/Ubuntu_24.04-passing-brightgreen "CI: unit tests (Python 3.10 to 3.13), type check, integration, browser end-to-end")
+![Windows 10: passing](https://img.shields.io/badge/Windows_10-passing-brightgreen "On real hardware: a gs_usb CAN FD adapter and an STM32 Cyphal node, Classic CAN and CAN FD, the release .exe and from source; the dashboard in Chrome, Edge and Firefox")
 ![Windows Server 2022, 2025: passing](https://img.shields.io/badge/Windows_Server_2022%2C_2025-passing-brightgreen "CI: unit tests and integration on a virtual bus; the release build's smoke test (2022)")
 [![Latest release](https://img.shields.io/github/v/release/OpenCyphal-Garage/cynitor)](https://github.com/OpenCyphal-Garage/cynitor/releases/latest)
 
@@ -233,7 +234,7 @@ topics to v1.0 subject-IDs on the device (`name#1234`).
 | `--data-bitrate <n>` | CAN FD data-phase speed in bit/s; leave it out for Classic CAN. Ignored for SocketCAN |
 | `--decode-on-demand` | Decode only the subjects a dashboard shows or a recording takes, and count the rest: for a bus that carries more than the server can decode. The dashboard's **Decode on demand** box does the same at any time |
 | `--no-commands` | Watch the bus and read its nodes, but change none: register writes, service calls, firmware updates and test nodes on a real bus are refused, and no allocator runs. The server enforces it, so no dashboard or script can get round it. The dashboard's **No commands** box does the same for one session |
-| `--listen-only` | Watch the bus without sending anything: no node-ID, heartbeat or requests, so node names, versions and registers are not read. The dashboard's **Listen only** box does the same for one session. The CAN controller still acknowledges frames unless the interface itself is in listen-only mode (SocketCAN: `ip link set can0 type can ... listen-only on`) |
+| `--listen-only` | Watch the bus without sending anything: no node-ID, heartbeat or requests, so node names, versions and registers are not read. The dashboard's **Listen only** box does the same for one session. The CAN controller still acknowledges frames unless the interface itself is in listen-only mode (SocketCAN: `ip link set can0 type can ... listen-only on`); an adapter Cynitor opens itself (gs_usb, PCAN, … on Windows) always acknowledges, as a node with no other on the bus needs an acknowledgement to stop resending |
 | `--allocator` | Give plug-and-play nodes their node-IDs. Off by default: only for a bus with no allocator of its own. The dashboard's **Node-ID allocator** box does the same for one session |
 | `--bind <host>` | Listen on `<host>`. Default `127.0.0.1`; `0.0.0.0` for the whole network, which needs `CYNITOR_AUTH_TOKEN` set |
 | `--insecure-no-auth` | Allow a `--bind` beyond loopback without a token, on a network you trust |

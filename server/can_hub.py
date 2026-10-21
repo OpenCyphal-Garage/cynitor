@@ -38,6 +38,14 @@ from gs_usb_fd import GsUsbFdBus
 logger = logging.getLogger(__name__)
 
 _RECV_TIMEOUT = 0.1
+# A frame the hub reads this long after its driver stamped it (beyond the least such delay seen, a
+# driver's own clock offset) waited in the driver's queue: the hub reads slower than the bus delivers,
+# and a driver whose queue is full drops frames that nothing counts (Windows audit, FW-07).
+LATE_FRAME_S = 0.5
+# Read late within this long, the hub counts as falling behind still.
+_BEHIND_FOR_S = 3.0
+# Frames read late are reported at most once this long.
+_LATE_REPORT_S = 60.0
 _channel_numbers = itertools.count(1)
 
 
@@ -181,6 +189,10 @@ class CANHub:
         self.send_failures = 0
         self.error_frames = 0  # reported by the adapter's driver, if it reports them
         self.rx_overflows = 0  # the adapter's notices that it lost frames: no bus error, a loss
+        self.frames_read_late = 0  # see LATE_FRAME_S
+        self._least_lag = math.inf
+        self._read_late_at: Optional[float] = None
+        self._late_reported = (0, -math.inf)  # frames read late when last reported, and when
         # Called from the pump threads with every frame on the wire, both ways:
         # raw_log.RawLog.write while a raw log runs, frame capture while a
         # dashboard captures. A tuple, replaced whole, for the threads to read.
@@ -263,7 +275,37 @@ class CANHub:
             "adapter_send_failures": self.send_failures,
             "adapter_error_frames": self.error_frames,
             "adapter_rx_overflows": self.rx_overflows,
+            "adapter_frames_read_late": self.frames_read_late,
         }
+
+    @property
+    def falling_behind(self) -> bool:
+        """Whether frames have waited in the driver's queue lately (LATE_FRAME_S), losses likely."""
+        return self._read_late_at is not None and time.monotonic() - self._read_late_at < _BEHIND_FOR_S
+
+    def late_frames_to_report(self) -> int:
+        """Frames read late since the last report, if a report is due (at most once a _LATE_REPORT_S); else 0."""
+        reported, at = self._late_reported
+        now = time.monotonic()
+        if self.frames_read_late <= reported or now - at < _LATE_REPORT_S:
+            return 0
+        self._late_reported = (self.frames_read_late, now)
+        return self.frames_read_late - reported
+
+    def _note_lateness(self, msg: can.Message) -> None:
+        """Count ``msg`` if it waited in the driver's queue.
+
+        Only drivers that stamp a frame with the wall clock as they receive it
+        (PCAN, Kvaser, Vector, IXXAT) can tell; one stamped as it is read
+        (gs_usb_fd, slcan) is never late, and gs_usb reports its losses itself.
+        """
+        if msg.timestamp < 1e9:  # a clock since power-up, not the wall clock
+            return
+        lag = time.time() - msg.timestamp
+        self._least_lag = min(self._least_lag, lag)
+        if lag - self._least_lag > LATE_FRAME_S:
+            self.frames_read_late += 1
+            self._read_late_at = time.monotonic()
 
     def add_listener(self, listener: Callable[[can.Message], None]) -> None:
         """Call ``listener`` with every frame on the wire, from the pump threads.
@@ -318,6 +360,7 @@ class CANHub:
                 return
             if msg is None:
                 continue
+            self._note_lateness(msg)
             # Counted and logged, not forwarded: the Cyphal stack has no use for them.
             if msg.is_error_frame:
                 if is_rx_overflow(msg):

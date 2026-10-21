@@ -477,6 +477,13 @@ class TestKernelDroppedFrames:
         node.hold_offline_while_losing_frames()  # no more drops: the hold runs out, not renewed
         assert node.all_nodes[43].silence_unreliable_until == held
 
+    def test_no_node_is_called_offline_while_the_hub_falls_behind(self):
+        # Behind the CAN hub the losses are in a driver's queue, which no counter sees (FW-07).
+        node = scanner_on_socket(socket_that_dropped(0))
+        node.all_nodes = {42: NodeInfo(node_id=42)}
+        node.hold_offline_while_losing_frames(losing_elsewhere=True)
+        assert node.all_nodes[42].silence_unreliable_until >= time.monotonic() + NodeInfo.OFFLINE_THRESHOLD_S - 0.5
+
     def test_a_warning_once_a_while_while_the_count_grows(self, caplog):
         node = scanner_on_socket(socket_that_dropped(0))
         node.report_kernel_drops()
