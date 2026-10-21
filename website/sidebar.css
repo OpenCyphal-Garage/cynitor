@@ -8,6 +8,9 @@
   flex-direction: column;
   flex-shrink: 0;
   overflow-y: auto;
+  /* Never sideways: for the 0.2 s its width takes to follow a window widened
+     past 80rem (responsive.css), its wider layout is already there. */
+  overflow-x: hidden;
   transition: width 0.2s, min-width 0.2s, opacity 0.2s;
 }
 

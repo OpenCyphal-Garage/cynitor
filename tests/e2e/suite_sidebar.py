@@ -154,6 +154,12 @@ async def sidebar_close(page, server):
     await page.unroute("**/api/**", server.handle)
 
 
+async def resize_window(page, width, height):
+    """Resize the window, and wait out the 0.2 s the sidebar's width takes to follow across 80rem."""
+    await page.set_viewport_size({"width": width, "height": height})
+    await page.wait_for_function("document.querySelector('nav.sidebar').getAnimations().length === 0", timeout=WAIT_MS)
+
+
 async def wait_until(page, expression, seconds):
     """Whether `expression` became true in the page within `seconds`."""
     for _ in range(int(seconds * 5)):
@@ -236,7 +242,7 @@ async def _(page):
         await page.evaluate("pollStatus()")
         await link.wait_for(state="visible", timeout=WAIT_MS)
         for width, height in ((1280, 800), (1600, 900)):  # the narrower sidebar, then the wider one
-            await page.set_viewport_size({"width": width, "height": height})
+            await resize_window(page, width, height)
             pills[width] = (await link.inner_text(), await page.evaluate(overflow))
         found = (await link.get_attribute("href"), await link.get_attribute("target"), await link.get_attribute("aria-label"))
         if os.environ.get("CYNITOR_E2E_SHOTS"):  # a folder to see the footer in
@@ -637,6 +643,25 @@ async def _(page):
         f"{seen['darkHammer']!r}; the version's font size: {seen['version']} px"
 
 
+@test("Sidebar: its name and the Dark mode switch keep to one line, in a narrow window too")
+async def _(page):
+    size = page.viewport_size
+    seen = {}
+    try:
+        for width, height in ((1280, 800), (1600, 900)):  # the narrower sidebar, then the wider one
+            await resize_window(page, width, height)
+            seen[width] = await page.evaluate("""() => { const label = el('themeLabel');
+                const sb = document.querySelector('nav.sidebar');
+                return {label: label.innerText, switchName: el('themeToggle').getAttribute('aria-label'),
+                        oneLine: label.getBoundingClientRect().height < 1.6 * parseFloat(getComputedStyle(label).fontSize),
+                        over: sb.scrollWidth - sb.clientWidth}; }""")
+    finally:
+        await page.set_viewport_size(size)
+    assert seen == {1280: {"label": "Dark", "switchName": "Dark mode", "oneLine": True, "over": 0},
+                    1600: {"label": "Dark mode", "switchName": "Dark mode", "oneLine": True, "over": 0}}, \
+        f"The brand row's label, the switch's name, one line, the sidebar's overflow: {seen}"
+
+
 @test("Sidebar: in a narrow window, collapsed, it leaves no blank behind, and its toggle stays put under the pointer")
 async def _(page):
     size = page.viewport_size
@@ -742,7 +767,7 @@ async def _(page):
         await page.evaluate("pollStatus()")
         await page.wait_for_function("el('canSelf').textContent === 'as node 127'", timeout=WAIT_MS)
         for width, height in ((1280, 800), (1600, 900)):  # the narrower sidebar, then the wider one
-            await page.set_viewport_size({"width": width, "height": height})
+            await resize_window(page, width, height)
             seen[width] = await page.evaluate("""() => {
                 state.droppedEvents = {scanner: 12, logger: 0, clients: 0};  // as /api/status gives a loss
                 state.noCommands = true;

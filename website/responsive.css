@@ -19,6 +19,11 @@
     display: none;
   }
 
+  /* "Dark mode" beside the name took two lines here: "Dark" fits on one. */
+  .theme-label-word {
+    display: none;
+  }
+
   .sidebar.collapsed ~ .sidebar-collapse-btn {
     left: -0.5rem;
   }
