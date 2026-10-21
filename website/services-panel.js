@@ -459,8 +459,8 @@ const renderNodeCommands = (services) => {
 };
 
 const sendNodeCommand = async (nodeId, command) => {
-  const { label, question } = NODE_COMMANDS.find((c) => c.command === command);
-  if (!window.confirm(question(nodeId))) return;
+  const { label, question, danger = false } = NODE_COMMANDS.find((c) => c.command === command);
+  if (!await askConfirm({ title: label, message: question(nodeId), confirmLabel: label, danger })) return;
   try {
     const data = await requestJson(`/api/services/${nodeId}/${EXECUTE_COMMAND_SERVICE_ID}/call`, {
       method: 'POST',
@@ -536,7 +536,7 @@ const followFirmwareUpdate = (nodeId, box) => {
 const startFirmwareUpdate = async (nodeId, file, box) => {
   const question = `Update ${describeNode(nodeId)} with ${file.name} (${formatBytes(file.size)})?\n\n`
     + 'It restarts into its bootloader, which must speak Cyphal, and reads the file from Cynitor.';
-  if (!window.confirm(question)) return;
+  if (!await askConfirm({ title: 'Update firmware', message: question, confirmLabel: 'Update' })) return;
   const name = firmwareFileName(file.name);
   try {
     await requestJson(`/api/firmware?name=${encodeURIComponent(name)}`, {

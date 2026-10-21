@@ -1,6 +1,8 @@
 """Browser end-to-end tests: the landing page. Run through test_landing_page.py, which imports every suite in order."""
 
-from harness import BASE_URL, WAIT_MS, test
+import re
+
+from harness import BASE_URL, WAIT_MS, WEBSITE_DIR, test
 
 
 # ── Landing page ──
@@ -215,3 +217,12 @@ async def _(page):
         assert "v1.1" in text and "110" in text and "not decoded" in text, f"Notice reads: {text}"
     finally:
         await page.evaluate("state.canConnected = false; state.cyphalV11 = null; renderV11Notice()")
+
+
+@test("The dashboard asks in its own dialog: no script calls the browser's confirm, prompt or alert")
+async def _(page):
+    native = re.compile(r"(?<![\w.])(?:window\.)?(?:confirm|prompt|alert)\(")
+    found = [f"{path.name}:{number}" for path in sorted(WEBSITE_DIR.glob("*.js"))
+             for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+             if native.search(line) and not line.lstrip().startswith("//")]
+    assert not found, f"The browser's own dialog asks in {found}: use askConfirm or askText (state.js)"

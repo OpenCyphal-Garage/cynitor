@@ -411,16 +411,21 @@ DEBUG_STATS = """Object.fromEntries([...document.querySelectorAll('#debugBody .d
 async def _(page):
     server = _DebugServer()
     server.link = {"bitrate": 500000, "dbitrate": None, "adapter_frames_in": 123456, "adapter_frames_out": 789,
-                   "adapter_send_failures": 0, "adapter_error_frames": 17}  # what the hub knows of an adapter
+                   "adapter_send_failures": 0, "adapter_error_frames": 17, "adapter_rx_overflows": 2,
+                   "adapter_frames_read_late": 5}  # what the hub knows of an adapter
     await debug_open(page, server)
     try:
         await page.wait_for_selector("#debugBody .debug-card", state="attached", timeout=WAIT_MS)
         shown = await page.evaluate(DEBUG_STATS)
+        late = await page.evaluate("""[...document.querySelectorAll('#debugBody .debug-stat')]
+            .find((row) => row.textContent.includes('read late'))?.classList.contains('stat-warn')""")
         blank = [label for label, value in shown.items() if value == "—"]
         assert not blank and shown.get("Arbitration bitrate") == "500 kbit/s" \
             and (shown.get("Adapter frames in") or "").startswith("123456"), \
             f"Rows with nothing to say: {blank}; bitrate {shown.get('Arbitration bitrate')!r}; " \
             f"the adapter's frames in {shown.get('Adapter frames in')!r}"
+        assert (shown.get("Adapter overflows"), shown.get("Adapter frames read late"), late) == ("2", "5", True), \
+            f"The adapter's overflows and frames read late, the latter amber: {shown}"
     finally:
         await debug_close(page, server)
 

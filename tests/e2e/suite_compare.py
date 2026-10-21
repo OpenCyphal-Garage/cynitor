@@ -1,6 +1,6 @@
 """Browser end-to-end tests: Compare tab. Run through test_landing_page.py, which imports every suite in order."""
 
-from harness import WAIT_MS, test
+from harness import WAIT_MS, answer_dialog, test
 
 
 # ── Compare tab ──
@@ -39,10 +39,9 @@ async def compare_fed(page):
 
 COMPARE_STOP = """() => {
     clearInterval(window.e2eCompareFeed);
-    const ask = window.confirm;
-    window.confirm = () => true;  // a graph with markers asks before it goes
+    // A graph with markers or drawings asks before it goes: none has any left.
+    for (const graph of state.compareGraphs) { graph.markers = []; graph.drawings = []; }
     for (const button of [...document.querySelectorAll('.compare-graph-delete')]) button.click();
-    window.confirm = ask;
     state.savedCompareConfigs = [];
     state.subjectHistory.clear();
     state.latestBySubject.clear();
@@ -347,14 +346,6 @@ async def compare_import(page, text):
 @test("Compare: Import checks the file first, and asks before it replaces the graphs")
 async def _(page):
     await page.evaluate(COMPARE_START)
-    asked = []
-    accept = {"answer": False}
-
-    async def on_dialog(dialog):
-        asked.append(dialog.message)
-        await (dialog.accept() if accept["answer"] else dialog.dismiss())
-
-    page.on("dialog", on_dialog)
     shown = "() => [state.compareGraphs.length, document.querySelectorAll('.compare-graph-card').length]"
     try:
         await page.wait_for_timeout(300)
@@ -363,19 +354,19 @@ async def _(page):
         await compare_import(page, "not a workspace")
         assert await page.evaluate(shown) == [2, 2], "A file that is not JSON changed the graphs"
         await compare_import(page, '{"graphs": []}')
-        assert asked, "Import replaced the graphs without asking"
+        asked = await answer_dialog(page, accept=False)
+        assert "replaces the graphs" in asked, f"Import asked: {asked!r}"
         assert await page.evaluate(shown) == [2, 2], "Answered no, Import still replaced the graphs"
-        accept["answer"] = True
         await compare_import(page, '{"graphs": [{"name": "imported", "series": [{"subjectId": 1100, "attribute": "value"}],'
                                    ' "drawings": [{"color": "#f00"}]}, 5], "saved": [null, {"name": "kept", "series": []}]}')
-        assert await page.evaluate(shown) == [1, 1], f"Imported, the graphs and cards are {await page.evaluate(shown)}"
+        await answer_dialog(page, accept=True)
+        await page.wait_for_function(f"({shown})().join() === '1,1'", timeout=WAIT_MS)
         saved = await page.evaluate("state.savedCompareConfigs.map(c => c.name)")
         assert saved == ["kept"], f"Saved graphs from the file: {saved}"
         await page.locator(".compare-saved-btn").click()
         assert await page.locator(".compare-saved-name", has_text="kept").is_visible(), "The saved graphs do not open"
         await page.keyboard.press("Escape")
     finally:
-        page.remove_listener("dialog", on_dialog)
         await page.evaluate(COMPARE_STOP)
 
 
@@ -923,31 +914,24 @@ async def _(page):
 @test("Compare: removing a graph with markers or drawings asks first")
 async def _(page):
     await page.evaluate(COMPARE_START)
-    asked = []
-    answer = {"yes": False}
-
-    async def on_dialog(dialog):
-        asked.append(dialog.message)
-        await (dialog.accept() if answer["yes"] else dialog.dismiss())
-
-    page.on("dialog", on_dialog)
     graphs = "state.compareGraphs.length"
     try:
         await page.wait_for_timeout(300)
         plain = await compare_graph(page, (1100, "value"))
         await plain.locator('[aria-label="Remove graph"]').click()
-        assert not asked and await page.evaluate(graphs) == 0, "A graph with no markers is not removed at once"
+        asked_at_once = await page.locator("#confirmDialog").is_visible()
+        assert not asked_at_once and await page.evaluate(graphs) == 0, "A graph with no markers is not removed at once"
         card = await compare_graph(page, (1100, "value"))
         await page.evaluate("""() => state.compareGraphs[0].markers.push(
             {t: Date.now() / 1000 - 5, label: 'motor on', note: '', color: '#0969da', lineStyle: 'dashed'})""")
         await card.locator('[aria-label="Remove graph"]').click()
-        assert asked and "1 marker" in asked[-1], f"Removing a graph with a marker asks {asked}"
+        asked = await answer_dialog(page, accept=False)
+        assert "1 marker" in asked, f"Removing a graph with a marker asks {asked!r}"
         assert await page.evaluate(graphs) == 1, "Answered no, the graph is removed all the same"
-        answer["yes"] = True
         await card.locator('[aria-label="Remove graph"]').click()
-        assert await page.evaluate(graphs) == 0, "Answered yes, the graph stays"
+        await answer_dialog(page, accept=True)
+        await page.wait_for_function(f"{graphs} === 0", timeout=WAIT_MS)
     finally:
-        page.remove_listener("dialog", on_dialog)
         await page.evaluate(COMPARE_STOP)
 
 
@@ -1332,13 +1316,6 @@ COMPARE_MARKS = """(c) => ({marks: [...c.querySelectorAll('.compare-mark-go')].m
 @test("Compare: a graph lists its markers and drawings, shows a marker gone off screen, and removes them")
 async def _(page):
     await page.evaluate(COMPARE_START)
-    asked = []
-
-    async def on_dialog(dialog):
-        asked.append(dialog.message)
-        await dialog.accept()
-
-    page.on("dialog", on_dialog)
     try:
         await page.wait_for_timeout(300)
         card = await compare_graph(page, (1100, "value"))
@@ -1373,8 +1350,8 @@ async def _(page):
         row = await card.evaluate(COMPARE_MARKS)
         assert row["drawings"] == "1 drawing", f"After a drawing, the Markers row reads {row}"
         await card.locator(".compare-marks-clear").click()
-        assert asked and "1 drawing" in asked[-1], f"Clear asks {asked}"
-        assert await page.evaluate("state.compareGraphs[0].drawings.length") == 0, "Clear leaves the drawing"
+        asked = await answer_dialog(page, accept=True)
+        assert "1 drawing" in asked, f"Clear asks {asked!r}"
+        await page.wait_for_function("state.compareGraphs[0].drawings.length === 0", timeout=WAIT_MS)
     finally:
-        page.remove_listener("dialog", on_dialog)
         await page.evaluate(COMPARE_STOP)

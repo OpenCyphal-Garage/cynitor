@@ -16,13 +16,14 @@ const DsdlEditor = (() => {
   const attach = (tab) => { _tab = tab; };
 
   // True when the editor holds nothing unsaved, or the user lets it go.
-  const _mayDropDraft = () => !_editorOpen || !_editorDirty
-    || window.confirm('Discard the unsaved changes in the editor?');
+  const _mayDropDraft = async () => !_editorOpen || !_editorDirty
+    || askConfirm({ title: 'Discard changes', message: 'Discard the unsaved changes in the editor?',
+      confirmLabel: 'Discard', danger: true });
 
   // A new type, its editor empty or opened on `draft` ({type_name, version,
   // source_text, fixed_port_id}).
   const _openEditorNew = async (prefilledNs, draft = null) => {
-    if (!_mayDropDraft()) return;
+    if (!await _mayDropDraft()) return;
     _editorOpen = true;
     _editorMode = 'new';
     _editPrefill = null;
@@ -49,7 +50,7 @@ const DsdlEditor = (() => {
   };
 
   const _openEditorEdit = async (typeData) => {
-    if (!_mayDropDraft()) return;
+    if (!await _mayDropDraft()) return;
     _editorOpen = true;
     _editorMode = 'edit';
     _editPrefill = {
@@ -178,8 +179,8 @@ const DsdlEditor = (() => {
     _editorDirty = false;
     editorPanel.querySelector('.dsdl-editor-form')?.addEventListener('input', () => { _editorDirty = true; });
 
-    document.getElementById('dsdlEditorClose')?.addEventListener('click', () => {
-      if (_mayDropDraft()) _closeEditor();
+    document.getElementById('dsdlEditorClose')?.addEventListener('click', async () => {
+      if (await _mayDropDraft()) _closeEditor();
     });
     document.getElementById('dsdlEditorSave')?.addEventListener('click', _saveType);
 

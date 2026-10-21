@@ -7,7 +7,7 @@ import json
 import re
 import time
 
-from harness import BASE_URL, WAIT_MS, test
+from harness import BASE_URL, WAIT_MS, answer_dialog, test
 
 
 # ── Record tab ──
@@ -612,6 +612,47 @@ async def _(page):
         assert not await page.locator(".record-card-menu:visible").count(), "The menu stays open after its action"
     finally:
         await record_close(page, server)
+
+
+@test("Record: Rename asks for the name, and Delete asks first, in the dashboard's own dialog")
+async def _(page):
+    server = _RecordServer([_recording(1, "boot sequence")])
+    await record_open(page, server)
+    card, field = page.locator('.record-card[data-id="1"]'), page.locator("#confirmDialogInput")
+
+    async def from_menu(action):
+        await card.locator("summary").click()
+        await card.locator(f'.record-card-menu [data-action="{action}"]').click()
+
+    try:
+        await from_menu("rename")
+        await field.wait_for(state="visible", timeout=WAIT_MS)
+        offered = await page.evaluate("""[el('confirmDialogTitle').textContent, el('confirmDialogInput').value,
+            document.activeElement.id, el('confirmDialogInput').selectionEnd]""")
+        await page.keyboard.press("Escape")  # the name kept as it was
+        await page.locator("#confirmDialog").wait_for(state="hidden", timeout=WAIT_MS)
+        escaped = server.count("PATCH", "/api/recordings/1")
+        await from_menu("rename")
+        await field.wait_for(state="visible", timeout=WAIT_MS)
+        await page.keyboard.type("motor run")  # over the name, which is selected
+        await page.keyboard.press("Enter")
+        await page.wait_for_function("state.recordings.some((r) => r.name === 'motor run')", timeout=WAIT_MS)
+        renamed = [body for method, path, body in server.requests if (method, path) == ("PATCH", "/api/recordings/1")]
+        await from_menu("delete")
+        declined = await answer_dialog(page, accept=False)
+        kept = server.count("DELETE", "/api/recordings/1")
+        await from_menu("delete")
+        red = await page.evaluate("el('confirmDialogOk').classList.contains('confirm-dialog-danger')")
+        await answer_dialog(page, accept=True)
+        await page.wait_for_function("!state.recordings.length", timeout=WAIT_MS)
+    finally:
+        await record_close(page, server)
+    assert offered == ["Rename recording", "boot sequence", "confirmDialogInput", len("boot sequence")], \
+        f"Rename offered (title, name, focus, selection's end) {offered}"
+    assert escaped == 0, "Esc renamed the recording"
+    assert renamed == [{"name": "motor run"}], f"Renamed with {renamed}"
+    assert 'Delete "motor run"?' in declined and kept == 0 and red, \
+        f"Delete asked {declined!r}; declined, it deleted {kept} times; its button red: {red}"
 
 
 # A raw log is running, and one from yesterday is saved.
