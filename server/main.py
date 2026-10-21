@@ -32,6 +32,7 @@ from can_discovery import AdapterCatalog, discover_adapters, simulated_adapters
 from can_hub import CANHub, HubBusLoad, pick_free_node_id
 from bus_load import BusLoadMonitor
 from can_link import _CAN_STATE, discover_can_interfaces, get_can_link_diagnostics, rx_overflows
+import config_file
 from cyphal_v11 import SOCKETCAN_FILTER, V11Traffic
 from data_dir import (EVENTS_DB, SCANNER_DB, TEST_NODES_FILE, prepare_data_dir,
                       resolve_data_dir)
@@ -1385,8 +1386,11 @@ def _exit_when_windows_parent_dies() -> None:
     threading.Thread(target=wait_for_parent, name="parent-watch", daemon=True).start()
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run the telemetry server")
+def build_parser() -> argparse.ArgumentParser:
+    """The command line, whose defaults a settings file can change (config_file)."""
+    parser = argparse.ArgumentParser(
+        description="Run the telemetry server. Its options can also be set in a cynitor.toml "
+                    "settings file, which they override (see --config and --write-config).")
     parser.add_argument("--version", action="version", version=f"cynitor-server {__version__}")
     parser.add_argument(
         "--can",
@@ -1513,11 +1517,79 @@ if __name__ == "__main__":
         help="Do not ask GitHub, at start and once a day, whether a newer release is out "
              f"(or set {DISABLE_UPDATE_CHECK_ENV}=1)",
     )
+    parser.add_argument(
+        "--config",
+        default=None,
+        metavar="PATH",
+        help=f"The settings file to read (or set {config_file.CONFIG_ENV}); without it, a "
+             f"{config_file.FILE_NAME} next to the executable, else in the data folder",
+    )
+    parser.add_argument(
+        "--write-config",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PATH",
+        help=f"Write a settings file with every setting commented out to PATH (a file or a folder; "
+             f"default: the data folder's {config_file.FILE_NAME}) and exit",
+    )
+    return parser
+
+
+def _write_config(target: str, data_dir: Path) -> int:
+    """--write-config: the template to ``target``, else to the data folder; the exit status."""
+    path = Path(target).expanduser() if target else data_dir / config_file.FILE_NAME
+    if path.is_dir():
+        path = path / config_file.FILE_NAME
+    try:
+        config_file.write_template(path)
+    except FileExistsError:
+        print(f"{path} already exists; it was left as it is", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"Could not write {path}: {exc.strerror or exc}", file=sys.stderr)
+        return 1
+    print(f"Wrote {path}: take out the # in front of a setting to set it")
+    return 0
+
+
+def _read_config(parser: argparse.ArgumentParser, explicit: Optional[str], data_dir: Path) -> str:
+    """Make the settings file's settings the command line's defaults; what to log about it."""
+    try:
+        path, places = config_file.find(explicit, data_dir)
+        settings = config_file.load(path) if path else {}
+    except config_file.ConfigError as exc:
+        parser.error(str(exc))
+    if path:
+        config_file.apply(settings, path, parser)
+        return f"{path} ({', '.join(settings) or 'all at their defaults'})"
+    # A first start: a file to edit, where Cynitor keeps its data. Not for the systemd
+    # service, whose settings are in /etc/default/cynitor-server.
+    template = data_dir / config_file.FILE_NAME
+    if not os.environ.get("STATE_DIRECTORY"):
+        try:
+            config_file.write_template(template)
+            return f"none yet; {template} lists them all, to edit"
+        except OSError as exc:
+            logger.debug("No settings template written to %s: %s", template, exc)
+    return f"none ({', '.join(map(str, places))} not found); the defaults"
+
+
+if __name__ == "__main__":
+    parser = build_parser()
+    # Where the settings file is, and the data folder it may be in, come from the command line alone.
+    early, _ = parser.parse_known_args()
+    early_data_dir = resolve_data_dir(early.data_dir)
+    if early.write_config is not None:
+        sys.exit(_write_config(early.write_config, early_data_dir))
+    settings_source = _read_config(parser, early.config, early_data_dir)
     args = parser.parse_args()
+    logger.info("Settings:    %s", settings_source)
     if not is_loopback(args.bind) and not os.environ.get("CYNITOR_AUTH_TOKEN", "").strip() \
             and not args.insecure_no_auth:
         parser.error(f"--bind {args.bind} reaches beyond this machine, and the API commands the nodes on the bus: "
-                     "set CYNITOR_AUTH_TOKEN to require a token, or pass --insecure-no-auth on a network you trust")
+                     "set CYNITOR_AUTH_TOKEN (auth-token in cynitor.toml) to require a token, or pass "
+                     "--insecure-no-auth (insecure-no-auth) on a network you trust")
     if args.can:
         # Refuse up front rather than start and fall back to selection mode:
         # the fix is on the command line, not in the dashboard.

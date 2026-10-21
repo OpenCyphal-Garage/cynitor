@@ -12,6 +12,8 @@ python-can[serial]>=4.6,<5.0
 # 3.12.14 fixes request smuggling (CVE-2025-53643) and the aiohttp advisories before it.
 aiohttp>=3.12.14,<4.0
 numpy>=1.20,<3.0
+# Reads cynitor.toml (config_file.py) where the standard library cannot: tomllib came in Python 3.11.
+tomli>=2.0; python_version < "3.11"
 # Windows only: candleLight adapters such as the CANable (python-can "gs_usb")
 # are reached through pyusb, which needs a libusb DLL that Windows does not
 # ship. libusb-package bundles it; startup_setup puts it on PATH. On Linux the
