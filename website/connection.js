@@ -873,6 +873,13 @@ const disconnectAll = ({ persist = true } = {}) => {
   if (persist) saveSettings();
 };
 
+// A newer release the server found (/api/status `update`): shown by the version, and announced once.
+const takeUpdate = (status) => {
+  state.update = status.update ?? null;
+  renderVersionTag();
+  announceUpdate();
+};
+
 const pollStatus = async () => {
   if (state.canConnecting || state.canDisconnecting) {
     return;
@@ -901,8 +908,7 @@ const pollStatus = async () => {
   state.ownNodeId = Number.isInteger(data.own_node_id) ? data.own_node_id : null;
   state.serverCpu = data.server_cpu ?? state.serverCpu;
   state.decodeOnDemand = data.decode_on_demand === true;
-  state.update = data.update ?? null;
-  renderVersionTag();
+  takeUpdate(data);
 
   const backendCanRunning = data.status === 'running' && !!data.can_interface;
 
@@ -1077,6 +1083,7 @@ const openDashboard = async () => {
   state.dashboardConnecting = false;
   state.dashboardConnected = true;
   state.decodeOnDemand = statusData.decode_on_demand === true;
+  takeUpdate(statusData);  // on connecting, not only at the first poll, 5 s later
   updateDashboardConnectButton();
   startStatusPolling();
 

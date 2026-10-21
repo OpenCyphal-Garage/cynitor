@@ -75,6 +75,7 @@ const state = {
   lastWsMessageMs: 0,
   busUtilization: null,
   update: null,          // a newer release, {version, url}, from /api/status
+  updateAnnounced: null, // the version of the last newer release a toast announced, each once (saved)
   droppedEvents: null,   // {scanner, logger, clients} from /api/status, null when not on CAN
   busLoadHistory: [],
   _busFullArmed: true,
@@ -888,6 +889,7 @@ const _writeSettingsNow = () => {
     subjectsHeaderFilters: typeof getSubjectsHeaderFilters === 'function' ? getSubjectsHeaderFilters() : null,
     recordFilterDraft: state.recordFilterDraft,
     rawLogPlaybackSpeed: state.rawLogPlaybackSpeed,
+    updateAnnounced: state.updateAnnounced,
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
 };
@@ -956,6 +958,7 @@ const loadSettings = () => {
   }
   if (settings.logShowCyphal === false) state.logShowCyphal = false;
   if (settings.logShowServer === true) state.logShowServer = true;
+  if (typeof settings.updateAnnounced === 'string') state.updateAnnounced = settings.updateAnnounced;
   if (typeof settings.detailPanelHeight === 'number') {
     state.detailPanelHeight = settings.detailPanelHeight;
   }

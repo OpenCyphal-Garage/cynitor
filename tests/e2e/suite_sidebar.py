@@ -218,31 +218,50 @@ async def _(page):
         await sidebar_close(page, server)
 
 
-@test("Sidebar: a newer release the server found is a link by the version, to its release page")
+@test("Sidebar: a newer release the server found is a pill by the version, to its release page, and a toast once")
 async def _(page):
     server = _SidebarServer()
     page_url = "https://github.com/OpenCyphal-Garage/cynitor/releases/tag/v9.1.0"
+    toasts = "[...document.querySelectorAll('#toastContainer .toast')].map((t) => t.textContent).filter((t) => t.includes('9.1.0'))"
+    overflow = """() => { const sb = document.querySelector('nav.sidebar');
+        return [sb.scrollHeight - sb.clientHeight, sb.scrollWidth - sb.clientWidth]; }"""
     await sidebar_open(page, server)
+    link = page.locator("#versionTag .version-update")
+    pills = {}
     try:
         await page.locator("#connectDashboardBtn").click()
         await page.wait_for_function("state.dashboardConnected", timeout=WAIT_MS)
-        none = await page.locator("#versionTag .version-update").count()
+        none = await link.count()
         server.update = {"version": "9.1.0", "url": page_url}
         await page.evaluate("pollStatus()")
-        link = page.locator("#versionTag .version-update")
         await link.wait_for(state="visible", timeout=WAIT_MS)
-        found = (await link.inner_text(), await link.get_attribute("href"), await link.get_attribute("target"))
+        for width, height in ((1280, 800), (1600, 900)):  # the narrower sidebar, then the wider one
+            await page.set_viewport_size({"width": width, "height": height})
+            pills[width] = (await link.inner_text(), await page.evaluate(overflow))
+        found = (await link.get_attribute("href"), await link.get_attribute("target"), await link.get_attribute("aria-label"))
         if os.environ.get("CYNITOR_E2E_SHOTS"):  # a folder to see the footer in
             await page.locator(".sidebar-footer").screenshot(path=os.path.join(os.environ["CYNITOR_E2E_SHOTS"], "version-update.png"))
+        await page.evaluate("pollStatus()")  # the next poll finds it again
+        said = await page.evaluate(toasts)
+        await page.evaluate("_writeSettingsNow()")
+        await page.reload(wait_until="load")
+        await link.wait_for(state="visible", timeout=5000)  # reconnected, and polled
+        said_after_reload = await page.evaluate(toasts)
         server.update = {"version": "9.2.0", "url": "https://example.com/x"}  # only the project's own release pages
         await page.evaluate("pollStatus()")
         foreign = await link.count()
-        assert (none, found, foreign) == (0, ("v9.1.0 available", page_url, "_blank"), 0), \
-            f"Before: {none}; found: {found}; a link off the project: {foreign}"
     finally:
         server.update = None
-        await page.evaluate("state.update = null; renderVersionTag()")
+        await page.set_viewport_size({"width": 1280, "height": 800})
+        await page.evaluate("state.update = null; renderVersionTag(); state.updateAnnounced = null; _writeSettingsNow()")
         await sidebar_close(page, server)
+    assert none == 0, f"Before the server found one, a pill shows: {none}"
+    assert pills == {1280: ("↑ v9.1.0", [0, 0]), 1600: ("↑ v9.1.0 available", [0, 0])}, \
+        f"The pill, and the sidebar's overflow, in a narrow and a wide window: {pills}"
+    assert found == (page_url, "_blank", "Cynitor 9.1.0 is out: open its release page"), f"Where it leads: {found}"
+    assert said == ["Cynitor 9.1.0 is out: its link is under the sidebar"], f"Said once, on two polls: {said}"
+    assert said_after_reload == [], f"Said again after a reload: {said_after_reload}"
+    assert foreign == 0, "A release page off the project is linked"
 
 
 @test("Sidebar: transmit errors alone say no other node acknowledges, not to check termination")

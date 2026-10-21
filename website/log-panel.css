@@ -865,9 +865,15 @@
   letter-spacing: 0.1em;
 }
 
+/* A newer release: a pill by the version, to its release page. */
 .version-update {
-  margin-left: 0.5rem;
+  margin-left: 0.375rem;
+  padding: 0.0625rem 0.375rem;
+  border: 1px solid var(--accent);
+  border-radius: 0.625rem;
+  background: var(--accent-muted);
   color: var(--accent);
+  letter-spacing: 0.04em;
   text-decoration: none;
 }
 

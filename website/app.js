@@ -262,15 +262,26 @@ bind();
 // The server serving the page names its version; a plain static server does not.
 // The server's version, and a newer release if the server found one (update_check.py).
 const RELEASE_PAGE_PREFIX = 'https://github.com/OpenCyphal-Garage/cynitor/releases/';
+const knownUpdate = () => (state.update?.url?.startsWith(RELEASE_PAGE_PREFIX) ? state.update : null);
 const renderVersionTag = () => {
   const { version } = serverConfig();
-  const update = state.update?.url?.startsWith(RELEASE_PAGE_PREFIX) ? state.update : null;
+  const update = knownUpdate();
   const html = (version ? `v${escapeHtml(version)}` : '') + (update
     ? `<a class="version-update" href="${escapeHtml(update.url)}" target="_blank" rel="noopener"`
-      + ` title="A newer Cynitor is out: open its release page">v${escapeHtml(update.version)} available</a>`
+      + ` title="A newer Cynitor is out: open its release page"`
+      + ` aria-label="Cynitor ${escapeHtml(update.version)} is out: open its release page">`
+      + `↑ v${escapeHtml(update.version)}<span class="version-update-word"> available</span></a>`
     : '');
   const tag = el('versionTag');
   if (tag.innerHTML !== html) tag.innerHTML = html;
+};
+// A newer release is also said once, in a toast; the pill by the version stays.
+const announceUpdate = () => {
+  const update = knownUpdate();
+  if (!update || state.updateAnnounced === update.version) return;
+  state.updateAnnounced = update.version;
+  saveSettings();
+  showToast(`Cynitor ${update.version} is out: its link is under the sidebar`, 'info', 10000);
 };
 renderVersionTag();
 if (state.activeView !== 'nodes') {

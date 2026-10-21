@@ -14,6 +14,11 @@
     flex-basis: 100%;
   }
 
+  /* The pill by the version takes no more than the footer has: the version alone. */
+  .version-update-word {
+    display: none;
+  }
+
   .sidebar.collapsed ~ .sidebar-collapse-btn {
     left: -0.5rem;
   }
