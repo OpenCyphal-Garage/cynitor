@@ -4,6 +4,7 @@ The port registers a node is registered by (update_reg_list) are tested in
 test_scanner_node.py.
 """
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -211,6 +212,14 @@ class TestSetRegister:
         node = Node({"blob": ("unstructured", "", True)})
         with pytest.raises(ValueError, match="Invalid value 'xyz' for type 'unstructured'"):
             await self.write(node, "blob", "xyz", "unstructured")
+        assert node.written == []
+
+    async def test_a_value_that_does_not_parse_says_why_and_is_no_server_error(self, uavcan_types, caplog):
+        # It was logged at ERROR, and the 400 left the reason out (Windows audit).
+        node = Node({"flags": ("bit", np.array([False]), True)})
+        with pytest.raises(ValueError, match="Invalid value '2' for type 'bit': Invalid boolean: '2'"):
+            await self.write(node, "flags", "2", "bit")
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
         assert node.written == []
 
     async def test_a_read_only_register_is_refused(self, uavcan_types):

@@ -564,9 +564,9 @@ class ScannerRegisters:
                 number = self._NUMBER_OF[reg_type]
                 setattr(new_value, reg_type, array_type(value=[number(v) for v in self._parse_array_value(value)]))
             else:
-                logging.error(f"Unsupported register type '{reg_type}'")
                 raise ValueError(f"Unsupported register type '{reg_type}'")
         except ValueError as e:
-            logging.error(f"Invalid value '{value}' for type '{reg_type}': {str(e)}")
-            raise ValueError(f"Invalid value '{value}' for type '{reg_type}'")
+            # The request's mistake, answered with 400 and this reason: no server error to log.
+            logging.info(f"Invalid value '{value}' for type '{reg_type}': {e}")
+            raise ValueError(f"Invalid value '{value}' for type '{reg_type}': {e}") from None
         return new_value
