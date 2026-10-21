@@ -590,6 +590,33 @@ const showToast = (message, type = 'info', durationMs = 5000) => {
   }, durationMs);
 };
 
+// ── Confirmation ──
+
+// The dashboard's own confirm(), in its look: a title, what it is about (`subject`, in mono), where
+// (`meta`), and [label, value, strong] `rows`, as a register's current and new value. Resolves true
+// for the `confirmLabel` button, false for Cancel, Esc or a click beside the dialog.
+const askConfirm = ({ title, subject = '', meta = '', rows = [], confirmLabel = 'OK' }) => new Promise((resolve) => {
+  const dialog = el('confirmDialog');
+  if (dialog.open) { resolve(false); return; }
+  el('confirmDialogTitle').textContent = title;
+  el('confirmDialogSubject').textContent = subject;
+  el('confirmDialogMeta').textContent = meta;
+  el('confirmDialogRows').replaceChildren(...rows.flatMap(([label, value, strong = false]) => {
+    const term = document.createElement('dt');
+    term.textContent = label;
+    const detail = document.createElement('dd');
+    detail.textContent = value === '' ? 'empty' : value;
+    detail.classList.toggle('confirm-dialog-empty', value === '');
+    detail.classList.toggle('confirm-dialog-strong', strong);
+    return [term, detail];
+  }));
+  el('confirmDialogOk').textContent = confirmLabel;
+  dialog.returnValue = '';
+  dialog.onclick = (e) => { if (e.target === dialog) dialog.close(); };  // the backdrop, not the card
+  dialog.addEventListener('close', () => resolve(dialog.returnValue === 'ok'), { once: true });
+  dialog.showModal();
+});
+
 // How many px one rem is here: sizes dragged with the mouse are kept in rem.
 const remPx = () => parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
 

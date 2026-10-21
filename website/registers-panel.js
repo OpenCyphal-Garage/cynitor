@@ -147,7 +147,14 @@ const bindRegisterEvents = (container, nodeId) => {
       if (!input) return;
 
       const sentValue = input.value;
-      if (!confirm(`Write "${name}" = ${sentValue} to ${describeNode(nodeId)}?`)) return;
+      const confirmed = await askConfirm({
+        title: 'Write register',
+        subject: name,
+        meta: describeNode(nodeId),
+        rows: [['type', input.dataset.regType], ['current', input.dataset.original], ['new', sentValue, true]],
+        confirmLabel: 'Write',
+      });
+      if (!confirmed) return;
 
       btn.disabled = true;
       btn.textContent = '…';

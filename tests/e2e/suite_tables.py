@@ -135,6 +135,63 @@ async def _(page):
         await page.locator('.detail-tab[data-tab="publishers"]').click()
 
 
+@test("Registers: a write asks in the dashboard's own dialog, naming the register, the device, and its current and new value; Esc and Cancel write nothing")
+async def _(page):
+    cors = {"Access-Control-Allow-Origin": "*"}
+    writes, native = [], []
+
+    async def register_list(route):
+        await route.fulfill(json={"registers": [{"register_name": "uavcan.node.description", "type": "string",
+                                                 "access": "read-write", "value": "motor-left"}]}, headers=cors)
+
+    async def register_set(route):
+        writes.append(route.request.post_data_json)
+        await route.fulfill(json={"status": "ok", "name": "uavcan.node.description", "value": "motor-right"}, headers=cors)
+
+    def on_native(dialog):  # the browser's own confirm(), which the write no longer uses
+        native.append(dialog.message)
+        asyncio.ensure_future(dialog.dismiss())
+
+    await page.route("**/api/registers/20", register_list)
+    await page.route("**/api/registers/20/set", register_set)
+    page.on("dialog", on_native)
+    dialog, write = page.locator("#confirmDialog"), page.locator("#selectedNodeContent .reg-save-btn")
+    try:
+        await page.evaluate("REG_CACHE.clear(); setSelectedNode(20)")
+        await page.locator('.detail-tab[data-tab="registers"]').click()
+        await page.locator("#selectedNodeContent .reg-value-input").fill("motor-right")
+        await write.click()
+        await dialog.wait_for(state="visible", timeout=3000)
+        shown = await page.evaluate("""() => ({title: el('confirmDialogTitle').textContent,
+            subject: el('confirmDialogSubject').textContent, meta: el('confirmDialogMeta').textContent,
+            rows: [...el('confirmDialogRows').children].map((e) => e.textContent),
+            focus: document.activeElement.id, button: el('confirmDialogOk').textContent})""")
+        await page.keyboard.press("Escape")
+        await dialog.wait_for(state="hidden", timeout=3000)
+        after_esc = (len(writes), await page.evaluate("document.activeElement.classList.contains('reg-save-btn')"))
+        await write.click()
+        await page.locator("#confirmDialog button[value='cancel']").click()
+        await dialog.wait_for(state="hidden", timeout=3000)
+        after_cancel = len(writes)
+        await write.click()
+        await page.locator("#confirmDialogOk").click()
+        await page.locator("#selectedNodeContent .reg-status", has_text="written and verified").wait_for(timeout=3000)
+    finally:
+        page.remove_listener("dialog", on_native)
+        await page.unroute("**/api/registers/20", register_list)
+        await page.unroute("**/api/registers/20/set", register_set)
+        await page.evaluate("REG_CACHE.clear()")
+        await page.locator('.detail-tab[data-tab="publishers"]').click()
+    assert (shown["title"], shown["subject"]) == ("Write register", "uavcan.node.description"), f"The dialog: {shown}"
+    assert shown["meta"].startswith("node 20"), f"It names the device: {shown['meta']}"
+    assert shown["rows"] == ["type", "string", "current", "motor-left", "new", "motor-right"], f"Its rows: {shown['rows']}"
+    assert (shown["focus"], shown["button"]) == ("confirmDialogOk", "Write"), f"Its button, and the focus: {shown}"
+    assert after_esc == (0, True), f"Esc wrote nothing and gave the focus back to Write: {after_esc}"
+    assert after_cancel == 0, "Cancel wrote the register"
+    assert writes == [{"name": "uavcan.node.description", "value": "motor-right", "type": "string"}], f"Written: {writes}"
+    assert native == [], f"A native dialog asked: {native}"
+
+
 @test("Cards: a node's card shows its own message, not another publisher's of the subject")
 async def _(page):
     # On a subject several nodes publish, the card showed whichever's came last

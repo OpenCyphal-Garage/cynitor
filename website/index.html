@@ -364,6 +364,20 @@
     </div>
   </div>
 
+  <!-- ── Confirmation, the dashboard's own confirm(): askConfirm() in state.js fills and opens it ── -->
+  <dialog id="confirmDialog" class="confirm-dialog" aria-labelledby="confirmDialogTitle">
+    <form method="dialog" class="confirm-dialog-card">
+      <h2 class="confirm-dialog-title" id="confirmDialogTitle"></h2>
+      <div class="confirm-dialog-subject" id="confirmDialogSubject"></div>
+      <div class="confirm-dialog-meta" id="confirmDialogMeta"></div>
+      <dl class="confirm-dialog-rows" id="confirmDialogRows"></dl>
+      <div class="confirm-dialog-actions">
+        <button value="cancel">Cancel</button>
+        <button value="ok" class="btn-primary" id="confirmDialogOk" autofocus></button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="./vendor/d3.min.js"></script>
   <script src="./vendor/tabulator.min.js"></script>
   <!-- Must precede state.js: sets window.__CYNITOR when the backend is
