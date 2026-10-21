@@ -49,6 +49,8 @@ No Python needed. Take the file for your system from the
 
 - All of them are for x86-64, hold the same server and open no window: you
   use it from a browser.
+- To change how it starts without a command line (to listen on the network,
+  or open a bus at start), use its [settings file](#settings-file).
 - An AppImage needs FUSE. Where there is none (a container, a minimal
   install), run it with `--appimage-extract-and-run`.
 - Each file has a `<file>.sha256` beside it: `sha256sum -c <file>.sha256`
@@ -247,6 +249,8 @@ topics to v1.0 subject-IDs on the device (`name#1234`).
 | `--data-dir <dir>` | Keep the data in `<dir>` |
 | `--no-frontend` | Serve only the API and the WebSocket, not the dashboard |
 | `--recompile` | From source: compile the DSDL types again |
+| `--config <file>` | Read the settings from `<file>` (see [Settings file](#settings-file)) |
+| `--write-config [<path>]` | Write a settings file, every setting commented out, to `<path>` (a file or a folder; default: the data folder), and exit |
 | `--version` | Print the version and exit |
 
 And from the environment:
@@ -255,7 +259,40 @@ And from the environment:
 |---|---|
 | `CYNITOR_AUTH_TOKEN` | The token the API and the event stream then ask for |
 | `CYNITOR_DATA_DIR` | The same as `--data-dir` |
+| `CYNITOR_CONFIG` | The same as `--config` |
 | `UAVCAN__NODE__ID` | Cynitor's own node-ID. Without it, Cynitor listens to heartbeats on each connect and takes 127, else 126 (the two Cyphal leaves to tools, which allocators never give out), else another free one |
+
+### Settings file
+
+Every option can also be set in a `cynitor.toml`, for a Cynitor started
+without a command line, such as a double-clicked `.exe` or AppImage. The
+settings are named as the options are, without the `--`:
+
+```toml
+bind = "0.0.0.0"
+auth-token = "a-long-random-value"
+can = "pcan:PCAN_USBBUS1"
+bitrate = 1000000
+reconnect = true
+```
+
+- Cynitor reads the file `--config` (or `CYNITOR_CONFIG`) names, else a
+  `cynitor.toml` next to the executable (next to the `.AppImage` file, for an
+  AppImage), else the one in the [data folder](#where-data-is-kept).
+- On the first start it writes one to the data folder, with every setting
+  listed and commented out: take out the `#` in front of one to set it, and
+  restart. `--write-config <path>` writes one anywhere else, next to the
+  `.exe` say. Either is readable by its owner only, as it may hold the token.
+- The command line overrides the file, and so does the environment:
+  `auth-token`, `dev-origins`, `node-id` and `data-dir` stand for
+  `CYNITOR_AUTH_TOKEN`, `CYNITOR_DEV_ORIGINS`, `UAVCAN__NODE__ID` and
+  `CYNITOR_DATA_DIR`. A relative `data-dir` is taken from the file's folder.
+  A Windows path goes in single quotes, `'D:\Cynitor data'`, as TOML reads a
+  backslash in double quotes as an escape.
+- The startup log names the file it used. A setting it does not know, or a
+  value it cannot take, stops the start with the reason.
+- The systemd service keeps its settings in `/etc/default/cynitor-server`
+  ([As a service](#as-a-service)), and is written no file.
 
 ## Where data is kept
 
@@ -269,8 +306,8 @@ which:
 | macOS | `~/Library/Application Support/Cynitor` |
 
 It holds bus history (24 h), node history (30 days), service-call history,
-recordings, device names, the types you set for subjects, and the test nodes
-you make. Raw CAN logs are in `raw/`, firmware files in `firmware/`, your DSDL
+recordings, device names, the types you set for subjects, the test nodes you
+make, and the [settings file](#settings-file), `cynitor.toml`. Raw CAN logs are in `raw/`, firmware files in `firmware/`, your DSDL
 types in `dsdl/`.
 
 Earlier versions wrote next to where Cynitor was started. Data found there is
@@ -285,7 +322,8 @@ CYNITOR_AUTH_TOKEN=$(openssl rand -hex 24) cynitor-server --bind 0.0.0.0
 ```
 
 Open `http://<that-machine>:8080`: the dashboard asks for the token once and
-remembers it.
+remembers it. Started without a command line, set `bind` and `auth-token` in
+its [settings file](#settings-file) instead.
 
 - **A token is needed to bind beyond loopback.** Without one, anyone who can
   reach the port can command the nodes on the bus, so Cynitor refuses to start
